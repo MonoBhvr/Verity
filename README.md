@@ -1,4 +1,4 @@
-##Even Slow, Use Easier
+##Even Slow, Use Easier##
 
 Verity는 개발을 접해보지 않은 이들을 위한 쉽고 가벼운 2D게임엔진입니다.
 
