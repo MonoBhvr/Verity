@@ -1,0 +1,125 @@
+[
+  {
+    "Name": "Main Camera",
+    "Active": true,
+    "ParentIndex": -1,
+    "Position": {
+      "X": 0,
+      "Y": 0
+    },
+    "Rotation": 0,
+    "Scale": {
+      "X": 1,
+      "Y": 1
+    },
+    "Components": [
+      {
+        "Type": "Verity.Graphics.Camera",
+        "Fields": {
+          "OrthographicSize": 5,
+          "BackgroundColor": {
+            "R": 0.5279188,
+            "G": 0.12862998,
+            "B": 0.12862998,
+            "A": 1
+          },
+          "Zoom": 1
+        }
+      }
+    ]
+  },
+  {
+    "Name": "Sprite",
+    "Active": true,
+    "ParentIndex": -1,
+    "Position": {
+      "X": -1.3444443,
+      "Y": 0.78888917
+    },
+    "Rotation": 0,
+    "Scale": {
+      "X": 4.888888,
+      "Y": 2.9555557
+    },
+    "Components": [
+      {
+        "Type": "Verity.Graphics.SpriteRenderer",
+        "Fields": {
+          "Sprite": {
+            "Path": "Assets/\u3147\u3134\u3141image.png"
+          },
+          "Color": {
+            "R": 1,
+            "G": 1,
+            "B": 1,
+            "A": 1
+          },
+          "SortingLayerName": "Default",
+          "OrderInLayer": 0,
+          "Pivot": {
+            "X": 0.5,
+            "Y": 0.5
+          },
+          "FlipX": false,
+          "FlipY": false
+        }
+      },
+      {
+        "Type": "MoveCharacter",
+        "Fields": {
+          "speed": 12.7
+        }
+      }
+    ]
+  },
+  {
+    "Name": "Sprite",
+    "Active": true,
+    "ParentIndex": -1,
+    "Position": {
+      "X": 4.0000014,
+      "Y": 0.55555576
+    },
+    "Rotation": 0,
+    "Scale": {
+      "X": 1,
+      "Y": 1
+    },
+    "Components": [
+      {
+        "Type": "Verity.Graphics.SpriteRenderer",
+        "Fields": {
+          "Sprite": {
+            "Path": ""
+          },
+          "Color": {
+            "R": 0.8071066,
+            "G": 0.25811026,
+            "B": 0.25811026,
+            "A": 1
+          },
+          "SortingLayerName": "Default",
+          "OrderInLayer": 0,
+          "Pivot": {
+            "X": 0.5,
+            "Y": 0.5
+          },
+          "FlipX": false,
+          "FlipY": false
+        }
+      },
+      {
+        "Type": "ChangeColor",
+        "Fields": {
+          "color": {
+            "R": 0.26900977,
+            "G": 0.45733175,
+            "B": 0.5888325,
+            "A": 1
+          },
+          "changed": false
+        }
+      }
+    ]
+  }
+]

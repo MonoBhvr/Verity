@@ -1,0 +1,14 @@
+<Project>
+  <PropertyGroup>
+    <TargetFramework>net9.0</TargetFramework>
+    <LangVersion>latest</LangVersion>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+  </PropertyGroup>
+
+  <!-- Guard against accidental compilation of generated files under obj/** -->
+  <ItemGroup>
+    <Compile Remove="$(BaseIntermediateOutputPath)**/*.cs" />
+    <Compile Remove="obj/**/*.cs" />
+  </ItemGroup>
+</Project>
