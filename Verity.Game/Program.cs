@@ -9,6 +9,8 @@ using Verity.Graphics;
 using Verity.Input;
 using System.Diagnostics;
 using System.Drawing;
+using System.Numerics;
+using Irodori.Backend.OpenGL;
 
 namespace Verity.Game;
 
@@ -47,13 +49,53 @@ internal class Program
         }
 
         BuildSettings? buildSettings = null;
-        var settingsPath = Path.Combine(baseDir, "BuildSettings.json");
+        var settingsPath = Path.Combine(baseDir, "Assets", "BuildSettings.json");
         if (File.Exists(settingsPath)) buildSettings = BuildSettings.Load(settingsPath);
         else {
-            var json = ReadResourceString(assembly, $"{assemblyName}.BuildSettings.json");
+            var json = ReadResourceString(assembly, $"{assemblyName}.Assets.BuildSettings.json");
             if (json != null) buildSettings = BuildSettings.LoadFromJson(json);
         }
         buildSettings ??= new BuildSettings();
+
+        // --- WINDOW ICON ---
+        if (!string.IsNullOrEmpty(buildSettings.LogoPath)) {
+            var logoFullPath = Path.Combine(baseDir, "Assets", buildSettings.LogoPath);
+            if (File.Exists(logoFullPath)) {
+                try {
+                    var raw = textureManager.GetRawPixels(logoFullPath);
+                    device.SetWindowIcon(raw.Pixels, raw.Width, raw.Height);
+                } catch { }
+            }
+        }
+        // -------------------
+
+        // --- SPLASH SCREEN ---
+        if (!string.IsNullOrEmpty(buildSettings.LogoPath)) {
+            var logoFullPath = Path.Combine(baseDir, "Assets", buildSettings.LogoPath);
+            if (File.Exists(logoFullPath)) {
+                var logoTex = textureManager.Load(logoFullPath);
+                var splashStart = Stopwatch.GetTimestamp();
+                var splashCamera = new Camera();
+                while ((Stopwatch.GetTimestamp() - splashStart) / (double)Stopwatch.Frequency < 2.0) {
+                    device.PollEvents();
+                    device.Clear(Verity.Core.Color.Black);
+                    
+                    uint winW = device.Window.GetWidth(); uint winH = device.Window.GetHeight();
+                    device.Gl.Viewport(0, 0, winW, winH);
+                    splashCamera.SetViewportSize((int)winW, (int)winH);
+                    
+                    if (logoTex is OpenGlTexture glTex) {
+                        float aspect = (float)glTex.Width / glTex.Height;
+                        float drawH = winH * 0.4f; float drawW = drawH * aspect;
+                        renderPipeline.RenderGizmoQuad(Vector2.Zero, new Vector2(drawW, drawH), Verity.Core.Color.White, splashCamera, null, logoTex);
+                    }
+                    
+                    device.SwapBuffers();
+                    if (device.ShouldClose) return;
+                }
+            }
+        }
+        // ---------------------
 
         string? worldRelPath = (buildSettings.Worlds.Count > 0) 
             ? buildSettings.Worlds[Math.Clamp(buildSettings.StartWorldIndex, 0, buildSettings.Worlds.Count - 1)] 
@@ -81,6 +123,18 @@ internal class Program
         {
             foreach (var root in WorldManager.ActiveWorld.RootEntities)
                 FixTexturePathsRecursive(root, textureManager, assembly, assemblyName);
+
+            // STANDALONE WINDOW RESIZING
+            Camera? mainCam = FindCameraRecursiveInWorld(WorldManager.ActiveWorld);
+            if (mainCam != null && mainCam.FixedAspectRatio)
+            {
+                int currentH = (int)device.Window.GetHeight();
+                int targetW = (int)(currentH * (mainCam.AspectWidth / mainCam.AspectHeight));
+                if (device.Window is VeritySdl2Window sdlWin)
+                {
+                    sdlWin.SetSize(targetW, currentH);
+                }
+            }
         }
 
         Time.Reset();
@@ -126,14 +180,10 @@ internal class Program
             lastTicks = currentTicks;
 
             // --- INPUT HANDLING ---
-            Verity.Input.Input.BeginFrame();
+            Verity.Input.Input.NewLogicTick();
             device.PollEvents();
-            // EndFrame must be called AFTER logic to transition key states for next frame
-            // But we must also ensure key presses are detected in the current frame's Update.
-
-            gameLoop.TickLogic(deltaTime);
             
-            Verity.Input.Input.EndFrame();
+            gameLoop.TickLogic(deltaTime);
             // ----------------------
 
             uint winWidth = device.Window.GetWidth();

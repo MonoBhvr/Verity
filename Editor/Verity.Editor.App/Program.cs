@@ -9,4 +9,5 @@ app.AddWindow(new InspectorWindow(app));
 app.AddWindow(new ConsoleWindow());
 app.AddWindow(new ProjectWindow(app));
 app.AddWindow(new BuildSettingsWindow(app));
+app.AddWindow(new ProfilerWindow(app));
 app.Run();

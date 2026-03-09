@@ -30,6 +30,8 @@ public class ProjectWindow : EditorWindow
         Directory.CreateDirectory(_app.AssetsPath);
         _contextDirectory ??= _app.AssetsPath;
 
+        HandleShortcuts();
+
         if (_shouldOpenPopup) { ImGui.OpenPopup("AssetInputModal"); _shouldOpenPopup = false; }
         DrawInputModal();
 
@@ -38,6 +40,26 @@ public class ProjectWindow : EditorWindow
         if (ImGui.BeginChild("AssetTreeContainer", new System.Numerics.Vector2(0, 0), ImGuiChildFlags.None, ImGuiWindowFlags.NoMove))
         {
             DrawDirectoryNode(_app.AssetsPath, true);
+
+            // Fill remaining space with an invisible button to catch drops on background
+            var remainingSpace = ImGui.GetContentRegionAvail();
+            if (remainingSpace.Y < 50) remainingSpace.Y = 50; // Ensure at least a small zone
+            ImGui.InvisibleButton("##ProjectBackgroundDropZone", remainingSpace);
+            
+            if (ImGui.BeginDragDropTarget())
+            {
+                unsafe
+                {
+                    var entityPayload = ImGui.AcceptDragDropPayload("HIERARCHY_ENTITY");
+                    if (entityPayload.Handle != null && EditorSelection.DraggedEntity != null)
+                    {
+                        _app.SaveEntityAsBlueprint(EditorSelection.DraggedEntity, _app.AssetsPath);
+                        EditorSelection.DraggedEntity = null;
+                    }
+                }
+                ImGui.EndDragDropTarget();
+            }
+
             if (ImGui.BeginPopupContextWindow("AssetBgContext", ImGuiPopupFlags.MouseButtonRight | ImGuiPopupFlags.NoOpenOverItems))
             {
                 var target = ResolveContextDirectory();
@@ -45,7 +67,7 @@ public class ProjectWindow : EditorWindow
                 {
                     if (ImGui.MenuItem("World")) OpenCreatePopup(target, CreationType.World);
                     if (ImGui.MenuItem("Script")) OpenCreatePopup(target, CreationType.Script);
-                    if (ImGui.MenuItem("Folder")) OpenCreatePopup(target, CreationType.Folder);
+                    if (ImGui.MenuItem("Folder", "Ctrl+N")) OpenCreatePopup(target, CreationType.Folder);
                     ImGui.EndMenu();
                 }
                 ImGui.Separator();
@@ -54,6 +76,61 @@ public class ProjectWindow : EditorWindow
             }
             ImGui.EndChild();
         }
+    }
+
+    private void HandleShortcuts()
+    {
+        if (!ImGui.IsWindowFocused(ImGuiFocusedFlags.RootAndChildWindows)) return;
+        var io = ImGui.GetIO();
+        if (io.WantCaptureKeyboard) return;
+
+        bool ctrl = io.KeyCtrl;
+
+        // Ctrl + N: Create Folder
+        if (ctrl && ImGui.IsKeyPressed(ImGuiKey.N))
+        {
+            OpenCreatePopup(ResolveContextDirectory(), CreationType.Folder);
+        }
+
+        // Delete: Delete Asset
+        if (ImGui.IsKeyPressed(ImGuiKey.Delete) && EditorSelection.SelectedAssetPath != null)
+        {
+            DeleteAsset(EditorSelection.SelectedAssetPath);
+        }
+
+        // F2: Rename Asset
+        if (ImGui.IsKeyPressed(ImGuiKey.F2) && EditorSelection.SelectedAssetPath != null)
+        {
+            OpenRenamePopup(EditorSelection.SelectedAssetPath);
+        }
+
+        // Ctrl + D: Duplicate Asset
+        if (ctrl && ImGui.IsKeyPressed(ImGuiKey.D) && EditorSelection.SelectedAssetPath != null)
+        {
+            DuplicateAsset(EditorSelection.SelectedAssetPath);
+        }
+    }
+
+    private void DeleteAsset(string path)
+    {
+        try {
+            if (File.Exists(path)) File.Delete(path);
+            else if (Directory.Exists(path)) Directory.Delete(path, true);
+            if (EditorSelection.SelectedAssetPath == path) EditorSelection.SelectedAssetPath = null;
+        } catch (Exception e) { Verity.Core.Debug.LogError($"[Asset] Delete Failed: {e.Message}"); }
+    }
+
+    private void DuplicateAsset(string path)
+    {
+        try {
+            var dir = Path.GetDirectoryName(path)!;
+            var name = Path.GetFileNameWithoutExtension(path);
+            var ext = Path.GetExtension(path);
+            var next = Path.Combine(dir, name + " (Copy)" + ext);
+            
+            if (File.Exists(path)) File.Copy(path, next, true);
+            else if (Directory.Exists(path)) CopyDirectory(path, next);
+        } catch (Exception e) { Verity.Core.Debug.LogError($"[Asset] Duplicate Failed: {e.Message}"); }
     }
 
     private unsafe void DrawDirectoryNode(string path, bool isRoot = false)
@@ -66,9 +143,28 @@ public class ProjectWindow : EditorWindow
         bool opened = ImGui.TreeNodeEx("##node", flags, name);
         if (ImGui.IsItemClicked()) { _contextDirectory = path; EditorSelection.SelectedAssetPath = null; }
         if (!isRoot && ImGui.BeginDragDropSource()) { EditorSelection.DraggedAssetPath = normalizedPath; ImGui.SetDragDropPayload("ASSET_PATH", null, 0); ImGui.Text($"Move Folder: {name}"); ImGui.EndDragDropSource(); }
-        if (ImGui.BeginDragDropTarget()) { unsafe { var payload = ImGui.AcceptDragDropPayload("ASSET_PATH"); if (payload.Handle != null && EditorSelection.DraggedAssetPath != null) { MoveAsset(EditorSelection.DraggedAssetPath, normalizedPath); EditorSelection.DraggedAssetPath = null; } } ImGui.EndDragDropTarget(); }
+        if (ImGui.BeginDragDropTarget())
+        {
+            unsafe
+            {
+                var payload = ImGui.AcceptDragDropPayload("ASSET_PATH");
+                if (payload.Handle != null && EditorSelection.DraggedAssetPath != null)
+                {
+                    MoveAsset(EditorSelection.DraggedAssetPath, normalizedPath);
+                    EditorSelection.DraggedAssetPath = null;
+                }
+
+                var entityPayload = ImGui.AcceptDragDropPayload("HIERARCHY_ENTITY");
+                if (entityPayload.Handle != null && EditorSelection.DraggedEntity != null)
+                {
+                    _app.SaveEntityAsBlueprint(EditorSelection.DraggedEntity, normalizedPath);
+                    EditorSelection.DraggedEntity = null;
+                }
+            }
+            ImGui.EndDragDropTarget();
+        }
         if (ImGui.BeginPopupContextItem("FolderContext")) { _contextDirectory = path; if (ImGui.MenuItem("Show in Explorer")) Process.Start("explorer.exe", path.Replace("/", "\\")); ImGui.Separator(); if (!isRoot) { if (ImGui.MenuItem("Rename")) OpenRenamePopup(path); ImGui.Separator(); } if (ImGui.BeginMenu("Create")) { if (ImGui.MenuItem("World")) OpenCreatePopup(path, CreationType.World); if (ImGui.MenuItem("Script")) OpenCreatePopup(path, CreationType.Script); if (ImGui.MenuItem("Folder")) OpenCreatePopup(path, CreationType.Folder); ImGui.EndMenu(); } ImGui.EndPopup(); }
-        if (opened) { foreach (var d in Directory.GetDirectories(path).OrderBy(Path.GetFileName)) DrawDirectoryNode(d, false); foreach (var f in Directory.GetFiles(path).OrderBy(Path.GetFileName)) { var normalizedFile = f.Replace("\\", "/"); var fileName = Path.GetFileName(f); ImGui.PushID(normalizedFile); bool selected = string.Equals(EditorSelection.SelectedAssetPath, normalizedFile, StringComparison.OrdinalIgnoreCase); if (ImGui.Selectable(fileName, selected, ImGuiSelectableFlags.SpanAllColumns)) { EditorSelection.SelectedAssetPath = normalizedFile; _contextDirectory = Path.GetDirectoryName(f); } if (ImGui.BeginDragDropSource()) { EditorSelection.DraggedAssetPath = normalizedFile; ImGui.SetDragDropPayload("ASSET_PATH", null, 0); ImGui.Text($"Move File: {fileName}"); ImGui.EndDragDropSource(); } if (ImGui.IsItemHovered() && ImGui.IsMouseDoubleClicked(0)) OnAssetDoubleClicked(normalizedFile); if (ImGui.BeginPopupContextItem("FileContext")) { EditorSelection.SelectedAssetPath = normalizedFile; if (ImGui.MenuItem("Show in Explorer")) Process.Start("explorer.exe", $"/select,\"{f.Replace("/", "\\")}\""); if (ImGui.MenuItem("Rename")) OpenRenamePopup(normalizedFile); if (ImGui.MenuItem("Delete")) { File.Delete(f); } ImGui.EndPopup(); } ImGui.PopID(); } ImGui.TreePop(); }
+        if (opened) { foreach (var d in Directory.GetDirectories(path).OrderBy(Path.GetFileName)) DrawDirectoryNode(d, false); foreach (var f in Directory.GetFiles(path).OrderBy(Path.GetFileName)) { var normalizedFile = f.Replace("\\", "/"); var fileName = Path.GetFileName(f); ImGui.PushID(normalizedFile); bool selected = string.Equals(EditorSelection.SelectedAssetPath, normalizedFile, StringComparison.OrdinalIgnoreCase); if (ImGui.Selectable(fileName, selected, ImGuiSelectableFlags.SpanAllColumns)) { EditorSelection.SelectedAssetPath = normalizedFile; EditorSelection.SelectedEntity = null; _contextDirectory = Path.GetDirectoryName(f); } if (ImGui.BeginDragDropSource()) { EditorSelection.DraggedAssetPath = normalizedFile; ImGui.SetDragDropPayload("ASSET_PATH", null, 0); ImGui.Text($"Move File: {fileName}"); ImGui.EndDragDropSource(); } if (ImGui.IsItemHovered() && ImGui.IsMouseDoubleClicked(0)) OnAssetDoubleClicked(normalizedFile); if (ImGui.BeginPopupContextItem("FileContext")) { EditorSelection.SelectedAssetPath = normalizedFile; EditorSelection.SelectedEntity = null; if (ImGui.MenuItem("Show in Explorer")) Process.Start("explorer.exe", $"/select,\"{f.Replace("/", "\\")}\""); if (ImGui.MenuItem("Rename")) OpenRenamePopup(normalizedFile); if (ImGui.MenuItem("Delete")) { File.Delete(f); } ImGui.EndPopup(); } ImGui.PopID(); } ImGui.TreePop(); }
         ImGui.PopID();
     }
 
@@ -95,7 +191,7 @@ public class ProjectWindow : EditorWindow
     private void FinalizeCreate()
     {
         if (_targetPath == null || string.IsNullOrWhiteSpace(_inputBuffer)) return;
-        try { switch (_creationType) { case CreationType.Script: File.WriteAllText(Path.Combine(_targetPath, _inputBuffer + ".cs"), $"using Verity.Core.ECS;\n\npublic class {_inputBuffer} : Script\n{{\n    public override void Start() {{ }}\n    public override void Update() {{ }}\n}}"); break; case CreationType.World: var w = new World(_inputBuffer); var c = w.CreateEntity("Main Camera"); c.AddComponent<Camera>(); var p = Path.Combine(_targetPath, _inputBuffer + ".verity"); File.WriteAllText(p, SceneSerializer.Serialize(w)); LoadWorldByPath(p); break; case CreationType.Folder: Directory.CreateDirectory(Path.Combine(_targetPath, _inputBuffer)); break; } } catch (Exception e) { Verity.Core.Debug.LogError(e.Message); }
+        try { switch (_creationType) { case CreationType.Script: File.WriteAllText(Path.Combine(_targetPath, _inputBuffer + ".cs"), $"using Verity.Core.ECS;\n\npublic class {_inputBuffer} : Script\n{{\n    void Start()\n    {{\n    }}\n\n    void Update()\n    {{\n    }}\n}}"); break; case CreationType.World: var w = new World(_inputBuffer); var c = w.CreateEntity("Main Camera"); c.AddComponent<Camera>(); var p = Path.Combine(_targetPath, _inputBuffer + ".verity"); File.WriteAllText(p, SceneSerializer.Serialize(w)); LoadWorldByPath(p); break; case CreationType.Folder: Directory.CreateDirectory(Path.Combine(_targetPath, _inputBuffer)); break; } } catch (Exception e) { Verity.Core.Debug.LogError(e.Message); }
     }
 
     private void FinalizeRename()
@@ -104,7 +200,8 @@ public class ProjectWindow : EditorWindow
         try { var dir = Path.GetDirectoryName(_targetPath)!; var next = Path.Combine(dir, _inputBuffer + Path.GetExtension(_targetPath)).Replace("\\", "/"); if (File.Exists(_targetPath)) File.Move(_targetPath, next); else if (Directory.Exists(_targetPath)) Directory.Move(_targetPath, next); if (EditorSelection.SelectedAssetPath == _targetPath) EditorSelection.SelectedAssetPath = next; } catch (Exception e) { Verity.Core.Debug.LogError(e.Message); }
     }
 
-    private void OnAssetDoubleClicked(string path) { if (path.EndsWith(".verity")) LoadWorldByPath(path); else if (path.EndsWith(".cs")) Process.Start(new ProcessStartInfo { FileName = path, UseShellExecute = true }); }
+    private void OnAssetDoubleClicked(string path) { if (path.EndsWith(".verity")) LoadWorldByPath(path); else if (path.EndsWith(".blueprint")) _app.InstantiateBlueprint(path); else if (path.EndsWith(".cs")) Process.Start(new ProcessStartInfo { FileName = path, UseShellExecute = true }); }
+
     public void LoadWorldByPath(string path) {
         if (!File.Exists(path)) return;
         var w = WorldManager.CreateOrReplaceWorld(Path.GetFileNameWithoutExtension(path));

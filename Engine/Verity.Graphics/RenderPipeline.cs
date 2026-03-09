@@ -111,10 +111,53 @@ public class RenderPipeline : IDisposable
 
     public void RenderWorld(World world, Camera camera, FramebufferObject.Uploaded? targetFbo = null)
     {
+        // 1. 전체 타겟 크기 결정
+        int targetW, targetH;
+        if (targetFbo == _worldFbo) { targetW = _worldFboWidth; targetH = _worldFboHeight; }
+        else if (targetFbo == _screenFbo) { targetW = _screenFboWidth; targetH = _screenFboHeight; }
+        else { targetW = (int)_device.Window.GetWidth(); targetH = (int)_device.Window.GetHeight(); }
+
+        if (targetW <= 0 || targetH <= 0) return;
+
+        // 2. 뷰포트 및 레터박스 영역 계산
+        int vx = 0, vy = 0, vw = targetW, vh = targetH;
+
+        if (camera.FixedAspectRatio)
+        {
+            float targetAspect = camera.TargetAspectRatio;
+            float windowAspect = (float)targetW / targetH;
+
+            if (windowAspect > targetAspect) // 가로가 더 넓음 (Pillarbox)
+            {
+                vw = (int)MathF.Round(targetH * targetAspect);
+                vx = (targetW - vw) / 2;
+            }
+            else // 세로가 더 길거나 같음 (Letterbox)
+            {
+                vh = (int)MathF.Round(targetW / targetAspect);
+                vy = (targetH - vh) / 2;
+            }
+        }
+
+        int finalVw = Math.Max(1, vw);
+        int finalVh = Math.Max(1, vh);
+
+        // 3. 카메라 정보 업데이트 (UI 상호작용 및 투영 행렬용)
+        // SetViewportRect는 좌상단(0,0) 기준 좌표를 사용함
+        camera.SetViewportRect(vx, (targetH - (vy + finalVh)), finalVw, finalVh);
+
+        // 4. 배경 클리어
+        // 먼저 전체 영역을 검은색으로 지움 (레터박스 바깥쪽)
+        _device.Gl.Disable(EnableCap.ScissorTest);
+        _device.Clear(Verity.Core.Color.Black, targetFbo);
+
+        // 카메라 영역만 배경색으로 지움 (가위 테스트 사용)
+        _device.Gl.Enable(EnableCap.ScissorTest);
+        _device.Gl.Scissor(vx, vy, (uint)finalVw, (uint)finalVh);
         _device.Clear(camera.BackgroundColor, targetFbo);
 
-        var renderers = CollectRenderers(world);
-        SortRenderers(renderers);
+        // 5. 뷰포트 설정 및 렌더링 시작
+        _device.Gl.Viewport(vx, vy, (uint)finalVw, (uint)finalVh);
 
         var projection = camera.GetProjectionMatrix();
         var view = camera.GetViewMatrix();
@@ -122,36 +165,39 @@ public class RenderPipeline : IDisposable
         _shader.SetProjection(projection);
         _shader.SetView(view);
 
+        var renderers = CollectRenderers(world);
+        SortRenderers(renderers);
+
         foreach (var sr in renderers)
         {
-            if (!sr.Enabled)
-                continue;
-
-            // Auto-load texture if path is set but texture is missing
+            if (!sr.Enabled) continue;
+            
             if (sr.Texture == null && !string.IsNullOrWhiteSpace(sr.Sprite.Path))
             {
                 try {
                     string fullPath = ResolveAssetPath(sr.Sprite.Path);
-                    if (File.Exists(fullPath))
-                        sr.Texture = _textureManager.Load(fullPath);
-                } catch { /* Handle gracefully */ }
+                    if (File.Exists(fullPath)) sr.Texture = _textureManager.Load(fullPath);
+                } catch { }
             }
 
             var texture = sr.Texture ?? DefaultSprites.Square;
-            if (texture == null)
-                continue;
+            if (texture == null) continue;
 
-            var transform = sr.Owner.Transform;
-            var model = BuildModelMatrix(transform, sr);
-
-            _shader.SetModel(model);
+            // 라이브러리의 내부 리셋을 방지하기 위해 뷰포트 유지 확인
+            _device.Gl.Viewport(vx, vy, (uint)finalVw, (uint)finalVh);
+            
+            _shader.SetModel(BuildModelMatrix(sr.Owner.Transform, sr));
             _shader.SetTexture(texture);
             _shader.SetColor(sr.Color);
-
             _shader.QuadBuffer.Draw(_shader.Program, targetFbo);
         }
 
+        _device.Gl.Viewport(vx, vy, (uint)finalVw, (uint)finalVh);
         _debugDraw.Render(camera, targetFbo);
+
+        // 6. 정리
+        _device.Gl.Disable(EnableCap.ScissorTest);
+        _device.Gl.Viewport(0, 0, (uint)targetW, (uint)targetH);
     }
 
     private string ResolveAssetPath(string relPath)
@@ -215,18 +261,25 @@ public class RenderPipeline : IDisposable
 
     private static Matrix4x4 BuildModelMatrix(Transform transform, SpriteRenderer sr)
     {
-        var worldMatrix = transform.GetWorldMatrix();
-        Matrix4x4.Decompose(worldMatrix, out var scale, out var rotation, out var translation);
+        // 1. Local adjustments (Pivot & Flip)
+        var pivotMatrix = Matrix4x4.CreateTranslation(-sr.Pivot.X, -sr.Pivot.Y, 0);
+        var flipMatrix = Matrix4x4.CreateScale(sr.FlipX ? -1f : 1f, sr.FlipY ? -1f : 1f, 1f);
 
-        var scaleX = scale.X * (sr.FlipX ? -1f : 1f);
-        var scaleY = scale.Y * (sr.FlipY ? -1f : 1f);
+        // 2. Entity transform (Scale -> Rotation -> Translation)
+        var localScale = Matrix4x4.CreateScale(transform.Scale.X, transform.Scale.Y, 1f);
+        var localRotation = Matrix4x4.CreateRotationZ(transform.Rotation * MathF.PI / 180f);
+        var localTranslation = Matrix4x4.CreateTranslation(transform.Position.X, transform.Position.Y, 0f);
 
-        var pivotOffset = Matrix4x4.CreateTranslation(-sr.Pivot.X, -sr.Pivot.Y, 0);
-        var scaleMatrix = Matrix4x4.CreateScale(scaleX, scaleY, 1f);
-        var rotMatrix = Matrix4x4.CreateFromQuaternion(rotation);
-        var transMatrix = Matrix4x4.CreateTranslation(translation);
+        // 3. Parent world transform (if any)
+        var parentMatrix = Matrix4x4.Identity;
+        if (transform.Parent != null)
+        {
+            parentMatrix = transform.Parent.GetWorldMatrix();
+        }
 
-        return pivotOffset * scaleMatrix * rotMatrix * transMatrix;
+        // Combine in order: Local Offset -> Local Scale -> Local Rot -> Local Trans -> Parent World
+        // For System.Numerics (Row-Major), this is the order of application.
+        return pivotMatrix * flipMatrix * localScale * localRotation * localTranslation * parentMatrix;
     }
 
     public void RenderGizmoLine(Vector2 start, Vector2 end, float thickness, Verity.Core.Color color,
@@ -276,9 +329,10 @@ public class RenderPipeline : IDisposable
     }
 
     public void RenderGizmoQuad(Vector2 center, Vector2 size, Verity.Core.Color color,
-        Camera camera, FramebufferObject.Uploaded? targetFbo = null)
+        Camera camera, FramebufferObject.Uploaded? targetFbo = null, TextureObjectUploaded? texture = null)
     {
-        if (_whitePixel == null) return;
+        var tex = texture ?? _whitePixel;
+        if (tex == null) return;
 
         _shader.SetProjection(camera.GetProjectionMatrix());
         _shader.SetView(camera.GetViewMatrix());
@@ -288,7 +342,7 @@ public class RenderPipeline : IDisposable
         var translation = Matrix4x4.CreateTranslation(center.X, center.Y, 0);
 
         _shader.SetModel(pivotOffset * scale * translation);
-        _shader.SetTexture(_whitePixel);
+        _shader.SetTexture(tex);
         _shader.SetColor(color);
         _shader.QuadBuffer.Draw(_shader.Program, targetFbo);
     }

@@ -69,6 +69,8 @@ Verity Engine은 C# 기반의 Entity-Component-System (ECS) 아키텍처를 따�
 사용자가 게임 로직을 작성할 때 상속받는 기본 클래스입니다. `Component`를 상속받습니다.
 
 ### Lifecycle Flow
+Verity uses a Unity-style lifecycle system. You do **not** need to use `override` for lifecycle methods; simply defining a method with the correct name (even if private) is enough.
+
 1. **Awake**: 스크립트가 생성된 직후 호출 (초기화)
 2. **Start**: 첫 번째 Update 실행 전 호출
 3. **FixedUpdate**: 고정된 시간 간격(0.016s)마다 호출 (물리 연산 등)
@@ -94,7 +96,7 @@ public class PlayerController : Script
 
     private SpriteRenderer _renderer;
 
-    public override void Start()
+    void Start()
     {
         // 다른 컴포넌트 가져오기
         _renderer = Owner.GetComponent<SpriteRenderer>();
@@ -104,7 +106,7 @@ public class PlayerController : Script
         }
     }
 
-    public override void Update()
+    void Update()
     {
         // 입력 처리
         if (Input.GetKey(KeyCode.W))

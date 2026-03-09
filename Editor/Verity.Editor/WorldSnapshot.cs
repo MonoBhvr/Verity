@@ -41,6 +41,7 @@ internal sealed class WorldSnapshot
             }
 
             snapshots.Add(new EntitySnapshot(
+                entity.Id,
                 entity.Name,
                 entity.Active,
                 entity.Transform.Position,
@@ -94,6 +95,7 @@ internal sealed class WorldSnapshot
         foreach (var snapshot in _entities)
         {
             var entity = world.CreateEntity(snapshot.Name);
+            entity.Id = snapshot.Id;
             entity.Active = snapshot.Active;
             entity.Transform.Position = snapshot.Position;
             entity.Transform.Rotation = snapshot.Rotation;
@@ -159,6 +161,7 @@ internal sealed class WorldSnapshot
     }
 
     private sealed record EntitySnapshot(
+        Guid Id,
         string Name,
         bool Active,
         System.Numerics.Vector2 Position,

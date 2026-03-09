@@ -104,6 +104,16 @@ public class GraphicsDevice : IDisposable
         Window.PollEvents();
     }
 
+    public void SetSize(int w, int h)
+    {
+        Window.SetSize(w, h);
+    }
+
+    public void SetWindowIcon(byte[] rgbaPixels, int width, int height)
+    {
+        Window.SetIcon(rgbaPixels, width, height);
+    }
+
     public bool ShouldClose => Window.ShouldClose;
 
     public void Dispose()

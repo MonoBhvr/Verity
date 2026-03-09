@@ -46,6 +46,7 @@ public class BuildSettings
 {
     public List<string> Worlds { get; set; } = new();
     public int StartWorldIndex { get; set; } = 0;
+    public string? LogoPath { get; set; }
 
     private static readonly JsonSerializerOptions JsonOptions = new() {
         PropertyNameCaseInsensitive = true,

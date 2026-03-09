@@ -31,6 +31,16 @@ public static class Time
     public static int FrameCount { get; internal set; }
 
     /// <summary>
+    /// Total number of logic ticks since the engine started.
+    /// </summary>
+    public static int LogicTickCount { get; internal set; }
+
+    /// <summary>
+    /// Total number of physics ticks since the engine started.
+    /// </summary>
+    public static int PhysicsTickCount { get; internal set; }
+
+    /// <summary>
     /// Resets all time values to their defaults.
     /// </summary>
     public static void Reset()
@@ -39,5 +49,7 @@ public static class Time
         TotalTime = 0f;
         TimeScale = 1.0f;
         FrameCount = 0;
+        LogicTickCount = 0;
+        PhysicsTickCount = 0;
     }
 }

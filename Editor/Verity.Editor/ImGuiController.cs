@@ -11,13 +11,18 @@ public unsafe class ImGuiController : IDisposable
 {
     private ImGuiContextPtr _context;
 
-    public void Initialize(GraphicsDevice device)
+    public void Initialize(GraphicsDevice device, string? fontPath = null, float fontSize = 18f)
     {
         _context = ImGui.CreateContext();
         ImGui.SetCurrentContext(_context);
 
         var io = ImGui.GetIO();
         io.ConfigFlags |= ImGuiConfigFlags.DockingEnable;
+
+        if (!string.IsNullOrEmpty(fontPath) && File.Exists(fontPath))
+        {
+            LoadFont(fontPath, fontSize);
+        }
 
         ApplyModernDarkTheme();
 
@@ -32,6 +37,26 @@ public unsafe class ImGuiController : IDisposable
         device.Window.OnSdlEvent += OnSdlEvent;
     }
 
+    private void LoadFont(string path, float size)
+    {
+        var io = ImGui.GetIO();
+        
+        // Manual definition of Korean glyph ranges for ImGui (ImWchar ranges)
+        // Format: [start, end, ..., 0]
+        // Basic Latin: 0x0020 - 0x00FF
+        // Korean: 0x3131 - 0x3163 (Compatibility Jamo), 0xAC00 - 0xD7A3 (Hangul Syllables)
+        // Note: Hexa.NET uses uint* for ranges.
+        fixed (uint* ranges = new uint[] { 
+            0x0020, 0x00FF, // Basic Latin
+            0x3131, 0x3163, // Korean Jamo
+            0xAC00, 0xD7A3, // Korean Syllables
+            0 
+        })
+        {
+            io.Fonts.AddFontFromFileTTF(path, size, (ImFontConfig*)null, ranges);
+        }
+    }
+
     private static void ApplyModernDarkTheme()
     {
         var style = ImGui.GetStyle();
@@ -42,11 +67,11 @@ public unsafe class ImGuiController : IDisposable
         style.ScrollbarRounding = 4f;
         style.GrabRounding = 3f;
         style.TabRounding = 4f;
-        style.WindowPadding = new Vector2(10, 10);
-        style.FramePadding = new Vector2(6, 4);
-        style.CellPadding = new Vector2(6, 3);
-        style.ItemSpacing = new Vector2(8, 5);
-        style.ItemInnerSpacing = new Vector2(6, 4);
+        style.WindowPadding = new Vector2(8, 8);
+        style.FramePadding = new Vector2(4, 2);
+        style.CellPadding = new Vector2(4, 2);
+        style.ItemSpacing = new Vector2(8, 4);
+        style.ItemInnerSpacing = new Vector2(4, 4);
         style.IndentSpacing = 20f;
         style.ScrollbarSize = 13f;
         style.GrabMinSize = 10f;
@@ -111,7 +136,7 @@ public unsafe class ImGuiController : IDisposable
     {
         ImGuiImplOpenGL3.Shutdown();
         ImGuiImplSDL2.Shutdown();
-        if (_context.Handle != null)
+        if ((nint)_context.Handle != 0)
             ImGui.DestroyContext(_context);
     }
 }

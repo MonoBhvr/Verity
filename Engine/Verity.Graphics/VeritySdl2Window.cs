@@ -110,6 +110,34 @@ public class VeritySdl2Window : Window
         return (uint)h;
     }
 
+    public void SetSize(int w, int h)
+    {
+        SDL.SDL_SetWindowSize(_sdlWindow, w, h);
+    }
+
+    public unsafe void SetIcon(byte[] rgbaPixels, int width, int height)
+    {
+        fixed (byte* ptr = rgbaPixels)
+        {
+            // SDL_CreateRGBSurfaceFrom expects masks for R, G, B, A
+            // For standard RGBA8888:
+            uint rmask = 0x000000ff;
+            uint gmask = 0x0000ff00;
+            uint bmask = 0x00ff0000;
+            uint amask = 0xff000000;
+
+            IntPtr surface = SDL.SDL_CreateRGBSurfaceFrom(
+                (IntPtr)ptr, width, height, 32, width * 4,
+                rmask, gmask, bmask, amask);
+
+            if (surface != IntPtr.Zero)
+            {
+                SDL.SDL_SetWindowIcon(_sdlWindow, surface);
+                SDL.SDL_FreeSurface(surface);
+            }
+        }
+    }
+
     public override void Dispose()
     {
         SDL.SDL_GL_DeleteContext(_glContext);

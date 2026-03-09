@@ -44,6 +44,7 @@ public class WorldViewWindow : EditorWindow
 
     public override void OnGui()
     {
+        HandleShortcuts();
         DrawToolbar();
 
         if (_shouldOpenPopup) {
@@ -60,8 +61,16 @@ public class WorldViewWindow : EditorWindow
 
         var world = WorldManager.ActiveWorld;
         if (world != null) {
-            _app.RenderPipeline.RenderWorld(world, _app.WorldCamera, _app.RenderPipeline.WorldFbo);
+            // Editor World view should NOT be letterboxed, even if the camera is set to fixed aspect
+            bool originalFixed = _app.WorldCamera.FixedAspectRatio;
+            _app.WorldCamera.FixedAspectRatio = false;
+            
+            // Record gizmos before rendering so they show up in the current frame
             RenderEditorGizmos(world);
+            
+            _app.RenderPipeline.RenderWorld(world, _app.WorldCamera, _app.RenderPipeline.WorldFbo);
+            
+            _app.WorldCamera.FixedAspectRatio = originalFixed;
         }
 
         var colorTex = _app.RenderPipeline.WorldColorTexture;
@@ -70,7 +79,54 @@ public class WorldViewWindow : EditorWindow
                 var texRef = new ImTextureRef(null, new ImTextureID((nint)glTex.Id));
                 ImGui.Image(texRef, contentSize, new Vector2(0, 1), new Vector2(1, 0));
             }
-            HandleWorldInteraction(world, ImGui.GetItemRectMin(), ImGui.GetItemRectSize(), ImGui.IsItemHovered());
+
+            var imgMin = ImGui.GetItemRectMin();
+            var imgSize = ImGui.GetItemRectSize();
+            HandleWorldInteraction(world, imgMin, imgSize, ImGui.IsItemHovered());
+
+            // Blueprint Drag & Drop and Preview
+            if (ImGui.BeginDragDropTarget())
+            {
+                unsafe
+                {
+                    var payload = ImGui.AcceptDragDropPayload("ASSET_PATH");
+                    if (payload.Handle != null && EditorSelection.DraggedAssetPath != null && EditorSelection.DraggedAssetPath.EndsWith(".blueprint"))
+                    {
+                        var io = ImGui.GetIO();
+                        var worldMouse = ToWorldMousePosition(imgMin, imgSize, io.MousePos);
+                        _app.InstantiateBlueprint(EditorSelection.DraggedAssetPath, worldMouse);
+                        EditorSelection.DraggedAssetPath = null;
+                    }
+                }
+                ImGui.EndDragDropTarget();
+            }
+
+            // Preview Overlay
+            bool isBlueprintBeingDragged = false;
+            unsafe {
+                var payload = ImGui.GetDragDropPayload();
+                if (payload.Handle != null && payload.IsDataType("ASSET_PATH") && EditorSelection.DraggedAssetPath != null && EditorSelection.DraggedAssetPath.EndsWith(".blueprint"))
+                    isBlueprintBeingDragged = true;
+            }
+
+            if (isBlueprintBeingDragged && ImGui.IsWindowHovered())
+            {
+                var io = ImGui.GetIO();
+                var dl = ImGui.GetForegroundDrawList();
+                var m = io.MousePos;
+                
+                // Visual Guide: Circle + Crosshair
+                dl.AddCircle(m, 12f, ImGui.GetColorU32(new Vector4(0.2f, 0.8f, 1.0f, 1.0f)), 16, 2f);
+                dl.AddLine(new Vector2(m.X - 18, m.Y), new Vector2(m.X + 18, m.Y), ImGui.GetColorU32(new Vector4(1, 1, 1, 0.4f)), 1f);
+                dl.AddLine(new Vector2(m.X, m.Y - 18), new Vector2(m.X, m.Y + 18), ImGui.GetColorU32(new Vector4(1, 1, 1, 0.4f)), 1f);
+                
+                // Label with Background
+                string label = $"Instantiate: {System.IO.Path.GetFileNameWithoutExtension(EditorSelection.DraggedAssetPath!)}";
+                var labelSize = ImGui.CalcTextSize(label);
+                var labelPos = new Vector2(m.X + 15, m.Y + 15);
+                dl.AddRectFilled(labelPos - new Vector2(4, 2), labelPos + labelSize + new Vector2(4, 2), ImGui.GetColorU32(new Vector4(0, 0, 0, 0.7f)), 4f);
+                dl.AddText(labelPos, ImGui.GetColorU32(new Vector4(1, 1, 1, 1)), label);
+            }
         }
         HandleCameraControls();
     }
@@ -105,7 +161,26 @@ public class WorldViewWindow : EditorWindow
 
         var (center, size, rotation) = GetEntityBounds(selected);
         float pixel = GetWorldPixelSize();
-        _app.RenderPipeline.RenderGizmoRect(center, size, rotation, pixel * 1.5f, SelectionColor, _app.WorldCamera, _app.RenderPipeline.WorldFbo);
+        
+        // Use Debug.DrawBox instead of direct RenderPipeline calls for better reliability
+        Verity.Core.Debug.DrawBox(center, size, SelectionColor, pixel * 2.0f);
+
+        // Draw Camera View Frustum if any component named "Camera" exists
+        var components = selected.GetAllComponents();
+        foreach (var comp in components)
+        {
+            if (comp is Camera camComp)
+            {
+                // VisibleHalfHeight/Width will calculate based on its own ScalingMode and aspect settings
+                float hH = camComp.VisibleHalfHeight;
+                float hW = camComp.VisibleHalfWidth;
+                Vector2 viewSize = new Vector2(hW * 2f, hH * 2f);
+
+                // Draw frustum rectangle
+                Verity.Core.Debug.DrawBox(selected.Transform.WorldPosition, viewSize, Verity.Core.Color.Yellow, pixel * 4.0f);
+                break;
+            }
+        }
 
         if (_activeTool == GizmoTool.Scale) RenderScaleHandles(center, size, rotation, _app.WorldCamera, _app.RenderPipeline.WorldFbo);
         if (_activeTool == GizmoTool.Rotate) RenderRotateHandle(center, size, rotation, _app.WorldCamera, _app.RenderPipeline.WorldFbo);
@@ -131,7 +206,11 @@ public class WorldViewWindow : EditorWindow
 
     private void HandleWorldInteraction(World? world, Vector2 imgMin, Vector2 imgSize, bool hovered)
     {
-        if (ImGui.IsMouseReleased(0)) { _isDragging = false; _activeHandle = -1; }
+        if (ImGui.IsMouseReleased(0)) { 
+            if (_isDragging || _activeHandle >= 0) _app.EndUndoAction();
+            _isDragging = false; 
+            _activeHandle = -1; 
+        }
         if (world == null || !hovered) return;
 
         var io = ImGui.GetIO();
@@ -144,6 +223,7 @@ public class WorldViewWindow : EditorWindow
                 else if (_activeTool == GizmoTool.Rotate) _activeHandle = HitTestRotateHandle(selected, worldMouse) ? 88 : -1;
                 
                 if (_activeHandle >= 0) {
+                    _app.BeginUndoAction();
                     _dragStartWorld = worldMouse;
                     _entityStartPos = selected.Transform.Position;
                     _entityStartScale = selected.Transform.Scale;
@@ -151,9 +231,16 @@ public class WorldViewWindow : EditorWindow
                     return;
                 }
             }
-            EditorSelection.SelectedEntity = PickEntity(world, worldMouse);
+            var picked = PickEntity(world, worldMouse);
+            if (picked != selected) {
+                // Changing selection is not usually an undoable action in many editors, 
+                // but if we want it to be, we could record here. For now, just change.
+                EditorSelection.SelectedEntity = picked;
+            }
+            
             _isDragging = EditorSelection.SelectedEntity != null;
             if (_isDragging) { 
+                _app.BeginUndoAction();
                 _dragStartWorld = worldMouse; 
                 _entityStartPos = EditorSelection.SelectedEntity!.Transform.Position; 
             }
@@ -164,6 +251,11 @@ public class WorldViewWindow : EditorWindow
             else if (_activeHandle >= 0) HandleScaleDragPainterStyle(worldMouse);
             else if (_isDragging) HandleMoveDrag(worldMouse);
         }
+    }
+
+    private bool HitTestPick(World world, Vector2 mouse)
+    {
+        return PickEntity(world, mouse) != null;
     }
 
     private void HandleMoveDrag(Vector2 worldMouse)
@@ -283,7 +375,7 @@ public class WorldViewWindow : EditorWindow
     }
 
     private float GetWorldPixelSize() {
-        float h = _app.WorldCamera.OrthographicSize * _app.WorldCamera.Zoom * 2f;
+        float h = _app.WorldCamera.VisibleHalfHeight * 2f;
         return _app.WorldCamera.ViewportHeight > 0 ? h / _app.WorldCamera.ViewportHeight : 0.01f;
     }
 
@@ -371,7 +463,7 @@ public class WorldViewWindow : EditorWindow
         if (_activeMode == ModalMode.Create) {
             if (_creationType == CreationType.Script) {
                 var p = System.IO.Path.Combine(_targetPath, _inputBuffer + ".cs");
-                System.IO.File.WriteAllText(p, $"using Verity.Core.ECS;\n\npublic class {_inputBuffer} : Script\n{{\n    public override void Start() {{ }}\n    public override void Update() {{ }}\n}}");
+                System.IO.File.WriteAllText(p, $"using Verity.Core.ECS;\n\npublic class {_inputBuffer} : Script\n{{\n    void Start()\n    {{\n    }}\n\n    void Update()\n    {{\n    }}\n}}");
             } else if (_creationType == CreationType.World) {
                 var p = System.IO.Path.Combine(_targetPath, _inputBuffer + ".verity");
                 var w = new World(_inputBuffer); var camEnt = w.CreateEntity("Main Camera"); camEnt.AddComponent<Camera>();
@@ -379,5 +471,97 @@ public class WorldViewWindow : EditorWindow
                 LoadWorldByPath(p);
             }
         }
+    }
+
+    private void HandleShortcuts()
+    {
+        if (!ImGui.IsWindowFocused(ImGuiFocusedFlags.RootAndChildWindows)) return;
+        var io = ImGui.GetIO();
+        if (io.WantCaptureKeyboard) return;
+
+        bool ctrl = io.KeyCtrl;
+
+        // F: Focus selected entity
+        if (ImGui.IsKeyPressed(ImGuiKey.F) && EditorSelection.SelectedEntity != null)
+        {
+            _app.WorldCamera.Position = EditorSelection.SelectedEntity.Transform.WorldPosition;
+        }
+
+        // Delete: Delete selected entity
+        if (ImGui.IsKeyPressed(ImGuiKey.Delete) && EditorSelection.SelectedEntity != null)
+        {
+            var world = WorldManager.ActiveWorld;
+            if (world != null)
+                DeleteEntity(EditorSelection.SelectedEntity, world);
+        }
+
+        // Ctrl + D: Duplicate Entity
+        if (ctrl && ImGui.IsKeyPressed(ImGuiKey.D) && EditorSelection.SelectedEntity != null)
+        {
+            var world = WorldManager.ActiveWorld;
+            if (world != null)
+                DuplicateEntity(EditorSelection.SelectedEntity, world);
+        }
+
+        // W, E, R: Gizmo Tools
+        if (ImGui.IsKeyPressed(ImGuiKey.W)) _activeTool = GizmoTool.Move;
+        if (ImGui.IsKeyPressed(ImGuiKey.E)) _activeTool = GizmoTool.Scale;
+        if (ImGui.IsKeyPressed(ImGuiKey.R)) _activeTool = GizmoTool.Rotate;
+    }
+
+    private void DeleteEntity(Entity entity, World world)
+    {
+        if (entity.GetComponent<Camera>() != null)
+        {
+            Verity.Core.Debug.LogWarning($"[World] Cannot delete entity '{entity.Name}' because it has a Camera component.");
+            return;
+        }
+
+        if (EditorSelection.SelectedEntity == entity)
+            EditorSelection.SelectedEntity = null;
+
+        if (entity.Transform.Parent != null)
+            entity.Transform.SetParent(null, preserveWorldPosition: false);
+
+        world.DestroyEntity(entity);
+        world.ProcessPendingDestroys();
+    }
+
+    private void DuplicateEntity(Entity original, World world)
+    {
+        void CopyRecursive(Entity src, Entity? targetParent)
+        {
+            var clone = world.CreateEntity(src.Name + " (Copy)");
+            clone.Transform.Position = src.Transform.Position;
+            clone.Transform.Rotation = src.Transform.Rotation;
+            clone.Transform.Scale = src.Transform.Scale;
+            
+            if (targetParent != null)
+                clone.Transform.SetParent(targetParent.Transform, preserveWorldPosition: true);
+
+            foreach (var comp in src.GetAllComponents())
+            {
+                if (comp is Transform) continue;
+                var cloneComp = clone.AddComponent(comp.GetType());
+                
+                // Copy properties via reflection
+                foreach (var prop in comp.GetType().GetProperties(System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance))
+                {
+                    if (prop.CanRead && prop.CanWrite && prop.DeclaringType != typeof(Component))
+                    {
+                        try { prop.SetValue(cloneComp, prop.GetValue(comp)); } catch { }
+                    }
+                }
+                foreach (var field in comp.GetType().GetFields(System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance))
+                {
+                    try { field.SetValue(cloneComp, field.GetValue(comp)); } catch { }
+                }
+            }
+
+            foreach (var child in src.Transform.Children.ToArray())
+                CopyRecursive(child.Owner, clone);
+        }
+
+        CopyRecursive(original, original.Transform.Parent?.Owner);
     }
 }

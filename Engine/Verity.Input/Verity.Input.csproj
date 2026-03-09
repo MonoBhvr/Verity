@@ -5,7 +5,6 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\Verity.Core\Verity.Core.csproj" />
   </ItemGroup>
 
   <ItemGroup>

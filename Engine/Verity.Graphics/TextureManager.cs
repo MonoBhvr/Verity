@@ -82,6 +82,14 @@ public class TextureManager : IDisposable
         return CreateFromRgba([255, 255, 255, 255], 1, 1, "__white_pixel__");
     }
 
+    public (byte[] Pixels, int Width, int Height) GetRawPixels(string path, bool flipY = false)
+    {
+        using var stream = File.OpenRead(Path.GetFullPath(path));
+        var imageResult = ImageResult.FromStream(stream, ColorComponents.RedGreenBlueAlpha);
+        var pixels = flipY ? FlipImageY(imageResult.Data, imageResult.Width, imageResult.Height) : imageResult.Data;
+        return (pixels, imageResult.Width, imageResult.Height);
+    }
+
     public void Unload(string path)
     {
         var fullPath = Path.GetFullPath(path);

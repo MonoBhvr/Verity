@@ -18,4 +18,4 @@ public class ChangeColor : Script
         }
         Owner.GetComponent<SpriteRenderer>().Color = changed ? color : new Vector4(1, 1, 1, 1); 
     }
-}
+}   

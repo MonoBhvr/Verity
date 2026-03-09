@@ -2,6 +2,7 @@ namespace Verity.Core.ECS;
 
 public class Entity
 {
+    public Guid Id { get; internal set; } = Guid.NewGuid();
     public string Name { get; set; }
     public bool Active { get; set; } = true;
     public Transform Transform { get; }

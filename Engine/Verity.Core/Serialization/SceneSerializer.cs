@@ -13,10 +13,30 @@ public static class SceneSerializer
 
     public static string Serialize(World.World world)
     {
+        var root = new JsonObject();
+        
+        var settings = new JsonObject
+        {
+            ["UseCustomSettings"] = world.UseCustomSettings,
+            ["CustomTPS"] = world.CustomTPS,
+            ["CustomPTPS"] = world.CustomPTPS
+        };
+        root["WorldSettings"] = settings;
+
         var rootArray = new JsonArray();
         var flattened = new List<Entity>();
-        foreach (var root in world.RootEntities)
-            SerializeEntityRecursive(root, rootArray, -1, flattened);
+        foreach (var ent in world.RootEntities)
+            SerializeEntityRecursive(ent, rootArray, -1, flattened);
+        
+        root["Entities"] = rootArray;
+        return root.ToJsonString(_options);
+    }
+
+    public static string SerializeEntity(Entity entity)
+    {
+        var rootArray = new JsonArray();
+        var flattened = new List<Entity>();
+        SerializeEntityRecursive(entity, rootArray, -1, flattened);
         return rootArray.ToJsonString(_options);
     }
 
@@ -27,6 +47,7 @@ public static class SceneSerializer
 
         var entityJson = new JsonObject
         {
+            ["Id"] = entity.Id.ToString(),
             ["Name"] = entity.Name,
             ["Active"] = entity.Active,
             ["ParentIndex"] = parentIndex,
@@ -144,16 +165,52 @@ public static class SceneSerializer
     public static void Deserialize(World.World world, string json, Assembly? userAssembly = null)
     {
         if (string.IsNullOrEmpty(json)) return;
-        var array = JsonNode.Parse(json)?.AsArray();
+        var root = JsonNode.Parse(json);
+        if (root == null) return;
+
+        JsonArray? array;
+        if (root is JsonArray rootArray)
+        {
+            array = rootArray;
+        }
+        else
+        {
+            var settings = root["WorldSettings"];
+            if (settings != null)
+            {
+                world.UseCustomSettings = (bool?)settings["UseCustomSettings"] ?? false;
+                world.CustomTPS = (int?)settings["CustomTPS"] ?? 60;
+                world.CustomPTPS = (int?)settings["CustomPTPS"] ?? 50;
+            }
+            array = root["Entities"]?.AsArray();
+        }
+
         if (array == null) return;
 
         world.ClearAllEntities();
+        var entities = DeserializeEntitiesInternal(world, array, userAssembly);
+    }
+
+    public static Entity? DeserializeEntity(World.World world, string json, Assembly? userAssembly = null)
+    {
+        if (string.IsNullOrEmpty(json)) return null;
+        var array = JsonNode.Parse(json)?.AsArray();
+        if (array == null || array.Count == 0) return null;
+
+        var entities = DeserializeEntitiesInternal(world, array, userAssembly);
+        return entities.Count > 0 ? entities[0] : null;
+    }
+
+    private static List<Entity> DeserializeEntitiesInternal(World.World world, JsonArray array, Assembly? userAssembly)
+    {
         var entities = new List<Entity>();
 
         foreach (var node in array)
         {
             if (node == null) continue;
             var entity = world.CreateEntity((string?)node["Name"] ?? "Entity");
+            if (Guid.TryParse((string?)node["Id"], out var guid)) entity.Id = guid;
+            
             entity.Active = (bool?)node["Active"] ?? true;
             entity.Transform.Position = DeserializeVector2(node["Position"]);
             entity.Transform.Rotation = (float?)node["Rotation"] ?? 0f;
@@ -191,6 +248,8 @@ public static class SceneSerializer
                 }
             }
         }
+        
+        return entities;
     }
 
     private static Type? ResolveType(string name, Assembly? userAsm)

@@ -5,6 +5,9 @@ namespace Verity.Core.World;
 public class World
 {
     public string Name { get; }
+    public bool UseCustomSettings { get; set; } = false;
+    public int CustomTPS { get; set; } = 60;
+    public int CustomPTPS { get; set; } = 50;
 
     private readonly List<Entity> _entities = [];
     private readonly List<Entity> _pendingDestroy = [];
