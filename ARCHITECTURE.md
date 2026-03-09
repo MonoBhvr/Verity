@@ -1,203 +1,226 @@
-# Verity Engine Architecture
+# Verity Engine Architecture & Scripting API Reference
 
-
-# 주의 현재 이 문서는 최신 사항을 반영하고 있지 않습니다.
-
-## Overview
-
-Verity는 .NET 9.0 (C#) 기반 2D 게임 엔진으로, 통합 에디터를 포함합니다.
-렌더링은 irodori 그래픽스 라이브러리(OpenGL 백엔드)를 사용하며, 에디터 UI는 ImGui(Hexa.NET.ImGui)로 구현됩니다.
-단일 SDL2 윈도우에서 게임 씬을 FBO에 렌더링한 뒤 ImGui::Image()로 Scene View에 표시하는 구조입니다.
+Verity Engine은 C# 기반의 Entity-Component-System (ECS) 아키텍처를 따르는 2D 게임 엔진입니다. 유니티 엔진과 유사한 워크플로우를 제공하며, 직관적인 스크립팅 API를 제공합니다.
 
 ---
 
-## Solution Structure
+## 1. Core Architecture (ECS)
 
-```
-Verity.sln
-├── Engine/
-│   ├── Verity.Core/        # 순수 C# 엔진 코어 (의존성 없음)
-│   ├── Verity.Graphics/    # 렌더링 (irodori, SDL2, StbImageSharp)
-│   └── Verity.Input/       # 입력 시스템 (SDL2)
-├── Editor/
-│   ├── Verity.Editor/      # 에디터 프레임워크 (Hexa.NET.ImGui)
-│   └── Verity.Editor.App/  # 에디터 진입점
-└── Verity.Game/            # 게임 프로젝트 (사용자 코드)
-```
+### 1.1. Entity (`Verity.Core.ECS.Entity`)
+월드(World)에 존재하는 모든 객체의 기본 단위입니다. 엔티티 자체는 데이터나 동작을 가지지 않으며, 컴포넌트들을 담는 컨테이너 역할을 합니다.
 
-### Dependency Graph
+**Properties:**
+| Name | Type | Description |
+| :--- | :--- | :--- |
+| `Name` | `string` | 엔티티의 이름입니다. 에디터의 Hierarchy 창에 표시됩니다. |
+| `Active` | `bool` | 엔티티의 활성화 상태입니다. `false`일 경우 해당 엔티티와 모든 컴포넌트의 업데이트가 중지됩니다. |
+| `Transform` | `Transform` | 엔티티의 위치, 회전, 크기를 담당하는 필수 컴포넌트입니다. 모든 엔티티는 생성 시 `Transform`을 가집니다. |
 
-```
-Verity.Core  ← (no deps)
-     ↑
-Verity.Graphics  ← irodori, irodori.Backend.OpenGL, ppy.SDL2-CS, StbImageSharp
-     ↑
-Verity.Input  ← ppy.SDL2-CS
-     ↑
-Verity.Editor  ← Hexa.NET.ImGui, Hexa.NET.ImGui.Backends.SDL2/OpenGL3
-     ↑
-Verity.Editor.App  (entry point)
-```
-
-`InternalsVisibleTo`: Verity.Core → Verity.Editor
+**Methods:**
+| Name | Description |
+| :--- | :--- |
+| `AddComponent<T>()` | 새로운 컴포넌트 `T`를 추가하고 반환합니다. |
+| `GetComponent<T>()` | 해당 타입의 컴포넌트가 있다면 반환하고, 없으면 `null`을 반환합니다. |
+| `RemoveComponent(Component)` | 특정 컴포넌트 인스턴스를 제거합니다. (`Transform`은 제거 불가) |
+| `GetAllComponents()` | 엔티티에 부착된 모든 컴포넌트 리스트를 반환합니다. |
 
 ---
 
-## Verity.Core — 엔진 코어
+### 1.2. Component (`Verity.Core.ECS.Component`)
+모든 기능적 요소(Script, Renderer, Transform 등)의 최상위 부모 클래스입니다.
 
-### ECS (Entity Component System)
+**Properties:**
+| Name | Type | Description |
+| :--- | :--- | :--- |
+| `Owner` | `Entity` | 이 컴포넌트가 부착된 엔티티를 가리킵니다. (Unity의 `gameObject`와 유사) |
+| `Transform` | `Transform` | `Owner.Transform`에 대한 단축 접근 프로퍼티입니다. |
+| `Enabled` | `bool` | 컴포넌트의 활성화 상태입니다. |
 
-경량 컴포넌트 기반 아키텍처. Unity 스타일의 GameObject-Component 모델.
-
-| 클래스 | 역할 |
-|--------|------|
-| `Component` | 모든 컴포넌트의 추상 베이스. `Owner`, `Enabled`, `OnEnable/OnDisable/OnDestroy` |
-| `Transform` | Position(Vector2), Rotation(float, degrees), Scale(Vector2). 부모-자식 계층. `GetWorldMatrix()`, `WorldPosition` |
-| `Script` | 게임 로직 컴포넌트. `Awake → Start → Update/FixedUpdate/LateUpdate → OnDestroy` 라이프사이클 |
-| `GameObject` | 컴포넌트 컨테이너. `AddComponent<T>()`, `GetComponent<T>()`, `GetComponents<T>()`, `RemoveComponent<T>()`. Transform은 항상 존재 (제거 불가) |
-| `SerializeFieldAttribute` | 프로퍼티/필드를 Inspector에 노출하는 어트리뷰트 |
-| `HideInInspectorAttribute` | public 프로퍼티/필드를 Inspector에서 숨기는 어트리뷰트 |
-
-### Scene
-
-| 클래스 | 역할 |
-|--------|------|
-| `Scene` | GameObject 컨테이너. `CreateGameObject()`, `DestroyGameObject()`, `ProcessPendingDestroys()` |
-| `SceneManager` | static. Scene 생성/활성화/언로드. `ActiveScene` |
-
-### Engine
-
-| 클래스 | 역할 |
-|--------|------|
-| `Time` | static 시간 제공자. `DeltaTime`, `FixedDeltaTime`, `TotalTime`, `TimeScale`, `FrameCount` |
-| `GameLoop` | 프레임 루프. `TickLogic(deltaTime)` = Script 라이프사이클 실행, `TickRender()` = 렌더 콜백. FixedUpdate는 고정 타임스텝 누적기 사용 |
-
-### VerityCore
-
-- `Version`: "0.0.1"
-- `ResetRuntime()`: SceneManager + Time 리셋
+**Lifecycle Methods (Override these):**
+| Name | Description |
+| :--- | :--- |
+| `OnDestroy()` | 컴포넌트가 제거되거나 엔티티가 파괴될 때 호출됩니다. 리소스 정리 등에 사용합니다. |
 
 ---
 
-## Verity.Graphics — 렌더링
+### 1.3. Transform (`Verity.Core.ECS.Transform`)
+엔티티의 공간적 정보와 계층 구조(Hierarchy)를 관리합니다.
 
-### 핵심 클래스
+**Properties:**
+| Name | Type | Description |
+| :--- | :--- | :--- |
+| `Position` | `Vector2` | 부모를 기준으로 한 로컬 위치입니다. |
+| `Rotation` | `float` | 부모를 기준으로 한 로컬 회전값(도, Degree)입니다. |
+| `Scale` | `Vector2` | 부모를 기준으로 한 로컬 크기입니다. 기본값은 `(1, 1)`입니다. |
+| `WorldPosition` | `Vector2` | (Read-only) 월드 공간에서의 절대 위치입니다. |
+| `WorldRotation` | `float` | (Read-only) 월드 공간에서의 절대 회전값입니다. |
+| `Parent` | `Transform?` | 부모 트랜스폼입니다. 변경 시 자식은 부모의 변환을 따라갑니다. 순환 참조(Cycle) 시 오류가 발생합니다. |
+| `Children` | `List<Transform>` | (Read-only) 현재 트랜스폼을 부모로 둔 자식들의 리스트입니다. |
 
-| 클래스 | 역할 |
-|--------|------|
-| `GraphicsDevice` | SDL2 윈도우 + irodori Gfx<OpenGlBackend, VeritySdl2Window> 래퍼. `Clear()`, 셰이더/텍스처/FBO/VBO 생성 팩토리 |
-| `VeritySdl2Window` | irodori `Window` 추상 클래스 구현. SDL2 윈도우/GL 컨텍스트 관리. `OnSdlEvent` 이벤트 |
-| `VeritySdl2Windowing` | irodori `IWindowing` 구현 |
-| `Shader2D` | GLSL 330 core 셰이더 (uProjection, uView, uModel, uTexture, uColor). 유닛 쿼드 VBO 포함 |
-| `Camera2D` | **Component**. `OrthographicSize`(world-unit half-height), `BackgroundColor`, `Zoom`. Owner가 있으면 Transform에서 위치/회전, 없으면 자체 Position/Rotation 사용 (에디터 독립 카메라 모드) |
-| `SpriteRenderer` | Component. Texture, Color, SortingLayerName, OrderInLayer, Pivot, FlipX/FlipY |
-| `RenderPipeline` | FBO 관리 + 씬 렌더링. SortingLayer → OrderInLayer → CustomSortAxis 3단계 정렬. `EnsureFbo()`, `RenderScene(scene, camera, fbo?)` |
-| `TextureManager` | StbImageSharp 기반 텍스처 로드/캐시. `Load(path)`, `CreateFromRgba()`, `CreateWhitePixel()` |
-| `SortingLayer` | static. 레이어 이름 기반 정렬 순서 관리. "Default" 레이어 기본 |
-
-### 렌더링 파이프라인
-
-```
-RenderScene(scene, camera, fbo):
-  1. Clear FBO with camera.BackgroundColor
-  2. Collect all SpriteRenderer from scene (재귀 트리 순회)
-  3. Sort: SortingLayer → OrderInLayer → CustomSortAxis (Y/X, asc/desc)
-  4. For each SpriteRenderer:
-     - Build model matrix (Transform world + Pivot + Flip)
-     - Set projection/view/model/texture/color uniforms
-     - Draw unit quad
-```
-
-### Projection Model
-
-```
-Projection = OrthographicOffCenter(-halfW, halfW, -halfH, halfH, -1, 1)
-  where halfH = OrthographicSize * Zoom
-        halfW = halfH * (viewportWidth / viewportHeight)
-
-View = Translation(-pos) * RotationZ(-rot)
-```
+**Methods:**
+| Name | Description |
+| :--- | :--- |
+| `SetParent(Transform parent, bool preserveWorldPosition)` | 부모를 변경합니다. `preserveWorldPosition`이 `true`이면 월드상 위치를 유지하기 위해 로컬 `Position`을 재계산합니다. |
 
 ---
 
-## Verity.Input — 입력
+## 2. Scripting API (`Verity.Core.ECS.Script`)
 
-| 클래스 | 역할 |
-|--------|------|
-| `Input` | static. 프레임 기반 키보드/마우스 폴링. `GetKey()`, `GetKeyDown()`, `GetKeyUp()`, `GetMouseButton()`, `MousePosition`, `MouseDelta`, `ScrollDelta` |
-| `KeyCode` | SDL 키코드 매핑 enum |
-| `MouseButton` | Left, Right, Middle enum |
+사용자가 게임 로직을 작성할 때 상속받는 기본 클래스입니다. `Component`를 상속받습니다.
 
-`BeginFrame()` → `ProcessEvent(SDL_Event)` → `EndFrame()` 순서로 매 프레임 호출.
+### Lifecycle Flow
+1. **Awake**: 스크립트가 생성된 직후 호출 (초기화)
+2. **Start**: 첫 번째 Update 실행 전 호출
+3. **FixedUpdate**: 고정된 시간 간격(0.016s)마다 호출 (물리 연산 등)
+4. **Update**: 매 프레임마다 호출 (게임 로직)
+5. **LateUpdate**: 모든 Update가 끝난 후 호출 (카메라 추적 등)
+6. **OnDestroy**: 삭제될 때 호출
 
----
-
-## Verity.Editor — 에디터
-
-### 핵심 클래스
-
-| 클래스 | 역할 |
-|--------|------|
-| `EditorApp` | 에디터 메인 루프. GraphicsDevice, ImGuiController, Shader2D, TextureManager, RenderPipeline, Camera2D(에디터 카메라) 소유. Play/Edit 모드 전환 |
-| `ImGuiController` | ImGui 초기화/프레임/셧다운. SDL2 + OpenGL3 백엔드 |
-| `EditorWindow` | 에디터 패널 추상 베이스. `Title`, `IsOpen`, `OnGui()` |
-| `EditorSelection` | static. `SelectedGameObject` |
-| `SceneSnapshot` | Play 모드 진입 시 씬 스냅샷 캡처, 종료 시 복원. SpriteRenderer, Camera2D, Script, Generic 각각의 Snapshot 클래스 |
-
-### 에디터 윈도우
-
-| 윈도우 | 역할 |
-|--------|------|
-| `SceneViewWindow` | FBO → ImGui::Image 렌더링. 카메라 팬(미들 드래그)/줌(스크롤). 클릭 선택(AABB), 드래그 이동, 그리드 스냅 |
-| `HierarchyWindow` | 씬 계층 트리뷰. 우클릭 → "Create Empty". 클릭 선택 |
-| `InspectorWindow` | 선택된 GameObject의 컴포넌트 편집. **리플렉션 기반 자동 드로잉**: Transform은 커스텀 드로어, 나머지는 `[SerializeField]`/public get+set 프로퍼티 자동 감지 후 타입별 ImGui 컨트롤 생성 |
-| `ConsoleWindow` | 로그 메시지 표시. `ConsoleWindow.Log()`, Clear 버튼 |
-
-### Inspector 직렬화 규칙
-
-- `[SerializeField]` → Inspector 노출
-- `[HideInInspector]` → Inspector 숨김
-- `[SerializeField]` 없는 public get+set 프로퍼티 → 지원 타입이면 자동 노출
-- private 필드 → `[SerializeField]` 있을 때만 노출
-- 지원 타입: `float`, `int`, `bool`, `string`, `Vector2`, `Vector3`, `Vector4`(ColorEdit4), `Enum`(Combo)
-- 제외: `Owner`, `Enabled`, `HasStarted`, static, indexer
-
-### DockSpace 레이아웃
-
-```
-┌──────────────┬──────────────────────┬───────────┐
-│  Hierarchy   │                      │ Inspector │
-│   (20%)      │      Scene View      │   (25%)   │
-│              │                      │           │
-├──────────────┴──────────────────────┴───────────┤
-│                    Console (25%)                 │
-└─────────────────────────────────────────────────┘
-```
-
-### Play/Edit 모드
-
-1. **▶ Play**: `SceneSnapshot.Capture()` → `Time.Reset()` → `GameLoop` 생성 → `IsPlaying = true`
-2. 매 프레임: `GameLoop.TickLogic(deltaTime)` 호출 (Script 라이프사이클 실행)
-3. **■ Stop**: `SceneSnapshot.Restore()` → 씬 원복 → `IsPlaying = false`
-
-### 에디터 진입점 (Program.cs)
-
+### Code Example
 ```csharp
-using var app = new EditorApp();
-app.AddWindow(new SceneViewWindow(app));
-app.AddWindow(new HierarchyWindow(app));
-app.AddWindow(new InspectorWindow());
-app.AddWindow(new ConsoleWindow());
-app.Run();
+using Verity.Core;
+using Verity.Core.ECS;
+using Verity.Input;
+using Verity.Graphics;
+
+public class PlayerController : Script
+{
+    // 인스펙터에 노출됨 (Inspector View)
+    public float moveSpeed = 5.0f;
+    public Color playerColor = Color.Red;
+
+    [SerializeField]
+    private float _hiddenTimer; // SerializeField로 인해 인스펙터에 노출됨
+
+    private SpriteRenderer _renderer;
+
+    public override void Start()
+    {
+        // 다른 컴포넌트 가져오기
+        _renderer = Owner.GetComponent<SpriteRenderer>();
+        if (_renderer != null)
+        {
+            _renderer.Color = playerColor;
+        }
+    }
+
+    public override void Update()
+    {
+        // 입력 처리
+        if (Input.GetKey(KeyCode.W))
+        {
+            Transform.Position += new System.Numerics.Vector2(0, 1) * moveSpeed * Time.DeltaTime;
+        }
+    }
+}
 ```
 
 ---
 
-## Key Design Decisions
+## 3. Core Data Types
 
-1. **단일 SDL2 윈도우**: 게임 뷰와 에디터 UI가 같은 GL 컨텍스트 공유. FBO로 씬을 오프스크린 렌더링 후 ImGui에 표시.
-2. **Camera2D dual-mode**: Component이지만 Owner 없이도 동작 (에디터 카메라용). Owner가 있으면 Transform에서 위치/회전을 읽음.
-3. **Orthographic projection**: 월드 단위(OrthographicSize = half-height in world units). Zoom은 OrthographicSize에 곱해져 projection에 반영.
-4. **리플렉션 기반 Inspector**: 하드코딩 없이 모든 Component 자동 지원. 새로운 컴포넌트 추가 시 `[SerializeField]` 어트리뷰트만 붙이면 Inspector 자동 노출.
-5. **Sprite 정렬**: SortingLayer(이름 기반) → OrderInLayer(int) → CustomSortAxis(Y/X, asc/desc) 3단계.
-6. **SceneSnapshot**: Play 모드 진입 시 값 타입 필드를 전부 캡처. GPU 리소스(Texture)는 참조만 유지.
+### 3.1. Color (`Verity.Core.Color`)
+RGBA 색상을 표현하는 구조체입니다. 값의 범위는 `0.0f` ~ `1.0f`입니다. `System.Numerics.Vector4` 및 `System.Drawing.Color`와 암시적 변환이 가능합니다.
+
+*   **기본값**: 초기화되지 않은 경우 `R=1, G=1, B=1, A=1` (White)로 처리됩니다.
+*   **Static Colors**: `White`, `Black`, `Red`, `Green`, `Blue`, `CornflowerBlue` 등 제공.
+
+### 3.2. Sprite (`Verity.Core.Sprite`)
+이미지 리소스의 경로를 래핑하는 구조체입니다. 인스펙터에서 이미지 파일을 드래그하여 할당할 수 있습니다.
+
+*   `Path` (string): 에셋 폴더 기준 상대 경로 (예: `Assets/Images/player.png`).
+
+### 3.3. Time (`Verity.Core.Engine.Time`)
+시간 관련 정적 클래스입니다.
+
+| Property | Description |
+| :--- | :--- |
+| `DeltaTime` | `float`. 지난 프레임부터 현재 프레임까지 걸린 시간(초)입니다. 이동 로직에 필수적입니다. |
+| `TimeScale` | `float`. 시간의 흐름 속도입니다. `0`이면 일시정지, `1`이면 정상 속도입니다. |
+| `TotalTime` | `float`. 게임 시작 후 경과된 누적 시간입니다. |
+
+---
+
+## 4. Graphics Components
+
+### 4.1. SpriteRenderer (`Verity.Graphics.SpriteRenderer`)
+엔티티 위치에 2D 이미지를 렌더링합니다.
+
+| Property | Type | Description |
+| :--- | :--- | :--- |
+| `Sprite` | `Sprite` | 렌더링할 이미지 파일입니다. 인스펙터에서 드래그 가능합니다. |
+| `Color` | `Color` | 텍스처에 곱해질 틴트(Tint) 색상입니다. 투명도 조절도 가능합니다. |
+| `FlipX` / `FlipY` | `bool` | 이미지를 가로/세로로 반전합니다. |
+| `Pivot` | `Vector2` | 회전 및 위치의 기준점입니다. `(0.5, 0.5)`가 중앙입니다. |
+| `SortingLayerName` | `string` | 렌더링 순서 레이어 이름입니다. |
+| `OrderInLayer` | `int` | 같은 레이어 내에서의 렌더링 우선순위입니다. 높을수록 나중에(앞에) 그려집니다. |
+
+### 4.2. Camera (`Verity.Graphics.Camera`)
+월드를 비추는 카메라입니다.
+
+| Property | Type | Description |
+| :--- | :--- | :--- |
+| `OrthographicSize` | `float` | 카메라가 비추는 영역의 세로 크기 절반입니다. (Zoom과 유사) |
+| `BackgroundColor` | `Color` | 아무것도 없는 영역을 채울 배경색입니다. |
+| `Zoom` | `float` | 추가적인 확대/축소 배율입니다. |
+
+---
+
+## 5. Input System (`Verity.Input.Input`)
+
+사용자의 키보드 및 마우스 입력을 처리하는 정적 클래스입니다.
+
+| Method | Description |
+| :--- | :--- |
+| `GetKey(KeyCode key)` | 해당 키를 누르고 있는 동안 `true`를 반환합니다. |
+| `GetKeyDown(KeyCode key)` | 해당 키를 누른 그 프레임에만 `true`를 반환합니다. |
+| `GetKeyUp(KeyCode key)` | 해당 키를 뗀 그 프레임에만 `true`를 반환합니다. |
+| `GetMouseButton(int button)` | 마우스 버튼(0:좌, 1:중, 2:우)을 누르고 있는지 확인합니다. |
+| `MousePosition` | `Vector2`. 화면상의 마우스 좌표를 반환합니다. |
+
+---
+
+## 6. Attributes (Inspector & Serialization)
+
+인스펙터의 표시 여부와 저장(직렬화) 동작을 제어하는 특성들입니다.
+
+| Attribute | Applies To | Description |
+| :--- | :--- | :--- |
+| `[SerializeField]` | `private` Field | 비공개 필드를 인스펙터에 노출하고 월드 파일에 저장되게 합니다. |
+| `[HideInInspector]` | `public` Field/Prop | 공개 멤버를 인스펙터에서 숨기고 저장하지 않습니다. |
+| `[AssetReference(ext)]` | `string` | 문자열 필드에 특정 확장자(예: `.png;.jpg`) 파일만 드래그 앤 드롭 되도록 제한합니다. |
+
+---
+
+## 7. World Management (`Verity.Core.Engine.WorldLoader`)
+
+씬(월드) 전환 및 로딩을 담당합니다.
+
+| Method | Description |
+| :--- | :--- |
+| `LoadWorld(string path)` | 파일 경로(`.verity`)를 통해 월드를 로드합니다. 에디터와 런타임 모두 사용합니다. |
+| `LoadWorldByName(string name)` | 스크립트에서 사용 권장. 다음 프레임에 해당 이름의 월드로 전환을 예약합니다. |
+
+---
+
+## 8. Editor Features
+
+### 8.1. Project Window (Asset Browser)
+*   **Create**: 빈 공간 우클릭 -> `Create` -> `Script`/`World`/`Folder`로 새 에셋을 생성합니다.
+*   **Rename**: 파일 우클릭 -> `Rename`. (단, 최상위 Assets 폴더는 수정 불가)
+*   **Show in Explorer**: 실제 파일 위치를 윈도우 탐색기에서 엽니다.
+*   **Drag & Drop**: 파일을 드래그하여 폴더 간 이동하거나, 인스펙터의 필드에 할당할 수 있습니다.
+
+### 8.2. Inspector Window
+*   **Auto-Serialization**: 스크립트의 `public` 변수는 자동으로 UI에 표시됩니다.
+*   **Picker**: 컴포넌트나 스프라이트 필드 옆의 `o` 버튼을 눌러 프로젝트 내의 리소스를 검색하고 할당할 수 있습니다.
+*   **Color Picker**: `Color` 타입은 투명도(Alpha) 조절이 가능한 전용 피커를 제공합니다.
+
+### 8.3. Build Settings
+*   게임에 포함될 월드 목록을 관리합니다.
+*   **Start World**: 목록 중 녹색으로 표시된 월드가 게임 시작 시 가장 먼저 로드됩니다.
+*   **Add Active World**: 현재 편집 중인 월드를 빌드 목록에 추가합니다.
+
+### 8.4. Build & Publish
+*   **Menu**: `Build` -> `Publish (Single EXE)`
+*   **Process**: 현재 프로젝트의 에셋과 코드를 엔진 코어와 결합하여 단일 실행 파일(`.exe`)로 추출합니다. 빌드 중에는 화면에 진행 상황 오버레이가 표시됩니다.
