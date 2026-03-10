@@ -12,17 +12,24 @@ Verity Engine은 C# 기반의 Entity-Component-System (ECS) 아키텍처를 따�
 **Properties:**
 | Name | Type | Description |
 | :--- | :--- | :--- |
+| `Id` | `Guid` | 엔티티의 고유 식별자입니다. Undo/Redo 및 직렬화 시 엔티티를 정확히 추적하는 데 사용됩니다. |
 | `Name` | `string` | 엔티티의 이름입니다. 에디터의 Hierarchy 창에 표시됩니다. |
 | `Active` | `bool` | 엔티티의 활성화 상태입니다. `false`일 경우 해당 엔티티와 모든 컴포넌트의 업데이트가 중지됩니다. |
-| `Transform` | `Transform` | 엔티티의 위치, 회전, 크기를 담당하는 필수 컴포넌트입니다. 모든 엔티티는 생성 시 `Transform`을 가집니다. |
+| `Transform` | `Transform` | 엔티티의 위치, 회전, 크기를 담당하는 필수 컴포넌트입니다. |
 
-**Methods:**
-| Name | Description |
-| :--- | :--- |
-| `AddComponent<T>()` | 새로운 컴포넌트 `T`를 추가하고 반환합니다. |
-| `GetComponent<T>()` | 해당 타입의 컴포넌트가 있다면 반환하고, 없으면 `null`을 반환합니다. |
-| `RemoveComponent(Component)` | 특정 컴포넌트 인스턴스를 제거합니다. (`Transform`은 제거 불가) |
-| `GetAllComponents()` | 엔티티에 부착된 모든 컴포넌트 리스트를 반환합니다. |
+**Code Example:**
+```csharp
+// 엔티티 생성 및 컴포넌트 추가 예시
+Entity player = WorldManager.ActiveWorld.CreateEntity("Player");
+player.Transform.Position = new Vector2(0, 0);
+
+// 컴포넌트 추가
+var renderer = player.AddComponent<SpriteRenderer>();
+renderer.Sprite = "Assets/Textures/Player.png";
+
+// 컴포넌트 가져오기
+var foundRenderer = player.GetComponent<SpriteRenderer>();
+```
 
 ---
 
@@ -36,10 +43,11 @@ Verity Engine은 C# 기반의 Entity-Component-System (ECS) 아키텍처를 따�
 | `Transform` | `Transform` | `Owner.Transform`에 대한 단축 접근 프로퍼티입니다. |
 | `Enabled` | `bool` | 컴포넌트의 활성화 상태입니다. |
 
-**Lifecycle Methods (Override these):**
+**Lifecycle Methods:**
 | Name | Description |
 | :--- | :--- |
-| `OnDestroy()` | 컴포넌트가 제거되거나 엔티티가 파괴될 때 호출됩니다. 리소스 정리 등에 사용합니다. |
+| `OnEnable()` / `OnDisable()` | 컴포넌트가 활성화되거나 비활성화될 때 호출됩니다. |
+| `OnDestroy()` | 컴포넌트가 제거되거나 엔티티가 파괴될 때 호출됩니다. |
 
 ---
 
@@ -49,18 +57,10 @@ Verity Engine은 C# 기반의 Entity-Component-System (ECS) 아키텍처를 따�
 **Properties:**
 | Name | Type | Description |
 | :--- | :--- | :--- |
-| `Position` | `Vector2` | 부모를 기준으로 한 로컬 위치입니다. |
-| `Rotation` | `float` | 부모를 기준으로 한 로컬 회전값(도, Degree)입니다. |
-| `Scale` | `Vector2` | 부모를 기준으로 한 로컬 크기입니다. 기본값은 `(1, 1)`입니다. |
-| `WorldPosition` | `Vector2` | (Read-only) 월드 공간에서의 절대 위치입니다. |
-| `WorldRotation` | `float` | (Read-only) 월드 공간에서의 절대 회전값입니다. |
-| `Parent` | `Transform?` | 부모 트랜스폼입니다. 변경 시 자식은 부모의 변환을 따라갑니다. 순환 참조(Cycle) 시 오류가 발생합니다. |
-| `Children` | `List<Transform>` | (Read-only) 현재 트랜스폼을 부모로 둔 자식들의 리스트입니다. |
-
-**Methods:**
-| Name | Description |
-| :--- | :--- |
-| `SetParent(Transform parent, bool preserveWorldPosition)` | 부모를 변경합니다. `preserveWorldPosition`이 `true`이면 월드상 위치를 유지하기 위해 로컬 `Position`을 재계산합니다. |
+| `Position` / `Rotation` / `Scale` | `Vector2` / `float` / `Vector2` | 부모를 기준으로 한 로컬 변환 값입니다. |
+| `WorldPosition` / `WorldRotation` | `Vector2` / `float` | 월드 공간에서의 절대 변환 값입니다. (Read-only) |
+| `Parent` | `Transform?` | 부모 트랜스폼입니다. |
+| `Children` | `IReadOnlyList<Transform>` | 자식 트랜스폼 리스트입니다. |
 
 ---
 
@@ -68,51 +68,34 @@ Verity Engine은 C# 기반의 Entity-Component-System (ECS) 아키텍처를 따�
 
 사용자가 게임 로직을 작성할 때 상속받는 기본 클래스입니다. `Component`를 상속받습니다.
 
-### Lifecycle Flow
-Verity uses a Unity-style lifecycle system. You do **not** need to use `override` for lifecycle methods; simply defining a method with the correct name (even if private) is enough.
+### Lifecycle Flow & Examples
+Verity의 로직 실행 단위는 **Tick**입니다.
 
-1. **Awake**: 스크립트가 생성된 직후 호출 (초기화)
-2. **Start**: 첫 번째 Update 실행 전 호출
-3. **FixedUpdate**: 고정된 시간 간격(0.016s)마다 호출 (물리 연산 등)
-4. **Update**: 매 프레임마다 호출 (게임 로직)
-5. **LateUpdate**: 모든 Update가 끝난 후 호출 (카메라 추적 등)
-6. **OnDestroy**: 삭제될 때 호출
+1. **Awake**: 스크립트 생성 시 호출.
+2. **Start**: 첫 번째 `Update` Tick 실행 전 호출.
+3. **FixedUpdate**: 물리 Tick(`PhysicsTickCount`) 마다 호출. 고정 시간 간격(`Time.FixedDeltaTime`).
+4. **Update**: 로직 Tick(`LogicTickCount`) 마다 호출. 매 프레임의 핵심 게임 로직.
+5. **LateUpdate**: 모든 `Update`가 끝난 후 호출. 카메라 추적 등에 사용.
 
-### Code Example
+**Code Example:**
 ```csharp
-using Verity.Core;
-using Verity.Core.ECS;
-using Verity.Input;
-using Verity.Graphics;
-
 public class PlayerController : Script
 {
-    // 인스펙터에 노출됨 (Inspector View)
-    public float moveSpeed = 5.0f;
-    public Color playerColor = Color.Red;
+    public float Speed = 5f;
 
-    [SerializeField]
-    private float _hiddenTimer; // SerializeField로 인해 인스펙터에 노출됨
-
-    private SpriteRenderer _renderer;
-
-    void Start()
+    public void Update()
     {
-        // 다른 컴포넌트 가져오기
-        _renderer = Owner.GetComponent<SpriteRenderer>();
-        if (_renderer != null)
-        {
-            _renderer.Color = playerColor;
-        }
+        // 매 Logic Tick마다 실행
+        Vector2 move = Vector2.Zero;
+        if (Input.GetKey(KeyCode.W)) move.Y += 1;
+        if (Input.GetKey(KeyCode.S)) move.Y -= 1;
+        
+        Transform.Position += move * Speed * Time.DeltaTime;
     }
 
-    void Update()
+    public void FixedUpdate()
     {
-        // 입력 처리
-        if (Input.GetKey(KeyCode.W))
-        {
-            Transform.Position += new System.Numerics.Vector2(0, 1) * moveSpeed * Time.DeltaTime;
-        }
+        // 매 Physics Tick마다 실행 (일정한 시간 간격)
     }
 }
 ```
@@ -121,108 +104,76 @@ public class PlayerController : Script
 
 ## 3. Core Data Types
 
-### 3.1. Color (`Verity.Core.Color`)
-RGBA 색상을 표현하는 구조체입니다. 값의 범위는 `0.0f` ~ `1.0f`입니다. `System.Numerics.Vector4` 및 `System.Drawing.Color`와 암시적 변환이 가능합니다.
-
-*   **기본값**: 초기화되지 않은 경우 `R=1, G=1, B=1, A=1` (White)로 처리됩니다.
-*   **Static Colors**: `White`, `Black`, `Red`, `Green`, `Blue`, `CornflowerBlue` 등 제공.
-
-### 3.2. Sprite (`Verity.Core.Sprite`)
-이미지 리소스의 경로를 래핑하는 구조체입니다. 인스펙터에서 이미지 파일을 드래그하여 할당할 수 있습니다.
-
-*   `Path` (string): 에셋 폴더 기준 상대 경로 (예: `Assets/Images/player.png`).
-
-### 3.3. Time (`Verity.Core.Engine.Time`)
-시간 관련 정적 클래스입니다.
+### 3.1. Time (`Verity.Core.Engine.Time`)
+시간 및 실행 횟수 관련 정적 클래스입니다.
 
 | Property | Description |
 | :--- | :--- |
-| `DeltaTime` | `float`. 지난 프레임부터 현재 프레임까지 걸린 시간(초)입니다. 이동 로직에 필수적입니다. |
-| `TimeScale` | `float`. 시간의 흐름 속도입니다. `0`이면 일시정지, `1`이면 정상 속도입니다. |
-| `TotalTime` | `float`. 게임 시작 후 경과된 누적 시간입니다. |
+| `DeltaTime` | 지난 Tick부터 현재 Tick까지 걸린 시간(초)입니다. |
+| `FixedDeltaTime` | 고정 업데이트 간격입니다. (`FixedUpdate` 실행 주기) |
+| `FrameCount` | 화면에 렌더링된 총 프레임 수입니다. |
+| `LogicTickCount` | **`Update`가 실행된 총 횟수**입니다. |
+| `PhysicsTickCount` | **`FixedUpdate`가 실행된 총 횟수**입니다. |
 
 ---
 
-## 4. Graphics Components
+## 4. Graphics & Camera
 
-### 4.1. SpriteRenderer (`Verity.Graphics.SpriteRenderer`)
-엔티티 위치에 2D 이미지를 렌더링합니다.
+### 4.1. Camera (`Verity.Graphics.Camera`)
+월드를 비추는 카메라입니다. 모든 월드에는 최소 하나 이상의 활성화된 카메라가 필요합니다.
 
-| Property | Type | Description |
+**Properties & Methods:**
+| Name | Type | Description |
 | :--- | :--- | :--- |
-| `Sprite` | `Sprite` | 렌더링할 이미지 파일입니다. 인스펙터에서 드래그 가능합니다. |
-| `Color` | `Color` | 텍스처에 곱해질 틴트(Tint) 색상입니다. 투명도 조절도 가능합니다. |
-| `FlipX` / `FlipY` | `bool` | 이미지를 가로/세로로 반전합니다. |
-| `Pivot` | `Vector2` | 회전 및 위치의 기준점입니다. `(0.5, 0.5)`가 중앙입니다. |
-| `SortingLayerName` | `string` | 렌더링 순서 레이어 이름입니다. |
-| `OrderInLayer` | `int` | 같은 레이어 내에서의 렌더링 우선순위입니다. 높을수록 나중에(앞에) 그려집니다. |
+| `Main` | `Camera?` | (Static) **현재 활성화된 월드의 메인 카메라**를 자동으로 찾아 반환합니다. |
+| `Zoom` | `float` | 카메라 확대/축소 배율입니다. |
+| `FixedAspectRatio` | `bool` | 고정 화면 비율(레터박스) 사용 여부입니다. `true`일 경우 창 크기에 상관없이 지정된 비율을 유지합니다. |
+| `AspectWidth` / `Height` | `float` | 고정할 화면 비율의 가로/세로 값입니다. (예: 16, 9) |
+| `LetterboxColor` | `Color` | 화면 비율 유지 시 발생하는 빈 공간(레터박스)의 색상입니다. |
+| `SetViewportSize(w, h)` | `Method` | 카메라가 렌더링할 영역의 크기를 설정합니다. |
 
-### 4.2. Camera (`Verity.Graphics.Camera`)
-월드를 비추는 카메라입니다.
+**Code Example:**
+```csharp
+// 어디서든 메인 카메라에 접근
+var cam = Camera.Main;
+if (cam != null)
+{
+    // 16:9 고정 비율 및 검은색 레터박스 설정
+    cam.FixedAspectRatio = true;
+    cam.AspectWidth = 16;
+    cam.AspectHeight = 9;
+    cam.LetterboxColor = Color.Black;
 
-| Property | Type | Description |
-| :--- | :--- | :--- |
-| `OrthographicSize` | `float` | 카메라가 비추는 영역의 세로 크기 절반입니다. (Zoom과 유사) |
-| `BackgroundColor` | `Color` | 아무것도 없는 영역을 채울 배경색입니다. |
-| `Zoom` | `float` | 추가적인 확대/축소 배율입니다. |
-
----
-
-## 5. Input System (`Verity.Input.Input`)
-
-사용자의 키보드 및 마우스 입력을 처리하는 정적 클래스입니다.
-
-| Method | Description |
-| :--- | :--- |
-| `GetKey(KeyCode key)` | 해당 키를 누르고 있는 동안 `true`를 반환합니다. |
-| `GetKeyDown(KeyCode key)` | 해당 키를 누른 그 프레임에만 `true`를 반환합니다. |
-| `GetKeyUp(KeyCode key)` | 해당 키를 뗀 그 프레임에만 `true`를 반환합니다. |
-| `GetMouseButton(int button)` | 마우스 버튼(0:좌, 1:중, 2:우)을 누르고 있는지 확인합니다. |
-| `MousePosition` | `Vector2`. 화면상의 마우스 좌표를 반환합니다. |
+    // 마우스 위치를 월드 좌표로 변환
+    Vector2 mouseWorldPos = cam.ScreenToWorld(Input.MousePosition);
+}
+```
 
 ---
 
-## 6. Attributes (Inspector & Serialization)
+## 5. Editor Features
 
-인스펙터의 표시 여부와 저장(직렬화) 동작을 제어하는 특성들입니다.
+### 5.1. Profiler Window (기본 비활성)
+엔진의 성능을 실시간으로 모니터링합니다.
+*   **FPS**: 초당 렌더링 프레임 수.
+*   **TPS (Actual)**: 초당 실제 **Logic Tick(`Update`)** 발생 횟수.
+*   **PTPS (Actual)**: 초당 실제 **Physics Tick(`FixedUpdate`)** 발생 횟수.
 
-| Attribute | Applies To | Description |
-| :--- | :--- | :--- |
-| `[SerializeField]` | `private` Field | 비공개 필드를 인스펙터에 노출하고 월드 파일에 저장되게 합니다. |
-| `[HideInInspector]` | `public` Field/Prop | 공개 멤버를 인스펙터에서 숨기고 저장하지 않습니다. |
-| `[AssetReference(ext)]` | `string` | 문자열 필드에 특정 확장자(예: `.png;.jpg`) 파일만 드래그 앤 드롭 되도록 제한합니다. |
+### 5.2. Undo/Redo System
+트랜잭션 기반으로 상태를 기록합니다. `Guid`를 통해 엔티티를 식별하므로, Undo 후에도 선택 상태나 참조가 정확히 유지됩니다.
+*   **Undo**: `Ctrl + Z`
+*   **Redo**: `Ctrl + Y` 또는 `Ctrl + Shift + Z`
 
----
-
-## 7. World Management (`Verity.Core.Engine.WorldLoader`)
-
-씬(월드) 전환 및 로딩을 담당합니다.
-
-| Method | Description |
-| :--- | :--- |
-| `LoadWorld(string path)` | 파일 경로(`.verity`)를 통해 월드를 로드합니다. 에디터와 런타임 모두 사용합니다. |
-| `LoadWorldByName(string name)` | 스크립트에서 사용 권장. 다음 프레임에 해당 이름의 월드로 전환을 예약합니다. |
+### 5.3. Shortcuts
+*   `F`: Hierarchy나 WorldView에서 선택된 엔티티로 카메라 포커스.
+*   `F2`: 선택된 엔티티/에셋 이름 변경.
+*   `Ctrl + N`: 빈 엔티티 생성 또는 새 폴더 생성.
+*   `W / E / R`: 이동 / 스케일 / 회전 기즈모 도구 전환.
 
 ---
 
-## 8. Editor Features
+## 6. Branding & Customization
 
-### 8.1. Project Window (Asset Browser)
-*   **Create**: 빈 공간 우클릭 -> `Create` -> `Script`/`World`/`Folder`로 새 에셋을 생성합니다.
-*   **Rename**: 파일 우클릭 -> `Rename`. (단, 최상위 Assets 폴더는 수정 불가)
-*   **Show in Explorer**: 실제 파일 위치를 윈도우 탐색기에서 엽니다.
-*   **Drag & Drop**: 파일을 드래그하여 폴더 간 이동하거나, 인스펙터의 필드에 할당할 수 있습니다.
-
-### 8.2. Inspector Window
-*   **Auto-Serialization**: 스크립트의 `public` 변수는 자동으로 UI에 표시됩니다.
-*   **Picker**: 컴포넌트나 스프라이트 필드 옆의 `o` 버튼을 눌러 프로젝트 내의 리소스를 검색하고 할당할 수 있습니다.
-*   **Color Picker**: `Color` 타입은 투명도(Alpha) 조절이 가능한 전용 피커를 제공합니다.
-
-### 8.3. Build Settings
-*   게임에 포함될 월드 목록을 관리합니다.
-*   **Start World**: 목록 중 녹색으로 표시된 월드가 게임 시작 시 가장 먼저 로드됩니다.
-*   **Add Active World**: 현재 편집 중인 월드를 빌드 목록에 추가합니다.
-
-### 8.4. Build & Publish
-*   **Menu**: `Build` -> `Publish (Single EXE)`
-*   **Process**: 현재 프로젝트의 에셋과 코드를 엔진 코어와 결합하여 단일 실행 파일(`.exe`)로 추출합니다. 빌드 중에는 화면에 진행 상황 오버레이가 표시됩니다.
+### 6.1. Editor & Build Logo
+*   **에디터 로고**: `EditorResources/EditorLogo.png` 파일이 런처와 창 아이콘에 적용됩니다.
+*   **빌드본 로고**: `BuildSettings.json`의 `LogoPath`에 지정된 파일이 스플래시 스크린과 게임 아이콘으로 사용됩니다.

@@ -31,8 +31,8 @@
               "A": 1
             },
             "Zoom": 1,
-            "FixedAspectRatio": false,
-            "AspectWidth": 16,
+            "FixedAspectRatio": true,
+            "AspectWidth": 12.7,
             "AspectHeight": 9,
             "ScalingMode": "ConstantArea"
           }
