@@ -73,4 +73,11 @@ public enum KeyCode
     RightCtrl = SDL2.SDL.SDL_Scancode.SDL_SCANCODE_RCTRL,
     LeftAlt = SDL2.SDL.SDL_Scancode.SDL_SCANCODE_LALT,
     RightAlt = SDL2.SDL.SDL_Scancode.SDL_SCANCODE_RALT,
-}
+
+    // Mouse Buttons (Unified)
+    MouseLeft = 1001,
+    MouseRight = 1002,
+    MouseMiddle = 1003,
+    MouseX1 = 1004,
+    MouseX2 = 1005,
+    }

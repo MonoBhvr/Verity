@@ -73,38 +73,83 @@ Verity의 로직 실행 단위는 **Tick**입니다.
 
 1. **Awake**: 스크립트 생성 시 호출.
 2. **Start**: 첫 번째 `Update` Tick 실행 전 호출.
-3. **FixedUpdate**: 물리 Tick(`PhysicsTickCount`) 마다 호출. 고정 시간 간격(`Time.FixedDeltaTime`).
-4. **Update**: 로직 Tick(`LogicTickCount`) 마다 호출. 매 프레임의 핵심 게임 로직.
+3. **FixedUpdate**: 물리 Tick마다 호출. 고정 시간 간격(`Time.FixedDeltaTime`).
+4. **Update**: 로직 Tick마다 호출. 매 프레임의 핵심 게임 로직.
 5. **LateUpdate**: 모든 `Update`가 끝난 후 호출. 카메라 추적 등에 사용.
 
-**Code Example:**
+---
+
+## 3. Filter System (`Verity.Input.Filter`)
+
+Verity Engine은 복잡한 조건 비교 로직을 데이터화하여 관리할 수 있는 **Filter** 시스템을 제공합니다. 이는 코드 하드코딩을 줄이고 에디터에서 게임 규칙을 동적으로 제어하기 위한 핵심 기능입니다.
+
+### 3.1. 개념 (Concept)
+필터는 **"여러 개의 Enum 값을 하나의 논리적 그룹으로 묶는 것"**입니다. 이를 통해 "이 아이템이 장착 가능한가?", "이 진영이 적인가?"와 같은 질문에 대해 데이터 기반으로 응답할 수 있습니다. 모든 필터 데이터는 `Assets/Filters.json`에 저장됩니다.
+
+### 3.2. Filter 종류
+*   **Filter (단일 타입)**: 하나의 Enum 타입 내에서 복수의 값을 비교합니다. (예: `KeyCode` 중 조작키들)
+*   **Mixed-Filter (혼합 타입)**: 서로 다른 여러 Enum 타입의 값들을 한꺼번에 담을 수 있습니다. (예: `KeyCode` + `MouseButton` + `GamepadButton`)
+
+**Properties:**
+| Name | Type | Description |
+| :--- | :--- | :--- |
+| `Name` | `string` | 필터의 고유 식별 이름입니다. |
+| `Mode` | `FilterMode` | `Whitelist`(포함 시 True) 또는 `Blacklist`(제외 시 True)를 결정합니다. |
+| `Check(value)` | `Method` | 특정 Enum 값이 필터 조건에 맞는지 검사합니다. |
+
+**Generic Example:**
 ```csharp
-public class PlayerController : Script
-{
-    public float Speed = 5f;
+// 에디터에서 "RedTeamOnly" 필터(Whitelist)를 만들고 Faction.Red, Faction.Blue를 추가했을 때
+public Filter accessFilter; 
 
-    public void Update()
-    {
-        // 매 Logic Tick마다 실행
-        Vector2 move = Vector2.Zero;
-        if (Input.GetKey(KeyCode.W)) move.Y += 1;
-        if (Input.GetKey(KeyCode.S)) move.Y -= 1;
-        
-        Transform.Position += move * Speed * Time.DeltaTime;
-    }
-
-    public void FixedUpdate()
-    {
-        // 매 Physics Tick마다 실행 (일정한 시간 간격)
+void OnEnterPortal(Faction visitor) {
+    if (accessFilter.Check(visitor)) {
+        OpenPortal(); // Red, Blue 진영만 통과
     }
 }
 ```
 
 ---
 
-## 3. Core Data Types
+## 4. Input System (`Verity.Input.Input`)
 
-### 3.1. Time (`Verity.Core.Engine.Time`)
+입력 시스템은 키보드와 마우스 입력을 처리하며, 위에서 설명한 **Filter System**을 활용하여 **'Action Binding'**을 구현합니다.
+
+### 4.1. Unified Input
+Verity에서는 마우스 버튼이 `KeyCode`로 통합되어 있습니다. 따라서 키보드 키와 마우스 버튼을 구분 없이 하나의 API로 처리할 수 있습니다.
+*   `KeyCode.MouseLeft`, `KeyCode.MouseRight`, `KeyCode.MouseMiddle` 등
+
+### 4.2. Action Mapping (Filter 활용)
+특정 동작(예: "Jump")에 대해 여러 키를 바인딩하고 싶을 때 필터를 사용합니다. 에디터에서 "Jump"라는 이름의 필터를 만들고 여러 키를 등록하면, 코드에서는 이름 하나로 모든 입력을 감지합니다.
+
+**Methods:**
+| Name | Description |
+| :--- | :--- |
+| `GetKey(name / key)` | 입력이 유지되는 동안 `true`. |
+| `GetKeyDown(name / key)` | 입력을 시작한 순간 한 번 `true`. |
+| `GetKeyUp(name / key)` | 입력을 뗀 순간 한 번 `true`. |
+
+**Input Example:**
+```csharp
+// 1. 직접적인 키 체크
+if (Input.GetKeyDown(KeyCode.Space)) Jump();
+
+// 2. 필터 이름을 이용한 액션 체크 (권장)
+// "Attack" 필터에 [LeftCtrl, MouseLeft]가 있다면 둘 중 무엇을 눌러도 작동
+if (Input.GetKeyDown("Attack")) DoAttack();
+
+// 3. 인스펙터에 노출된 필터 변수 사용
+public Filter interactFilter;
+void Update() {
+    if (Input.GetKeyDown(interactFilter)) Interact();
+}
+```
+
+---
+
+## 5. Core Data Types
+
+### 5.1. Time (`Verity.Core.Engine.Time`)
 시간 및 실행 횟수 관련 정적 클래스입니다.
 
 | Property | Description |
@@ -112,68 +157,40 @@ public class PlayerController : Script
 | `DeltaTime` | 지난 Tick부터 현재 Tick까지 걸린 시간(초)입니다. |
 | `FixedDeltaTime` | 고정 업데이트 간격입니다. (`FixedUpdate` 실행 주기) |
 | `FrameCount` | 화면에 렌더링된 총 프레임 수입니다. |
-| `LogicTickCount` | **`Update`가 실행된 총 횟수**입니다. |
-| `PhysicsTickCount` | **`FixedUpdate`가 실행된 총 횟수**입니다. |
+| `LogicTickCount` | `Update`가 실행된 총 횟수입니다. |
 
 ---
 
-## 4. Graphics & Camera
+## 6. Graphics & Camera
 
-### 4.1. Camera (`Verity.Graphics.Camera`)
+### 6.1. Camera (`Verity.Graphics.Camera`)
 월드를 비추는 카메라입니다. 모든 월드에는 최소 하나 이상의 활성화된 카메라가 필요합니다.
 
 **Properties & Methods:**
 | Name | Type | Description |
 | :--- | :--- | :--- |
-| `Main` | `Camera?` | (Static) **현재 활성화된 월드의 메인 카메라**를 자동으로 찾아 반환합니다. |
+| `Main` | `Camera?` | (Static) 현재 활성화된 월드의 메인 카메라를 반환합니다. |
 | `Zoom` | `float` | 카메라 확대/축소 배율입니다. |
-| `FixedAspectRatio` | `bool` | 고정 화면 비율(레터박스) 사용 여부입니다. `true`일 경우 창 크기에 상관없이 지정된 비율을 유지합니다. |
-| `AspectWidth` / `Height` | `float` | 고정할 화면 비율의 가로/세로 값입니다. (예: 16, 9) |
-| `LetterboxColor` | `Color` | 화면 비율 유지 시 발생하는 빈 공간(레터박스)의 색상입니다. |
-| `SetViewportSize(w, h)` | `Method` | 카메라가 렌더링할 영역의 크기를 설정합니다. |
-
-**Code Example:**
-```csharp
-// 어디서든 메인 카메라에 접근
-var cam = Camera.Main;
-if (cam != null)
-{
-    // 16:9 고정 비율 및 검은색 레터박스 설정
-    cam.FixedAspectRatio = true;
-    cam.AspectWidth = 16;
-    cam.AspectHeight = 9;
-    cam.LetterboxColor = Color.Black;
-
-    // 마우스 위치를 월드 좌표로 변환
-    Vector2 mouseWorldPos = cam.ScreenToWorld(Input.MousePosition);
-}
-```
+| `FixedAspectRatio` | `bool` | 고정 화면 비율(레터박스) 사용 여부입니다. |
+| `AspectWidth / Height`| `float` | 고정할 화면 비율의 가로/세로 값입니다. |
 
 ---
 
-## 5. Editor Features
+## 7. Editor Features
 
-### 5.1. Profiler Window (기본 비활성)
-엔진의 성능을 실시간으로 모니터링합니다.
-*   **FPS**: 초당 렌더링 프레임 수.
-*   **TPS (Actual)**: 초당 실제 **Logic Tick(`Update`)** 발생 횟수.
-*   **PTPS (Actual)**: 초당 실제 **Physics Tick(`FixedUpdate`)** 발생 횟수.
+### 7.1. Filter Editor Window
+**Window > Filter Editor** 메뉴를 통해 프로젝트에서 사용할 모든 필터를 관리할 수 있습니다. 여기서 생성한 필터는 즉시 인스펙터와 `Input` API에서 사용할 수 있습니다.
 
-### 5.2. Undo/Redo System
-트랜잭션 기반으로 상태를 기록합니다. `Guid`를 통해 엔티티를 식별하므로, Undo 후에도 선택 상태나 참조가 정확히 유지됩니다.
-*   **Undo**: `Ctrl + Z`
-*   **Redo**: `Ctrl + Y` 또는 `Ctrl + Shift + Z`
-
-### 5.3. Shortcuts
-*   `F`: Hierarchy나 WorldView에서 선택된 엔티티로 카메라 포커스.
+### 7.2. Shortcuts
+*   `F`: 선택된 엔티티로 카메라 포커스.
 *   `F2`: 선택된 엔티티/에셋 이름 변경.
 *   `Ctrl + N`: 빈 엔티티 생성 또는 새 폴더 생성.
-*   `W / E / R`: 이동 / 스케일 / 회전 기즈모 도구 전환.
+*   `W / E / R`: 이동 / 스케일 / 회전 도구 전환.
 
 ---
 
-## 6. Branding & Customization
+## 8. Branding & Customization
 
-### 6.1. Editor & Build Logo
+### 8.1. Editor & Build Logo
 *   **에디터 로고**: `EditorResources/EditorLogo.png` 파일이 런처와 창 아이콘에 적용됩니다.
-*   **빌드본 로고**: `BuildSettings.json`의 `LogoPath`에 지정된 파일이 스플래시 스크린과 게임 아이콘으로 사용됩니다.
+*   **빌드본 로고**: `BuildSettings.json`의 `LogoPath`에 지정된 파일이 사용됩니다.

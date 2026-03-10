@@ -104,9 +104,81 @@ public static class Input
         }
     }
 
+    public static bool GetKey(string filterName) => GetKey(Filter.Get(filterName));
+    public static bool GetKeyDown(string filterName) => GetKeyDown(Filter.Get(filterName));
+    public static bool GetKeyUp(string filterName) => GetKeyUp(Filter.Get(filterName));
+
     public static bool GetMouseButton(MouseButton button) => _enabled && _buttonsDown.Contains(button);
     public static bool GetMouseButtonDown(MouseButton button) => _enabled && _mousePressedThisTick.Contains(button);
     public static bool GetMouseButtonUp(MouseButton button) => _enabled && _mouseReleasedThisTick.Contains(button);
+
+    public static bool GetMouseButton(Filter? filter)
+    {
+        if (filter == null || !_enabled) return false;
+        if (filter.Mode == FilterMode.Whitelist)
+        {
+            foreach (var btn in filter.GetValues<MouseButton>())
+                if (GetMouseButton(btn)) return true;
+            return false;
+        }
+        else
+        {
+            foreach (var btn in _buttonsDown)
+                if (!filter.Check(btn)) return true;
+            return false;
+        }
+    }
+
+    public static bool GetMouseButtonDown(Filter? filter)
+    {
+        if (filter == null || !_enabled) return false;
+        if (filter.Mode == FilterMode.Whitelist)
+        {
+            foreach (var btn in filter.GetValues<MouseButton>())
+                if (GetMouseButtonDown(btn)) return true;
+            return false;
+        }
+        else
+        {
+            foreach (var btn in _mousePressedThisTick)
+                if (!filter.Check(btn)) return true;
+            return false;
+        }
+    }
+
+    public static bool GetMouseButtonUp(Filter? filter)
+    {
+        if (filter == null || !_enabled) return false;
+        if (filter.Mode == FilterMode.Whitelist)
+        {
+            foreach (var btn in filter.GetValues<MouseButton>())
+                if (GetMouseButtonUp(btn)) return true;
+            return false;
+        }
+        else
+        {
+            foreach (var btn in _mouseReleasedThisTick)
+                if (!filter.Check(btn)) return true;
+            return false;
+        }
+    }
+
+    public static bool GetMouseButton(string filterName) => GetMouseButton(Filter.Get(filterName));
+    public static bool GetMouseButtonDown(string filterName) => GetMouseButtonDown(Filter.Get(filterName));
+    public static bool GetMouseButtonUp(string filterName) => GetMouseButtonUp(Filter.Get(filterName));
+
+    private static KeyCode MapMouseButtonToKeyCode(MouseButton button)
+    {
+        return button switch
+        {
+            MouseButton.Left => KeyCode.MouseLeft,
+            MouseButton.Right => KeyCode.MouseRight,
+            MouseButton.Middle => KeyCode.MouseMiddle,
+            MouseButton.X1 => KeyCode.MouseX1,
+            MouseButton.X2 => KeyCode.MouseX2,
+            _ => KeyCode.Unknown
+        };
+    }
 
     /// <summary>
     /// 로직 틱(Update) 시작 시 호출되어 버퍼의 내용을 현재 틱의 상태로 확정합니다.
@@ -164,12 +236,20 @@ public static class Input
             {
                 var button = (MouseButton)evt.button.button;
                 if (_buttonsDown.Add(button)) _mousePressedBuffer.Add(button);
+                
+                // Map to unified KeyCode
+                var key = MapMouseButtonToKeyCode(button);
+                if (_keysDown.Add(key)) _pressedBuffer.Add(key);
                 break;
             }
             case SDL.SDL_EventType.SDL_MOUSEBUTTONUP:
             {
                 var button = (MouseButton)evt.button.button;
                 if (_buttonsDown.Remove(button)) _mouseReleasedBuffer.Add(button);
+                
+                // Map to unified KeyCode
+                var key = MapMouseButtonToKeyCode(button);
+                if (_keysDown.Remove(key)) _releasedBuffer.Add(key);
                 break;
             }
             case SDL.SDL_EventType.SDL_MOUSEWHEEL:

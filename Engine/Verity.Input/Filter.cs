@@ -2,17 +2,34 @@ using System.Text.Json.Serialization;
 
 namespace Verity.Input;
 
+public class FilterValue
+{
+    public string TypeName { get; set; } = string.Empty;
+    public string Value { get; set; } = string.Empty;
+
+    public FilterValue() { }
+    public FilterValue(Type type, string value)
+    {
+        TypeName = type.AssemblyQualifiedName ?? type.FullName ?? type.Name;
+        Value = value;
+    }
+}
+
 public class Filter
 {
     public string Name { get; set; } = string.Empty;
+    
+    // For single-type filters (legacy/simple support)
     public string EnumTypeName { get; set; } = string.Empty;
     public List<string> Values { get; set; } = new();
+    
+    // For mixed-type filters
+    public List<FilterValue> MixedValues { get; set; } = new();
+    
     public FilterMode Mode { get; set; } = FilterMode.Whitelist;
 
     [JsonIgnore]
-    private Type? _cachedType;
-    [JsonIgnore]
-    private HashSet<object>? _cachedValues;
+    protected Dictionary<Type, HashSet<object>> _cachedValues = new();
 
     public const FilterMode WhiteList = FilterMode.Whitelist;
     public const FilterMode BlackList = FilterMode.Blacklist;
@@ -34,77 +51,102 @@ public class Filter
         UpdateCache();
     }
 
-    public bool Check<T>(T value) where T : struct, Enum
+    public virtual bool Check<T>(T value) where T : struct, Enum
     {
-        if (_cachedValues == null) UpdateCache();
-        bool contains = _cachedValues!.Contains(value);
-        return Mode == FilterMode.Whitelist ? contains : !contains;
-    }
-
-    /// <summary>
-    /// For input checking: iterates and checks against the provided function.
-    /// If Whitelist, returns true if any value matches.
-    /// If Blacklist, returns true if any value NOT in the list matches.
-    /// </summary>
-    public bool Any(Func<object, bool> checkFunc)
-    {
-        if (_cachedValues == null) UpdateCache();
+        if (_cachedValues.Count == 0) UpdateCache();
         
-        if (Mode == FilterMode.Whitelist)
+        if (_cachedValues.TryGetValue(typeof(T), out var set))
         {
-            foreach (var val in _cachedValues!)
-                if (checkFunc(val)) return true;
-            return false;
+            bool contains = set.Contains(value);
+            return Mode == FilterMode.Whitelist ? contains : !contains;
         }
-        else
-        {
-            // For Blacklist, this is tricky. We need the "universe" of possible values?
-            // Usually, for input, this means "Check if ANY key is pressed that isn't in this list".
-            // But we don't have a list of "all pressed keys" easily accessible in a generic way?
-            // Actually, Input.AnyKeyDown gives us a key.
-            // Let's defer this to the Input specific implementation.
-            return false;
-        }
+        
+        // If the type isn't in our filter at all:
+        // Whitelist -> definitely false
+        // Blacklist -> true (it's NOT in the blacklist)
+        return Mode == FilterMode.Blacklist;
     }
 
-    public IEnumerable<T> GetValues<T>() where T : struct, Enum
+    public virtual IEnumerable<T> GetValues<T>() where T : struct, Enum
     {
-        if (_cachedValues == null) UpdateCache();
-        foreach (var val in _cachedValues!)
+        if (_cachedValues.Count == 0) UpdateCache();
+        if (_cachedValues.TryGetValue(typeof(T), out var set))
         {
-            if (val is T tVal) yield return tVal;
+            foreach (var val in set)
+                if (val is T tVal) yield return tVal;
         }
     }
 
     public void UpdateCache()
     {
-        if (string.IsNullOrEmpty(EnumTypeName)) return;
+        _cachedValues.Clear();
 
-        if (_cachedType == null)
+        // 1. Process single-type values
+        if (!string.IsNullOrEmpty(EnumTypeName))
         {
-            _cachedType = Type.GetType(EnumTypeName);
-            if (_cachedType == null)
+            var type = ResolveType(EnumTypeName);
+            if (type != null && type.IsEnum)
             {
-                foreach (var asm in AppDomain.CurrentDomain.GetAssemblies())
+                var set = GetOrCreateSet(type);
+                foreach (var v in Values)
                 {
-                    _cachedType = asm.GetType(EnumTypeName) ?? asm.GetType(EnumTypeName.Split(',')[0]);
-                    if (_cachedType != null) break;
+                    try { set.Add(Enum.Parse(type, v)); } catch { }
                 }
             }
         }
 
-        _cachedValues = new HashSet<object>();
-        if (_cachedType != null)
+        // 2. Process mixed-type values
+        foreach (var mv in MixedValues)
         {
-            foreach (var valStr in Values)
+            var type = ResolveType(mv.TypeName);
+            if (type != null && type.IsEnum)
             {
-                try
-                {
-                    var val = Enum.Parse(_cachedType, valStr);
-                    _cachedValues.Add(val);
-                }
-                catch { }
+                var set = GetOrCreateSet(type);
+                try { set.Add(Enum.Parse(type, mv.Value)); } catch { }
             }
         }
+    }
+
+    protected HashSet<object> GetOrCreateSet(Type t)
+    {
+        if (!_cachedValues.TryGetValue(t, out var set))
+        {
+            set = new HashSet<object>();
+            _cachedValues[t] = set;
+        }
+        return set;
+    }
+
+    protected Type? ResolveType(string typeName)
+    {
+        var type = Type.GetType(typeName);
+        if (type != null) return type;
+
+        foreach (var asm in AppDomain.CurrentDomain.GetAssemblies())
+        {
+            type = asm.GetType(typeName) ?? asm.GetType(typeName.Split(',')[0]);
+            if (type != null) return type;
+        }
+        return null;
+    }
+}
+
+/// <summary>
+/// A specialized Filter that is explicitly designed to hold multiple Enum types.
+/// Inherits from Filter to maintain same usage pattern.
+/// </summary>
+public class MixedFilter : Filter
+{
+    public MixedFilter() : base() { }
+    public MixedFilter(string name, FilterMode mode) : base()
+    {
+        Name = name;
+        Mode = mode;
+    }
+
+    public void AddValue<T>(T value) where T : struct, Enum
+    {
+        MixedValues.Add(new FilterValue(typeof(T), value.ToString()!));
+        UpdateCache();
     }
 }
