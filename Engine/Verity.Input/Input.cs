@@ -53,6 +53,57 @@ public static class Input
     public static bool GetKeyDown(KeyCode key) => _enabled && _pressedThisTick.Contains(key);
     public static bool GetKeyUp(KeyCode key) => _enabled && _releasedThisTick.Contains(key);
 
+    public static bool GetKey(Filter? filter)
+    {
+        if (filter == null || !_enabled) return false;
+        if (filter.Mode == FilterMode.Whitelist)
+        {
+            foreach (var key in filter.GetValues<KeyCode>())
+                if (GetKey(key)) return true;
+            return false;
+        }
+        else
+        {
+            foreach (var key in _keysDown)
+                if (!filter.Check(key)) return true;
+            return false;
+        }
+    }
+
+    public static bool GetKeyDown(Filter? filter)
+    {
+        if (filter == null || !_enabled) return false;
+        if (filter.Mode == FilterMode.Whitelist)
+        {
+            foreach (var key in filter.GetValues<KeyCode>())
+                if (GetKeyDown(key)) return true;
+            return false;
+        }
+        else
+        {
+            foreach (var key in _pressedThisTick)
+                if (!filter.Check(key)) return true;
+            return false;
+        }
+    }
+
+    public static bool GetKeyUp(Filter? filter)
+    {
+        if (filter == null || !_enabled) return false;
+        if (filter.Mode == FilterMode.Whitelist)
+        {
+            foreach (var key in filter.GetValues<KeyCode>())
+                if (GetKeyUp(key)) return true;
+            return false;
+        }
+        else
+        {
+            foreach (var key in _releasedThisTick)
+                if (!filter.Check(key)) return true;
+            return false;
+        }
+    }
+
     public static bool GetMouseButton(MouseButton button) => _enabled && _buttonsDown.Contains(button);
     public static bool GetMouseButtonDown(MouseButton button) => _enabled && _mousePressedThisTick.Contains(button);
     public static bool GetMouseButtonUp(MouseButton button) => _enabled && _mouseReleasedThisTick.Contains(button);

@@ -126,6 +126,9 @@ public class EditorApp : IDisposable
         Directory.CreateDirectory(ProjectPath!);
         Directory.CreateDirectory(AssetsPath!);
         
+        Verity.Input.FilterManager.SavePath = Path.Combine(AssetsPath!, "Filters.json");
+        Verity.Input.FilterManager.Load();
+
         LoadProjectSettings();
         LoadBuildSettings();
 

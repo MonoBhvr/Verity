@@ -7,6 +7,7 @@ using Verity.Core;
 using Verity.Core.ECS;
 using Verity.Core.World;
 using Verity.Graphics;
+using Verity.Input;
 
 namespace Verity.Editor.Windows;
 
@@ -312,6 +313,7 @@ public unsafe class InspectorWindow : EditorWindow
     private void ProcessMember(string name, Type type, object? value, Action<object?> onUpdate, MemberInfo member)
     {
         if (type == typeof(Sprite)) DrawSpriteField(name, (Sprite?)value ?? default, onUpdate);
+        else if (type == typeof(Filter)) DrawFilterField(name, (Filter?)value, onUpdate);
         else if (member.GetCustomAttribute<AssetReferenceAttribute>() != null && type == typeof(string)) DrawAssetReferenceField(name, (string?)value, member.GetCustomAttribute<AssetReferenceAttribute>()!.Extension, onUpdate);
         else if (typeof(Component).IsAssignableFrom(type)) DrawComponentReferenceField(name, (Component?)value, type, onUpdate);
         else {
@@ -327,6 +329,47 @@ public unsafe class InspectorWindow : EditorWindow
                 DrawField(name, value, onUpdate);
             }
         }
+    }
+
+    private void DrawFilterField(string name, Filter? current, Action<object?> onUpdate)
+    {
+        ImGui.PushID(name);
+        ImGui.Columns(2);
+        ImGui.SetColumnWidth(0, 100);
+        ImGui.Text(name);
+        ImGui.NextColumn();
+
+        string display = current == null ? "None (Filter)" : $"{current.Name}";
+        if (ImGui.Button($"{display}##box", new Vector2(-25, 0))) { /* Focus filter editor? */ }
+
+        ImGui.SameLine();
+        if (ImGui.Button("o##picker", new Vector2(20, 0))) ImGui.OpenPopup("FilterPicker");
+
+        if (ImGui.BeginPopup("FilterPicker"))
+        {
+            if (ImGui.MenuItem("None")) { onUpdate(null); ImGui.CloseCurrentPopup(); }
+            ImGui.Separator();
+            
+            foreach (var filter in FilterManager.GetAllFilters())
+            {
+                if (ImGui.MenuItem(filter.Name))
+                {
+                    onUpdate(filter);
+                    ImGui.CloseCurrentPopup();
+                }
+            }
+            
+            ImGui.Separator();
+            if (ImGui.MenuItem("+ Create New Filter..."))
+            {
+                _app.GetWindow<FilterEditorWindow>()!.IsOpen = true;
+                ImGui.CloseCurrentPopup();
+            }
+            ImGui.EndPopup();
+        }
+
+        ImGui.Columns(1);
+        ImGui.PopID();
     }
 
     private void DrawField(string name, object? value, Action<object?> onUpdate)
