@@ -115,6 +115,11 @@ public class VeritySdl2Window : Window
         SDL.SDL_SetWindowSize(_sdlWindow, w, h);
     }
 
+    public void SetTitle(string title)
+    {
+        SDL.SDL_SetWindowTitle(_sdlWindow, title);
+    }
+
     public unsafe void SetIcon(byte[] rgbaPixels, int width, int height)
     {
         fixed (byte* ptr = rgbaPixels)

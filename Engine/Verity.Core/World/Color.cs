@@ -21,6 +21,8 @@ public struct Color
         _initialized = true;
     }
 
+    public static Color FromRgba(int r, int g, int b, int a = 255) => new(r / 255f, g / 255f, b / 255f, a / 255f);
+
     public static Color White => new(1, 1, 1, 1);
     public static Color Black => new(0, 0, 0, 1);
     public static Color Red => new(1, 0, 0, 1);

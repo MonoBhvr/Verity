@@ -1,3 +1,5 @@
+using System;
+using System.Collections.Generic;
 using System.Text.Json.Serialization;
 
 namespace Verity.Input;
@@ -29,7 +31,10 @@ public class Filter
     public FilterMode Mode { get; set; } = FilterMode.Whitelist;
 
     [JsonIgnore]
-    protected Dictionary<Type, HashSet<object>> _cachedValues = new();
+    protected ulong _mask = 0;
+
+    [JsonIgnore]
+    public ulong Mask => _mask;
 
     public const FilterMode WhiteList = FilterMode.Whitelist;
     public const FilterMode BlackList = FilterMode.Blacklist;
@@ -51,46 +56,38 @@ public class Filter
         UpdateCache();
     }
 
+    /// <summary>
+    /// 비트마스크를 사용하여 초고속으로 필터링을 수행합니다.
+    /// </summary>
     public virtual bool Check<T>(T value) where T : struct, Enum
     {
-        if (_cachedValues.Count == 0) UpdateCache();
+        ulong valueMask = FilterRegistry.GetMask(value);
+        bool hasBit = (_mask & valueMask) != 0;
         
-        if (_cachedValues.TryGetValue(typeof(T), out var set))
-        {
-            bool contains = set.Contains(value);
-            return Mode == FilterMode.Whitelist ? contains : !contains;
-        }
-        
-        // If the type isn't in our filter at all:
-        // Whitelist -> definitely false
-        // Blacklist -> true (it's NOT in the blacklist)
-        return Mode == FilterMode.Blacklist;
+        return Mode == FilterMode.Whitelist ? hasBit : !hasBit;
     }
 
     public virtual IEnumerable<T> GetValues<T>() where T : struct, Enum
     {
-        if (_cachedValues.Count == 0) UpdateCache();
-        if (_cachedValues.TryGetValue(typeof(T), out var set))
-        {
-            foreach (var val in set)
-                if (val is T tVal) yield return tVal;
-        }
+        // Whitelist인 경우 마스크된 값만 반환
+        // Blacklist인 경우 모든 값에서 마스크된 값을 제외하고 반환해야 하지만, 
+        // 일반적으로 GetValues는 등록된 화이트리스트 목록을 확인하는 용도로 쓰이므로 마스크된 값 위주로 반환합니다.
+        return FilterRegistry.GetValuesFromMask<T>(_mask);
     }
 
     public void UpdateCache()
     {
-        _cachedValues.Clear();
+        _mask = 0;
 
         // 1. Process single-type values
         if (!string.IsNullOrEmpty(EnumTypeName))
         {
-            var type = ResolveType(EnumTypeName);
+            var type = FilterManager.ResolveTypeInternal(EnumTypeName);
             if (type != null && type.IsEnum)
             {
-                var set = GetOrCreateSet(type);
                 foreach (var v in Values)
                 {
-                    try { set.Add(Enum.Parse(type, v)); } catch { }
+                    _mask |= FilterRegistry.GetMask(type, v);
                 }
             }
         }
@@ -98,43 +95,15 @@ public class Filter
         // 2. Process mixed-type values
         foreach (var mv in MixedValues)
         {
-            var type = ResolveType(mv.TypeName);
+            var type = FilterManager.ResolveTypeInternal(mv.TypeName);
             if (type != null && type.IsEnum)
             {
-                var set = GetOrCreateSet(type);
-                try { set.Add(Enum.Parse(type, mv.Value)); } catch { }
+                _mask |= FilterRegistry.GetMask(type, mv.Value);
             }
         }
     }
-
-    protected HashSet<object> GetOrCreateSet(Type t)
-    {
-        if (!_cachedValues.TryGetValue(t, out var set))
-        {
-            set = new HashSet<object>();
-            _cachedValues[t] = set;
-        }
-        return set;
-    }
-
-    protected Type? ResolveType(string typeName)
-    {
-        var type = Type.GetType(typeName);
-        if (type != null) return type;
-
-        foreach (var asm in AppDomain.CurrentDomain.GetAssemblies())
-        {
-            type = asm.GetType(typeName) ?? asm.GetType(typeName.Split(',')[0]);
-            if (type != null) return type;
-        }
-        return null;
-    }
 }
 
-/// <summary>
-/// A specialized Filter that is explicitly designed to hold multiple Enum types.
-/// Inherits from Filter to maintain same usage pattern.
-/// </summary>
 public class MixedFilter : Filter
 {
     public MixedFilter() : base() { }

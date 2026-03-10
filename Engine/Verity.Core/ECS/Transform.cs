@@ -112,4 +112,13 @@ public sealed class Transform : Component
             return Rotation + _parent.WorldRotation;
         }
     }
+
+    public Vector2 WorldScale
+    {
+        get
+        {
+            if (_parent == null) return Scale;
+            return Scale * _parent.WorldScale;
+        }
+    }
 }

@@ -18,6 +18,7 @@ public static class FilterManager
     public static void Register(Filter filter)
     {
         if (!_loaded) Load();
+        filter.UpdateCache(); // Ensure mask is updated
         _filters[filter.Name] = filter;
         Save();
     }
@@ -91,5 +92,18 @@ public static class FilterManager
         {
             Console.WriteLine($"[FilterManager] Error loading filters: {ex.Message}");
         }
+    }
+
+    public static Type? ResolveTypeInternal(string typeName)
+    {
+        var type = Type.GetType(typeName);
+        if (type != null) return type;
+
+        foreach (var asm in AppDomain.CurrentDomain.GetAssemblies())
+        {
+            type = asm.GetType(typeName) ?? asm.GetType(typeName.Split(',')[0]);
+            if (type != null) return type;
+        }
+        return null;
     }
 }

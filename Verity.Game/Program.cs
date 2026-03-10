@@ -139,6 +139,7 @@ internal class Program
             }
             
             device.SwapBuffers();
+            Verity.Core.Debug.ClearDrawCommands();
         }
         
         renderPipeline.Dispose();

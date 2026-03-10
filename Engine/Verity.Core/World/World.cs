@@ -9,6 +9,14 @@ public class World
     public int CustomTPS { get; set; } = 60;
     public int CustomPTPS { get; set; } = 50;
 
+    // Custom Physics Settings
+    public System.Numerics.Vector2 CustomGravity { get; set; } = new(0, -9.81f);
+    public float CustomFriction { get; set; } = 0.5f;
+    public float CustomBounciness { get; set; } = 0.0f;
+    public float CustomLinearDamping { get; set; } = 0.1f;
+    public float CustomAngularDamping { get; set; } = 0.1f;
+    public float CustomPhysicsThreshold { get; set; } = 0.05f;
+
     private readonly List<Entity> _entities = [];
     private readonly List<Entity> _pendingDestroy = [];
 

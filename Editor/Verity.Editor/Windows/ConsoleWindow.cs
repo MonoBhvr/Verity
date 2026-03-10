@@ -13,6 +13,8 @@ public class ConsoleWindow : EditorWindow
     }
 
     private static readonly List<LogEntry> _entries = [];
+    private static readonly HashSet<int> _selectedIndices = [];
+    private static int _dragStartIndex = -1;
 
     public ConsoleWindow() : base("Console") { }
 
@@ -28,31 +30,132 @@ public class ConsoleWindow : EditorWindow
     public static void Clear()
     {
         _entries.Clear();
+        _selectedIndices.Clear();
+        _dragStartIndex = -1;
     }
 
     public override void OnGui()
     {
         if (ImGui.Button("Clear"))
             Clear();
+        ImGui.SameLine();
+        if (ImGui.Button("Copy All"))
+        {
+            var all = string.Join("\n", _entries.Select(e => e.Message));
+            ImGui.SetClipboardText(all);
+        }
+        if (_selectedIndices.Count > 0)
+        {
+            ImGui.SameLine();
+            if (ImGui.Button($"Copy Selected ({_selectedIndices.Count})"))
+            {
+                CopySelectedToClipboard();
+            }
+
+            if (ImGui.IsWindowFocused() && ImGui.GetIO().KeyCtrl && ImGui.IsKeyPressed(ImGuiKey.C))
+            {
+                CopySelectedToClipboard();
+            }
+        }
 
         ImGui.Separator();
 
-        ImGui.BeginChild("ConsoleScrollRegion");
-        foreach (var entry in _entries)
+        if (ImGui.BeginChild("ConsoleScrollRegion"))
         {
-            var color = entry.Level switch
+            float lineHeight = ImGui.GetTextLineHeightWithSpacing();
+            for (int i = 0; i < _entries.Count; i++)
             {
-                LogLevel.Warning => new Vector4(1f, 0.9f, 0.3f, 1f),
-                LogLevel.Error => new Vector4(1f, 0.3f, 0.3f, 1f),
-                _ => new Vector4(0.8f, 0.8f, 0.8f, 1f)
-            };
-            ImGui.PushStyleColor(ImGuiCol.Text, color);
-            ImGui.TextWrapped(entry.Message);
-            ImGui.PopStyleColor();
-        }
+                var entry = _entries[i];
+                var color = entry.Level switch
+                {
+                    LogLevel.Warning => new Vector4(1f, 0.9f, 0.3f, 1f),
+                    LogLevel.Error => new Vector4(1f, 0.3f, 0.3f, 1f),
+                    _ => new Vector4(0.8f, 0.8f, 0.8f, 1f)
+                };
 
-        if (_entries.Count > 0)
-            ImGui.SetScrollHereY(1.0f);
+                ImGui.PushID(i);
+                bool isSelected = _selectedIndices.Contains(i);
+
+                if (ImGui.Selectable($"##log_{i}", isSelected, ImGuiSelectableFlags.AllowOverlap, new Vector2(0, lineHeight)))
+                {
+                    if (!ImGui.GetIO().KeyCtrl && !ImGui.GetIO().KeyShift)
+                    {
+                        _selectedIndices.Clear();
+                        _selectedIndices.Add(i);
+                    }
+                    else if (ImGui.GetIO().KeyCtrl)
+                    {
+                        if (isSelected) _selectedIndices.Remove(i);
+                        else _selectedIndices.Add(i);
+                    }
+                    else if (ImGui.GetIO().KeyShift && _selectedIndices.Count > 0)
+                    {
+                        int min = _selectedIndices.Min();
+                        int max = _selectedIndices.Max();
+                        // If current index is above the existing selection, expand from min
+                        // If below, expand from max. Or just use the first selected index.
+                        // Standard behavior: expand from the "anchor" (the first clicked item).
+                        // Since we don't track anchor specifically, we use min/max.
+                        int start = Math.Min(i, min);
+                        int end = Math.Max(i, max);
+                        _selectedIndices.Clear();
+                        for (int j = start; j <= end; j++) _selectedIndices.Add(j);
+                    }
+                }
+
+                // Drag Selection Logic
+                if (ImGui.IsItemActive() && ImGui.IsMouseDragging(ImGuiMouseButton.Left))
+                {
+                    if (_dragStartIndex == -1) _dragStartIndex = i;
+                    
+                    int currentIndex = i;
+                    int start = Math.Min(_dragStartIndex, currentIndex);
+                    int end = Math.Max(_dragStartIndex, currentIndex);
+
+                    if (!ImGui.GetIO().KeyCtrl) _selectedIndices.Clear();
+                    for (int j = start; j <= end; j++) _selectedIndices.Add(j);
+                }
+
+                ImGui.SameLine(0, 4);
+                ImGui.TextColored(color, entry.Message);
+
+                if (ImGui.BeginPopupContextItem($"context_{i}"))
+                {
+                    if (ImGui.MenuItem("Copy Message"))
+                        ImGui.SetClipboardText(entry.Message);
+                    
+                    if (_selectedIndices.Count > 1 && ImGui.MenuItem("Copy All Selected"))
+                    {
+                        CopySelectedToClipboard();
+                    }
+
+                    if (ImGui.MenuItem("Clear Console"))
+                        Clear();
+                    
+                    ImGui.EndPopup();
+                }
+                ImGui.PopID();
+            }
+
+            if (ImGui.IsMouseReleased(ImGuiMouseButton.Left))
+            {
+                _dragStartIndex = -1;
+            }
+
+            if (ImGui.IsWindowFocused() && ImGui.IsWindowHovered() && ImGui.IsMouseClicked(ImGuiMouseButton.Left) && !ImGui.GetIO().KeyCtrl && !ImGui.GetIO().KeyShift)
+            {
+                if (!ImGui.IsAnyItemHovered()) _selectedIndices.Clear();
+            }
+
+            if (_entries.Count > 0 && ImGui.GetScrollY() >= ImGui.GetScrollMaxY())
+                ImGui.SetScrollHereY(1.0f);
+        }
         ImGui.EndChild();
+    }
+
+    private void CopySelectedToClipboard()
+    {
+        var selected = _entries.Where((e, idx) => _selectedIndices.Contains(idx)).Select(e => e.Message);
+        ImGui.SetClipboardText(string.Join("\n", selected));
     }
 }

@@ -204,6 +204,10 @@ public class ProjectWindow : EditorWindow
 
     public void LoadWorldByPath(string path) {
         if (!File.Exists(path)) return;
+        
+        // Ensure we exit play mode before switching worlds
+        if (_app.IsPlaying) _app.ExitPlayMode();
+
         var w = WorldManager.CreateOrReplaceWorld(Path.GetFileNameWithoutExtension(path));
         SceneSerializer.Deserialize(w, File.ReadAllText(path), _app.ScriptCompiler?.CompiledAssembly);
 
@@ -222,7 +226,18 @@ public class ProjectWindow : EditorWindow
     }
 
     public void CreateWorldInProject() => OpenCreatePopup(_app.AssetsPath!, CreationType.World);
-    public void SaveActiveWorldAsAsset() { if (WorldManager.ActiveWorld == null || _app.AssetsPath == null) return; var p = Path.Combine(_app.AssetsPath, $"{WorldManager.ActiveWorld.Name}.verity"); File.WriteAllText(p, SceneSerializer.Serialize(WorldManager.ActiveWorld)); }
+    public void SaveActiveWorldAsAsset() 
+    { 
+        if (_app.IsPlaying)
+        {
+            _app.ShowOverlayMessage("Cannot save world during Play Mode!", 3.0f);
+            return;
+        }
+        if (WorldManager.ActiveWorld == null || _app.AssetsPath == null) return; 
+        var p = Path.Combine(_app.AssetsPath, $"{WorldManager.ActiveWorld.Name}.verity"); 
+        File.WriteAllText(p, SceneSerializer.Serialize(WorldManager.ActiveWorld)); 
+        _app.ShowOverlayMessage($"World saved: {WorldManager.ActiveWorld.Name}");
+    }
 
     public void BuildAndRun() { /* Removed per user request */ }
 

@@ -2,12 +2,17 @@ using System.Collections;
 using System.Drawing;
 using System.Numerics;
 using System.Reflection;
+using System.Linq;
+using System.IO;
 using Hexa.NET.ImGui;
 using Verity.Core;
 using Verity.Core.ECS;
 using Verity.Core.World;
 using Verity.Graphics;
 using Verity.Input;
+using Verity.Editor;
+using Irodori.Backend.OpenGL;
+using Verity.Core.Physics;
 
 namespace Verity.Editor.Windows;
 
@@ -15,6 +20,15 @@ public unsafe class InspectorWindow : EditorWindow
 {
     private readonly EditorApp _app;
     private string _searchFilter = "";
+
+    // Filter Editor State
+    private string _newFilterName = "NewFilter";
+    private string _newEnumTypeName = "Verity.Input.KeyCode, Verity.Input";
+    private FilterMode _newFilterMode = FilterMode.Whitelist;
+    private bool _createAsMixed = true;
+    private Filter? _selectedFilter;
+    private string _editValueBuffer = "";
+    private string _editValueTypeBuffer = "Verity.Input.KeyCode, Verity.Input";
 
     public InspectorWindow(EditorApp app) : base("Inspector") { _app = app; }
 
@@ -65,7 +79,9 @@ public unsafe class InspectorWindow : EditorWindow
             {
                 if (ImGui.MenuItem(type.Name))
                 {
+                    _app.BeginUndoAction();
                     entity.AddComponent(type);
+                    _app.EndUndoAction();
                     ImGui.CloseCurrentPopup();
                 }
             }
@@ -84,11 +100,19 @@ public unsafe class InspectorWindow : EditorWindow
 
         if (fileName == "ProjectSettings.json")
         {
-            DrawProjectSettingsInspector();
+            ImGui.Text("Global Project Configuration");
+            ImGui.Separator();
+            DrawGenericInspector(_app.ProjectSettings, () => _app.SaveProjectSettings());
         }
         else if (fileName == "BuildSettings.json")
         {
-            DrawBuildSettingsInspector();
+            ImGui.Text("Build Configuration");
+            ImGui.Separator();
+            DrawGenericInspector(_app.BuildSettings, () => _app.SaveBuildSettings());
+        }
+        else if (fileName == "Filters.json")
+        {
+            FilterEditorWindow.DrawFilterEditor(ref _selectedFilter, ref _newFilterName, ref _newEnumTypeName, ref _newFilterMode, ref _createAsMixed, ref _editValueBuffer, ref _editValueTypeBuffer);
         }
         else if (extension == ".cs")
         {
@@ -109,71 +133,8 @@ public unsafe class InspectorWindow : EditorWindow
         }
     }
 
-    private void DrawProjectSettingsInspector()
-    {
-        var settings = _app.ProjectSettings;
-        ImGui.Text("Global Project Configuration");
-        ImGui.Separator();
-        ImGui.Dummy(new Vector2(0, 5));
-
-        int tps = settings.TargetTPS;
-        if (ImGui.DragInt("Target TPS", ref tps, 1, 1, 1000)) {
-            settings.TargetTPS = tps;
-            _app.SaveProjectSettings();
-        }
-
-        int ptps = settings.TargetPTPS;
-        if (ImGui.DragInt("Physics TPS", ref ptps, 1, 1, 1000)) {
-            settings.TargetPTPS = ptps;
-            _app.SaveProjectSettings();
-        }
-
-        float fsize = settings.EditorFontSize;
-        if (ImGui.DragFloat("Editor Font Size", ref fsize, 0.5f, 8f, 72f)) {
-            settings.EditorFontSize = fsize;
-            _app.SaveProjectSettings();
-        }
-        ImGui.TextDisabled("(Requires restart to apply font size changes)");
-
-        if (ImGui.Button("Save Project Settings", new Vector2(-1, 30))) {
-            _app.SaveProjectSettings();
-        }
-    }
-
-    private void DrawBuildSettingsInspector()
-    {
-        var settings = _app.BuildSettings;
-        ImGui.Text("Build Configuration");
-        ImGui.Separator();
-        ImGui.Dummy(new Vector2(0, 5));
-
-        string bLogo = settings.LogoPath ?? "";
-        if (ImGui.InputText("Build Logo Path", ref bLogo, 256)) {
-            settings.LogoPath = bLogo;
-            _app.SaveBuildSettings();
-        }
-        ImGui.TextDisabled("(Rel. to Assets folder, e.g. Logo.png)");
-
-        ImGui.Separator();
-        ImGui.Text("Worlds in Build (Read Only):");
-        if (ImGui.BeginChild("BuildWorldsList", new Vector2(0, 150), ImGuiChildFlags.Borders))
-        {
-            for (int i = 0; i < settings.Worlds.Count; i++)
-            {
-                bool isStart = settings.StartWorldIndex == i;
-                if (isStart) ImGui.TextColored(new Vector4(0.4f, 1.0f, 0.4f, 1.0f), $"* [{i}] {settings.Worlds[i]}");
-                else ImGui.Text($"  [{i}] {settings.Worlds[i]}");
-            }
-        }
-        ImGui.EndChild();
-
-        ImGui.TextDisabled("Use 'Build Settings' window to edit this list.");
-    }
-
     private void DrawWorldSettingsInspector(string path)
     {
-        // To edit a world without loading it as the active world, we'd need to deserialize it temporarily.
-        // For simplicity, if it's the active world, we edit live. If not, we show a button to load it.
         var world = WorldManager.ActiveWorld;
         bool isActive = world != null && string.Equals(world.Name, Path.GetFileNameWithoutExtension(path), StringComparison.OrdinalIgnoreCase);
 
@@ -181,19 +142,9 @@ public unsafe class InspectorWindow : EditorWindow
         {
             ImGui.Text("Active World Settings");
             ImGui.Separator();
+            DrawGenericInspector(world);
             
-            bool custom = world.UseCustomSettings;
-            if (ImGui.Checkbox("Use Custom Settings", ref custom)) world.UseCustomSettings = custom;
-
-            if (custom)
-            {
-                int wtps = world.CustomTPS;
-                if (ImGui.DragInt("TPS Override", ref wtps, 1, 1, 1000)) world.CustomTPS = wtps;
-
-                int wptps = world.CustomPTPS;
-                if (ImGui.DragInt("Physics TPS Override", ref wptps, 1, 1, 1000)) world.CustomPTPS = wptps;
-            }
-            
+            ImGui.Dummy(new Vector2(0, 10));
             if (ImGui.Button("Save World", new Vector2(-1, 30))) {
                 _app.GetWindow<ProjectWindow>()?.SaveActiveWorldAsAsset();
             }
@@ -222,7 +173,7 @@ public unsafe class InspectorWindow : EditorWindow
     private void DrawImagePreview(string path)
     {
         var tex = _app.TextureManager.Load(path);
-        if (tex is Irodori.Backend.OpenGL.OpenGlTexture glTex)
+        if (tex is OpenGlTexture glTex)
         {
             float width = glTex.Width;
             float height = glTex.Height;
@@ -233,7 +184,8 @@ public unsafe class InspectorWindow : EditorWindow
             Vector2 displaySize = new Vector2(width * scale, height * scale);
 
             unsafe {
-                var texRef = new ImTextureRef(null, new ImTextureID((nint)glTex.Id));
+                ImTextureID id = new((nint)glTex.Id);
+                var texRef = new ImTextureRef(null, id);
                 ImGui.Image(texRef, displaySize, new Vector2(0, 1), new Vector2(1, 0));
             }
         }
@@ -254,7 +206,9 @@ public unsafe class InspectorWindow : EditorWindow
         {
             if (type != typeof(Transform) && ImGui.MenuItem("Remove Component"))
             {
+                _app.BeginUndoAction();
                 entity.RemoveComponent(component);
+                _app.EndUndoAction();
                 ImGui.EndPopup();
                 ImGui.PopID();
                 return;
@@ -265,6 +219,20 @@ public unsafe class InspectorWindow : EditorWindow
         if (open)
         {
             ImGui.Indent();
+            
+            // Add "Edit Collider" button for PolygonShape
+            if (component is PolygonShape poly)
+            {
+                bool isEditing = EditorSelection.IsEditingCollider && EditorSelection.SelectedEntity == entity;
+                if (isEditing) ImGui.PushStyleColor(ImGuiCol.Button, new Vector4(0.3f, 0.6f, 1.0f, 1.0f));
+                if (ImGui.Button(isEditing ? "Exit Edit Collider" : "Edit Collider", new Vector2(-1, 25)))
+                {
+                    EditorSelection.IsEditingCollider = !isEditing;
+                }
+                if (isEditing) ImGui.PopStyleColor();
+                ImGui.TextDisabled("Hold Ctrl to Remove vertex, Click edge to Add vertex.");
+            }
+
             DrawComponentFields(component);
             ImGui.Unindent();
         }
@@ -274,7 +242,12 @@ public unsafe class InspectorWindow : EditorWindow
 
     private void DrawComponentFields(Component component)
     {
-        var type = component.GetType();
+        DrawGenericInspector(component);
+    }
+
+    private void DrawGenericInspector(object target, Action? onUpdate = null)
+    {
+        var type = target.GetType();
         var fields = type.GetFields(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
         var props = type.GetProperties(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance)
                         .Where(p => p.CanRead && p.CanWrite && p.GetIndexParameters().Length == 0);
@@ -282,14 +255,14 @@ public unsafe class InspectorWindow : EditorWindow
         foreach (var field in fields)
         {
             if (ShouldShowMember(field))
-                ProcessMember(field.Name, field.FieldType, field.GetValue(component), val => field.SetValue(component, val), field);
+                ProcessMember(field.Name, field.FieldType, field.GetValue(target), val => { field.SetValue(target, val); onUpdate?.Invoke(); }, field);
         }
 
         foreach (var prop in props)
         {
             if (prop.DeclaringType == typeof(Component)) continue;
             if (ShouldShowMember(prop))
-                ProcessMember(prop.Name, prop.PropertyType, prop.GetValue(component), val => prop.SetValue(component, val), prop);
+                ProcessMember(prop.Name, prop.PropertyType, prop.GetValue(target), val => { prop.SetValue(target, val); onUpdate?.Invoke(); }, prop);
         }
     }
 
@@ -297,13 +270,9 @@ public unsafe class InspectorWindow : EditorWindow
     {
         var attributes = member.GetCustomAttributes(true);
         
-        // 1. HideInInspector always wins (Check by name to avoid namespace ambiguity)
         if (attributes.Any(a => a.GetType().Name == "HideInInspectorAttribute")) return false;
-
-        // 2. Explicitly serialized wins
         if (attributes.Any(a => a.GetType().Name == "SerializeFieldAttribute")) return true;
 
-        // 3. Otherwise, check visibility
         if (member is FieldInfo f) return f.IsPublic;
         if (member is PropertyInfo p) return p.GetGetMethod()?.IsPublic ?? false;
 
@@ -316,8 +285,9 @@ public unsafe class InspectorWindow : EditorWindow
         else if (type == typeof(Filter)) DrawFilterField(name, (Filter?)value, onUpdate);
         else if (member.GetCustomAttribute<AssetReferenceAttribute>() != null && type == typeof(string)) DrawAssetReferenceField(name, (string?)value, member.GetCustomAttribute<AssetReferenceAttribute>()!.Extension, onUpdate);
         else if (typeof(Component).IsAssignableFrom(type)) DrawComponentReferenceField(name, (Component?)value, type, onUpdate);
+        else if (typeof(IList).IsAssignableFrom(type) && type.IsGenericType) DrawList(name, (IList?)value, type.GetGenericArguments()[0], onUpdate);
+        else if (type == typeof(float?)) DrawNullableFloat(name, (float?)value, onUpdate, member);
         else {
-            // Special handling for Camera Aspect Ratio properties to make them clearer
             if (member.DeclaringType == typeof(Camera) && (name == "AspectWidth" || name == "AspectHeight")) {
                 ImGui.PushID(name);
                 ImGui.Columns(2); ImGui.SetColumnWidth(0, 100); ImGui.Text(name); ImGui.NextColumn();
@@ -331,6 +301,57 @@ public unsafe class InspectorWindow : EditorWindow
         }
     }
 
+    private void DrawNullableFloat(string name, float? value, Action<object?> onUpdate, MemberInfo member)
+    {
+        ImGui.PushID(name);
+        ImGui.Columns(2);
+        ImGui.SetColumnWidth(0, 120);
+        ImGui.Text(name);
+        ImGui.NextColumn();
+
+        bool hasValue = value.HasValue;
+        if (ImGui.Checkbox($"##has_{name}", ref hasValue))
+        {
+            if (hasValue) onUpdate(GetInheritedValue(name, member));
+            else onUpdate(null);
+        }
+        ImGui.SameLine();
+
+        if (hasValue)
+        {
+            float val = value ?? 0f;
+            if (ImGui.DragFloat("##v", ref val, 0.01f)) onUpdate(val);
+        }
+        else
+        {
+            float inherited = GetInheritedValue(name, member);
+            ImGui.TextDisabled($"{inherited:F2} (Inherited)");
+        }
+
+        ImGui.Columns(1);
+        ImGui.PopID();
+    }
+
+    private float GetInheritedValue(string name, MemberInfo member)
+    {
+        var world = WorldManager.ActiveWorld;
+        var settings = _app.ProjectSettings;
+
+        if (member.DeclaringType == typeof(Physical))
+        {
+            bool useCustom = world?.UseCustomSettings ?? false;
+            return name switch
+            {
+                "LinearDamping" => useCustom ? world!.CustomLinearDamping : settings.DefaultLinearDamping,
+                "AngularDamping" => useCustom ? world!.CustomAngularDamping : settings.DefaultAngularDamping,
+                "Friction" => useCustom ? world!.CustomFriction : settings.DefaultFriction,
+                "Bounciness" => useCustom ? world!.CustomBounciness : settings.DefaultBounciness,
+                _ => 0f
+            };
+        }
+        return 0f;
+    }
+
     private void DrawFilterField(string name, Filter? current, Action<object?> onUpdate)
     {
         ImGui.PushID(name);
@@ -340,7 +361,7 @@ public unsafe class InspectorWindow : EditorWindow
         ImGui.NextColumn();
 
         string display = current == null ? "None (Filter)" : $"{current.Name}";
-        if (ImGui.Button($"{display}##box", new Vector2(-25, 0))) { /* Focus filter editor? */ }
+        if (ImGui.Button($"{display}##box", new Vector2(-25, 0))) { }
 
         ImGui.SameLine();
         if (ImGui.Button("o##picker", new Vector2(20, 0))) ImGui.OpenPopup("FilterPicker");
@@ -408,6 +429,33 @@ public unsafe class InspectorWindow : EditorWindow
         ImGui.PopID();
     }
 
+    private void DrawList(string label, IList? list, Type elementType, Action<object?> onUpdate)
+    {
+        if (list == null) return;
+
+        ImGui.PushID(label);
+        bool open = ImGui.TreeNodeEx($"{label} [{list.Count}]", ImGuiTreeNodeFlags.SpanAvailWidth);
+        if (open)
+        {
+            for (int i = 0; i < list.Count; i++)
+            {
+                ImGui.PushID(i);
+                int index = i;
+                DrawField($"[{i}]", list[i], val => { list[index] = val; onUpdate?.Invoke(list); });
+                ImGui.PopID();
+            }
+            
+            if (ImGui.Button("+ Add Element"))
+            {
+                object? newItem = elementType == typeof(string) ? "" : Activator.CreateInstance(elementType);
+                list.Add(newItem);
+                onUpdate?.Invoke(list);
+            }
+            ImGui.TreePop();
+        }
+        ImGui.PopID();
+    }
+
     private unsafe void DrawSpriteField(string name, Sprite current, Action<object?> onUpdate)
     {
         ImGui.PushID(name);
@@ -417,12 +465,12 @@ public unsafe class InspectorWindow : EditorWindow
         ImGui.NextColumn();
 
         string display = string.IsNullOrEmpty(current.Path) ? "None (Sprite)" : Path.GetFileName(current.Path);
-        if (ImGui.Button($"{display}##box", new Vector2(-25, 0))) { /* Future: Focus asset in Project Window */ }
+        if (ImGui.Button($"{display}##box", new Vector2(-25, 0))) { }
         
         if (ImGui.BeginDragDropTarget())
         {
             var payload = ImGui.AcceptDragDropPayload("ASSET_PATH");
-            if ((nint)payload.Handle != 0 && EditorSelection.DraggedAssetPath != null) {
+            if (payload.Handle != null && EditorSelection.DraggedAssetPath != null) {
                 string ext = Path.GetExtension(EditorSelection.DraggedAssetPath).ToLower();
                 if (ext == ".png" || ext == ".jpg" || ext == ".jpeg") onUpdate((Sprite)EditorSelection.DraggedAssetPath);
             }
@@ -470,7 +518,7 @@ public unsafe class InspectorWindow : EditorWindow
         if (ImGui.BeginDragDropTarget())
         {
             var payload = ImGui.AcceptDragDropPayload("ASSET_PATH");
-            if ((nint)payload.Handle != 0 && EditorSelection.DraggedAssetPath != null) {
+            if (payload.Handle != null && EditorSelection.DraggedAssetPath != null) {
                 string ext = Path.GetExtension(EditorSelection.DraggedAssetPath).ToLower();
                 if (string.IsNullOrEmpty(extensions) || extensions.Split(';').Any(e => e.Trim().ToLower() == ext)) onUpdate(EditorSelection.DraggedAssetPath);
             }
@@ -518,7 +566,7 @@ public unsafe class InspectorWindow : EditorWindow
         if (ImGui.BeginDragDropTarget())
         {
             var payload = ImGui.AcceptDragDropPayload("HIERARCHY_ENTITY");
-            if ((nint)payload.Handle != 0 && EditorSelection.DraggedEntity != null) {
+            if (payload.Handle != null && EditorSelection.DraggedEntity != null) {
                 var comp = EditorSelection.DraggedEntity.GetComponent(targetType);
                 if (comp != null) {
                     onUpdate(comp);

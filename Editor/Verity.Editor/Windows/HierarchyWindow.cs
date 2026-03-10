@@ -99,7 +99,7 @@ public unsafe class HierarchyWindow : EditorWindow
         // F: Focus selected entity
         if (ImGui.IsKeyPressed(ImGuiKey.F) && EditorSelection.SelectedEntity != null)
         {
-            _app.WorldCamera.Position = EditorSelection.SelectedEntity.Transform.WorldPosition;
+            _app.FocusEntity(EditorSelection.SelectedEntity);
         }
 
         // F2: Rename Entity
@@ -226,6 +226,10 @@ public unsafe class HierarchyWindow : EditorWindow
                     _app.InstantiateBlueprint(EditorSelection.DraggedAssetPath, null, null);
                     EditorSelection.DraggedAssetPath = null;
                 }
+                else if (EditorSelection.DraggedAssetPath != null && EditorSelection.DraggedAssetPath.EndsWith(".blueprint"))
+                {
+                    ImGui.SetTooltip($"Add Blueprint to World: {System.IO.Path.GetFileNameWithoutExtension(EditorSelection.DraggedAssetPath)}");
+                }
             }
             ImGui.EndDragDropTarget();
         }
@@ -270,6 +274,12 @@ public unsafe class HierarchyWindow : EditorWindow
         if (ImGui.IsItemClicked())
             EditorSelection.SelectedEntity = entity;
 
+        // Double-click to focus (Mirroring 'F' shortcut)
+        if (ImGui.IsItemHovered() && ImGui.IsMouseDoubleClicked(ImGuiMouseButton.Left))
+        {
+            _app.FocusEntity(entity);
+        }
+
         if (ImGui.BeginDragDropSource())
         {
             EditorSelection.DraggedEntity = entity;
@@ -299,6 +309,10 @@ public unsafe class HierarchyWindow : EditorWindow
                     _app.RecordUndo();
                     _app.InstantiateBlueprint(EditorSelection.DraggedAssetPath, null, entity);
                     EditorSelection.DraggedAssetPath = null;
+                }
+                else if (EditorSelection.DraggedAssetPath != null && EditorSelection.DraggedAssetPath.EndsWith(".blueprint"))
+                {
+                    ImGui.SetTooltip($"Add Blueprint as Child: {System.IO.Path.GetFileNameWithoutExtension(EditorSelection.DraggedAssetPath)}");
                 }
             }
             ImGui.EndDragDropTarget();

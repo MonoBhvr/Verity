@@ -114,6 +114,11 @@ public class GraphicsDevice : IDisposable
         Window.SetIcon(rgbaPixels, width, height);
     }
 
+    public void SetWindowTitle(string title)
+    {
+        if (Window is VeritySdl2Window sdlWin) sdlWin.SetTitle(title);
+    }
+
     public bool ShouldClose => Window.ShouldClose;
 
     public void Dispose()

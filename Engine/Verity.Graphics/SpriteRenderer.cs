@@ -31,5 +31,28 @@ public class SpriteRenderer : Component
     [SerializeField]
     public bool FlipY { get; set; } = false;
 
+    [Button("Apply Native Aspect Ratio")]
+    public void ApplyNativeAspectRatio()
+    {
+        if (Texture == null || Owner == null) return;
+
+        float texW = Texture.Width;
+        float texH = Texture.Height;
+        if (texW <= 0 || texH <= 0) return;
+
+        float aspect = texW / texH;
+        Vector2 currentScale = Owner.Transform.Scale;
+        float maxScale = MathF.Max(MathF.Abs(currentScale.X), MathF.Abs(currentScale.Y));
+
+        if (aspect >= 1.0f) // 가로가 더 길거나 같음
+        {
+            Owner.Transform.Scale = new Vector2(maxScale, maxScale / aspect);
+        }
+        else // 세로가 더 김
+        {
+            Owner.Transform.Scale = new Vector2(maxScale * aspect, maxScale);
+        }
+    }
+
     internal int ResolvedLayerIndex => SortingLayer.GetLayerIndex(SortingLayerName);
 }

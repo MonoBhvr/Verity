@@ -131,7 +131,13 @@ public class RenderPipeline : IDisposable
             _shader.SetColor(sr.Color);
             _shader.QuadBuffer.Draw(_shader.Program, targetFbo).Unwrap();
         }
-        _debugDraw.Render(camera, targetFbo);
+
+        // Draw Physics Gizmos (Editor only)
+        if (isWorldFbo)
+        {
+            Verity.Core.Physics.PhysicsManager.DrawGizmos(world);
+            _debugDraw.Render(camera, targetFbo);
+        }
 
         // 5. Standalone용 NDC 마스킹 (Screen 뷰는 이미 뷰포트로 잘렸으므로 불필요)
         if (camera.FixedAspectRatio && _whitePixel != null && !isWorldFbo && !isScreenFbo)

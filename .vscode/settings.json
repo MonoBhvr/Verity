@@ -1,0 +1,10 @@
+{
+  "dotnet.defaultSolution": "Verity.sln",
+  "omnisharp.useModernNet": true,
+  "csharp.unitTestDebuggingOptions": {
+    "type": "coreclr",
+    "request": "launch",
+    "stopAtEntry": false,
+    "console": "internalConsole"
+  }
+}

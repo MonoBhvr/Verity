@@ -25,14 +25,12 @@ public class GameLoop
 
         float scaledDelta = deltaTime * Time.TimeScale;
 
-        // Determine TPS and PTPS
         int targetTPS = world.UseCustomSettings ? world.CustomTPS : ProjectSettings.TargetTPS;
         int targetPTPS = world.UseCustomSettings ? world.CustomPTPS : ProjectSettings.TargetPTPS;
 
         float logicFixedDelta = 1.0f / Math.Max(1, targetTPS);
         float physicsFixedDelta = 1.0f / Math.Max(1, targetPTPS);
 
-        // 1. Logic Tick (TPS)
         _logicAccumulator += scaledDelta;
         while (_logicAccumulator >= logicFixedDelta)
         {
@@ -40,7 +38,6 @@ public class GameLoop
             _logicAccumulator -= logicFixedDelta;
         }
 
-        // 2. Physics Tick (PTPS)
         _physicsAccumulator += scaledDelta;
         while (_physicsAccumulator >= physicsFixedDelta)
         {
@@ -67,18 +64,24 @@ public class GameLoop
             if (!script.HasStarted)
             {
                 script._awakeDelegate?.Invoke();
+                
+                // Regular Start (now handles both void and IEnumerator via internal wrapping)
                 script._startDelegate?.Invoke();
+                
                 script.HasStarted = true;
             }
         }
 
-        // FixedUpdate (Legacy/Unity-style sync)
+        // FixedUpdate
         foreach (var script in scripts) script._fixedUpdateDelegate?.Invoke();
         OnFixedUpdate?.Invoke();
 
         // Update Phase
         foreach (var script in scripts) script._updateDelegate?.Invoke();
         OnUpdate?.Invoke();
+
+        // Coroutine Update Phase
+        foreach (var script in scripts) script.UpdateCoroutines(fixedDelta);
 
         // Late Update Phase
         foreach (var script in scripts) script._lateUpdateDelegate?.Invoke();
@@ -88,13 +91,8 @@ public class GameLoop
     private void PerformPhysicsTick(World.World world, float fixedDelta)
     {
         Time.PhysicsTickCount++;
-        var scripts = world.GetAllScripts().ToList();
-        
-        // Physics logic here (e.g., call script.PhysicsUpdate if it existed)
-        // For now, just trigger a global event
+        Verity.Core.Physics.PhysicsManager.Step(fixedDelta, world);
         OnPhysicsTick?.Invoke();
-        
-        // In the future, this is where we'd step the physics engine
     }
 
     public void TickRender()

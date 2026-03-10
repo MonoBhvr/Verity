@@ -19,7 +19,15 @@ public static class SceneSerializer
         {
             ["UseCustomSettings"] = world.UseCustomSettings,
             ["CustomTPS"] = world.CustomTPS,
-            ["CustomPTPS"] = world.CustomPTPS
+            ["CustomPTPS"] = world.CustomPTPS,
+
+            // Physics overrides
+            ["CustomGravity"] = SerializeVector2(world.CustomGravity),
+            ["CustomFriction"] = world.CustomFriction,
+            ["CustomBounciness"] = world.CustomBounciness,
+            ["CustomLinearDamping"] = world.CustomLinearDamping,
+            ["CustomAngularDamping"] = world.CustomAngularDamping,
+            ["CustomPhysicsThreshold"] = world.CustomPhysicsThreshold
         };
         root["WorldSettings"] = settings;
 
@@ -181,6 +189,14 @@ public static class SceneSerializer
                 world.UseCustomSettings = (bool?)settings["UseCustomSettings"] ?? false;
                 world.CustomTPS = (int?)settings["CustomTPS"] ?? 60;
                 world.CustomPTPS = (int?)settings["CustomPTPS"] ?? 50;
+
+                // Physics overrides
+                world.CustomGravity = new Vector2((float?)settings["CustomGravity"]?["X"] ?? 0, (float?)settings["CustomGravity"]?["Y"] ?? -9.81f);
+                world.CustomFriction = (float?)settings["CustomFriction"] ?? 0.5f;
+                world.CustomBounciness = (float?)settings["CustomBounciness"] ?? 0.0f;
+                world.CustomLinearDamping = (float?)settings["CustomLinearDamping"] ?? 0.1f;
+                world.CustomAngularDamping = (float?)settings["CustomAngularDamping"] ?? 0.1f;
+                world.CustomPhysicsThreshold = (float?)settings["CustomPhysicsThreshold"] ?? 0.05f;
             }
             array = root["Entities"]?.AsArray();
         }
