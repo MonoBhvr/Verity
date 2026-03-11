@@ -22,7 +22,7 @@ Verity는 복잡한 네이티브 코드 대신 최신 .NET 환경을 기반으�
 ## 🛠 Tech Stack
 
 -   **Language**: C# 12 / .NET 9.0
--   **Graphics**: Irodori (OpenGL)
+-   **Graphics**: Irodori (OpenGL, via Silk.Net)
 -   **UI Framework**: Dear ImGui (Hexa.NET.ImGui)
 -   **Windowing**: SDL2
 -   **Mathematics**: System.Numerics
