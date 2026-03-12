@@ -12,10 +12,9 @@ Verity는 복잡한 네이티브 코드 대신 최신 .NET 환경을 기반으�
 -   **Seamless C# Scripting**: 복잡한 설정 없이 C# 클래스를 상속받는 것만으로 게임 로직을 작성할 수 있습니다.
 -   **Integrated Editor**: 직관적인 계층 구조(Hierarchy), 인스펙터(Inspector), 프로젝트 관리 시스템을 포함합니다.
 -   **Modern ECS Architecture**: 엔티티-컴포넌트-시스템 구조를 통해 유연하고 확장성 있는 개발이 가능합니다.
--   **Spatial LOD Grid**: 유니티 스타일의 지능형 동적 그리드 시스템으로 줌 레벨에 따라 자연스러운 작업 환경을 제공합니다.
 -   **Multi-Instance Launcher**: 유니티 허브 스타일의 런처를 통해 여러 프로젝트를 동시에 관리하고 안전하게 열 수 있습니다.
--   **VS Code Support**: 프로젝트 로드 시 인텔리센스를 위한 `.csproj` 파일을 자동으로 생성하여 쾌적한 코딩 환경을 제공합니다.
 -   **2D Physics Engine**: SAT 알고리즘 기반의 정교한 충돌 판정과 물리 시뮬레이션을 지원합니다.
+-   **Filter System**: Tag, Sorting Layer, Physics Group, 여러 enum 타입을 화이트리스트와 블랙리스트로 관리하여 빠른 검색과 최적화된 시스템 업데이트를 제공합니다.
 
 ---
 
@@ -25,7 +24,48 @@ Verity는 복잡한 네이티브 코드 대신 최신 .NET 환경을 기반으�
 -   **Graphics**: Irodori (OpenGL, via Silk.Net)
 -   **UI Framework**: Dear ImGui (Hexa.NET.ImGui)
 -   **Windowing**: SDL2
--   **Mathematics**: System.Numerics
+
+---
+
+## 🚀 Getting Started
+
+### 1. Installation from Release (Recommended)
+가장 빠르고 쉬운 설치 방법입니다.
+1.  **[GitHub Releases](https://github.com/MonoBhvr/Verity/releases)** 페이지로 이동합니다.
+2.  최신 버전의 `Verity_Engine_vX.X.X.zip` 파일을 다운로드합니다.
+3.  원하는 폴더에 압축을 해제합니다.
+4.  `Editor/VerityEditor.exe`를 실행하여 런처를 시작합니다.
+
+### 2. Prerequisites
+Verity 엔진을 직접 빌드하고 실행하려면 다음이 설치되어 있어야 합니다.
+- **[.NET 9.0 SDK](https://dotnet.microsoft.com/download/dotnet/9.0)** (필수)
+- **Windows OS** (현재 에디터는 Windows 환경에 최적화되어 있습니다.)
+
+### 2. Download & Build
+전체 소스코드를 다운로드하고 빌드하는 방법입니다.
+```powershell
+# 저장소 복제
+git clone https://github.com/MonoBhvr/Verity.git
+cd Verity
+
+# 전체 솔루션 빌드
+dotnet build Verity.sln
+```
+
+### 3. Run Editor
+런처를 실행하여 프로젝트를 관리하거나 새로 생성할 수 있습니다.
+```powershell
+# 에디터 실행
+dotnet run --project Editor/Verity.Editor.App/Verity.Editor.App.csproj
+```
+
+### 4. Distribution (Packaging)
+엔진을 독립된 실행 파일 패키지로 만들고 싶다면, 포함된 배포 스크립트를 사용하세요.
+```powershell
+# 배포용 패키지 생성 (Dist 폴더에 생성됨)
+.\publish_engine.ps1
+```
+실행이 완료되면 `Dist/Editor/VerityEditor.exe`를 통해 엔진을 즉시 실행할 수 있습니다.
 
 ---
 
@@ -41,3 +81,11 @@ Verity는 복잡한 네이티브 코드 대신 최신 .NET 환경을 기반으�
 ## 🚧 Status
 
 Verity Engine은 현재 활발히 개발 중인 Alpha 단계 프로젝트입니다. 핵심 기능들이 지속적으로 추가 및 개선되고 있습니다.
+### Inprogress...
+- **TileMap**
+- **Sprite Setting**
+- **Animation**
+- **SoundManager**
+- **PostProcessing**
+- **Fluid Simulation**
+- **Networking**

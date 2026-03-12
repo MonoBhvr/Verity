@@ -27,6 +27,11 @@ public class VeritySdl2Window : Window
         ShouldClose = true;
     }
 
+    public void CancelClose()
+    {
+        ShouldClose = false;
+    }
+
     // irodori's IrodoriSilkContext.Create() calls this — must return existing context, not create new
     public override IrodoriReturn<IntPtr> CreateGlContext()
     {

@@ -35,4 +35,18 @@ public static class SortingLayer
         _layers.Clear();
         _layers.Add("Default");
     }
+
+    public static void SyncWithSettings(List<string> layers)
+    {
+        _layers.Clear();
+        if (layers == null || layers.Count == 0)
+        {
+            _layers.Add("Default");
+        }
+        else
+        {
+            _layers.AddRange(layers);
+            if (!_layers.Contains("Default")) _layers.Insert(0, "Default");
+        }
+    }
 }

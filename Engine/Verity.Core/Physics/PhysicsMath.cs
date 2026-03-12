@@ -33,11 +33,11 @@ public static class PhysicsMath
         else if (shapeA is CircleShape c && shapeB is not CircleShape)
         {
             res = TestCircleVsPolygon(c, shapeB.GetVertices());
+            if (res.IsColliding) res.Normal = -res.Normal;
         }
         else if (shapeB is CircleShape c2 && shapeA is not CircleShape)
         {
             res = TestCircleVsPolygon(c2, shapeA.GetVertices());
-            if (res.IsColliding) res.Normal = -res.Normal;
         }
         else
         {
@@ -45,6 +45,11 @@ public static class PhysicsMath
         }
 
         return res;
+    }
+
+    public static CollisionResult TestSAT(Vector2[] verticesA, Vector2[] verticesB)
+    {
+        return TestPolygonVsPolygon(verticesA, verticesB);
     }
 
     public static RaycastHit TestRay(Vector2 origin, Vector2 direction, float distance, PhysicalShape shape)
@@ -59,26 +64,16 @@ public static class PhysicsMath
         }
     }
 
-    private static Vector2 GetCircleWorldCenter(CircleShape circle)
-    {
-        var transform = circle.Owner.Transform;
-        Vector2 worldScale = transform.Scale;
-        float rotationRad = transform.Rotation * MathF.PI / 180.0f;
-        
-        float cos = MathF.Cos(rotationRad);
-        float sin = MathF.Sin(rotationRad);
-        Vector2 rotatedOffset = new Vector2(circle.Offset.X * worldScale.X * cos - circle.Offset.Y * worldScale.Y * sin, 
-                                            circle.Offset.X * worldScale.X * sin + circle.Offset.Y * worldScale.Y * cos);
-        return transform.Position + rotatedOffset;
-    }
-
     private static CollisionResult TestCircleVsCircle(CircleShape a, CircleShape b)
     {
-        Vector2 posA = GetCircleWorldCenter(a);
-        Vector2 posB = GetCircleWorldCenter(b);
+        Vector2 posA = a.GetWorldCenter();
+        Vector2 posB = b.GetWorldCenter();
         float dist = Vector2.Distance(posA, posB);
-        float radiusA = a.Radius * Math.Max(a.Owner.Transform.Scale.X, a.Owner.Transform.Scale.Y);
-        float radiusB = b.Radius * Math.Max(b.Owner.Transform.Scale.X, b.Owner.Transform.Scale.Y);
+        
+        Vector2 scaleA = a.GetBaseScale();
+        Vector2 scaleB = b.GetBaseScale();
+        float radiusA = a.Radius * Math.Max(scaleA.X, scaleA.Y);
+        float radiusB = b.Radius * Math.Max(scaleB.X, scaleB.Y);
         float radiusSum = radiusA + radiusB;
 
         if (dist >= radiusSum) return new CollisionResult { IsColliding = false };
@@ -90,8 +85,9 @@ public static class PhysicsMath
 
     private static CollisionResult TestCircleVsPolygon(CircleShape circle, Vector2[] vertices)
     {
-        Vector2 center = GetCircleWorldCenter(circle);
-        float radius = circle.Radius * Math.Max(circle.Owner.Transform.Scale.X, circle.Owner.Transform.Scale.Y);
+        Vector2 center = circle.GetWorldCenter();
+        Vector2 scale = circle.GetBaseScale();
+        float radius = circle.Radius * Math.Max(scale.X, scale.Y);
         
         float minDepth = float.MaxValue;
         Vector2 minNormal = Vector2.Zero;
@@ -175,8 +171,9 @@ public static class PhysicsMath
 
     private static RaycastHit TestRayVsCircle(Vector2 origin, Vector2 direction, float distance, CircleShape circle)
     {
-        Vector2 center = GetCircleWorldCenter(circle);
-        float radius = circle.Radius * Math.Max(circle.Owner.Transform.Scale.X, circle.Owner.Transform.Scale.Y);
+        Vector2 center = circle.GetWorldCenter();
+        Vector2 scale = circle.GetBaseScale();
+        float radius = circle.Radius * Math.Max(scale.X, scale.Y);
         
         Vector2 L = center - origin;
         float tca = Vector2.Dot(L, direction);
@@ -256,6 +253,9 @@ public static class PhysicsMath
         if (t >= 0 && u >= 0 && u <= 1)
         {
             Vector2 edge = p2 - p1;
+            float edgeLenSq = edge.LengthSquared();
+            if (edgeLenSq < 0.000001f) return false;
+            
             normal = Vector2.Normalize(new Vector2(-edge.Y, edge.X));
             if (Vector2.Dot(normal, direction) > 0) normal = -normal;
             return true;
@@ -268,28 +268,27 @@ public static class PhysicsMath
     {
         var contacts = new List<Vector2>();
         const float slop = 0.01f;
+        const float epsilon = 0.005f; // Small epsilon for edge testing
 
-        // Find points of A inside B
+        // Find points of A inside or on the edge of B
         foreach (var p in vA) 
         {
-            if (IsPointInPolygon(p, vB)) 
+            if (IsPointInPolygon(p, vB, epsilon)) 
             {
                 contacts.Add(p);
             }
         }
 
-        // Find points of B inside A
+        // Find points of B inside or on the edge of A
         foreach (var p in vB) 
         {
-            if (IsPointInPolygon(p, vA)) 
+            if (IsPointInPolygon(p, vA, epsilon)) 
             {
-                // To avoid duplicate or very close points, we can add a simple check
                 if (!contacts.Any(c => Vector2.DistanceSquared(c, p) < slop * slop))
                     contacts.Add(p);
             }
         }
 
-        // Fallback: If no vertices are inside, use the averages (clamped to prevent massive torque)
         if (contacts.Count == 0) 
         {
             contacts.Add(GetAverage(vA));
@@ -298,19 +297,39 @@ public static class PhysicsMath
         return contacts;
     }
 
-    private static bool IsPointInPolygon(Vector2 p, Vector2[] poly)
+    private static bool IsPointInPolygon(Vector2 p, Vector2[] poly, float epsilon = 0f)
     {
         bool inside = false;
         for (int i = 0, j = poly.Length - 1; i < poly.Length; j = i++)
         {
+            float div = (poly[j].Y - poly[i].Y);
+            // Standard ray-casting for "strictly inside"
             if (((poly[i].Y > p.Y) != (poly[j].Y > p.Y)) &&
-                (p.X < (poly[j].X - poly[i].X) * (p.Y - poly[i].Y) / (poly[j].Y - poly[i].Y) + poly[i].X))
+                (MathF.Abs(div) > 0.000001f && p.X < (poly[j].X - poly[i].X) * (p.Y - poly[i].Y) / div + poly[i].X))
                 inside = !inside;
+            
+            // Check if point is very close to the edge
+            if (epsilon > 0)
+            {
+                Vector2 edge = poly[i] - poly[j];
+                Vector2 toPoint = p - poly[j];
+                float edgeLenSq = edge.LengthSquared();
+                if (edgeLenSq > 0.000001f)
+                {
+                    float projection = Vector2.Dot(toPoint, edge) / edgeLenSq;
+                    if (projection >= 0 && projection <= 1)
+                    {
+                        Vector2 closest = poly[j] + edge * projection;
+                        if (Vector2.DistanceSquared(p, closest) < epsilon * epsilon)
+                            return true;
+                    }
+                }
+            }
         }
         return inside;
     }
 
-    private static Vector2 GetAverage(Vector2[] v) { Vector2 sum = Vector2.Zero; foreach (var p in v) sum += p; return sum / v.Length; }
+    private static Vector2 GetAverage(Vector2[] v) { if (v.Length == 0) return Vector2.Zero; Vector2 sum = Vector2.Zero; foreach (var p in v) sum += p; return sum / (float)v.Length; }
     private static Vector2 GetClosestPointAxis(Vector2 center, Vector2[] vertices) { Vector2 closest = vertices[0]; float minDist = Vector2.DistanceSquared(center, vertices[0]); for (int i = 1; i < vertices.Length; i++) { float d = Vector2.DistanceSquared(center, vertices[i]); if (d < minDist) { minDist = d; closest = vertices[i]; } } return Vector2.Normalize(closest - center); }
     private static IEnumerable<Vector2> GetAxes(Vector2[] vertices) { for (int i = 0; i < vertices.Length; i++) { Vector2 edge = vertices[(i + 1) % vertices.Length] - vertices[i]; yield return Vector2.Normalize(new Vector2(-edge.Y, edge.X)); } }
     private static (float Min, float Max) Project(Vector2[] vertices, Vector2 axis) { float min = Vector2.Dot(vertices[0], axis); float max = min; for (int i = 1; i < vertices.Length; i++) { float p = Vector2.Dot(vertices[i], axis); min = Math.Min(min, p); max = Math.Max(max, p); } return (min, max); }

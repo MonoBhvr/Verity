@@ -1,3 +1,4 @@
+using System;
 using System.Reflection;
 using System.Text.Json;
 using Verity.Core;
@@ -9,6 +10,8 @@ using Verity.Graphics;
 using Verity.Input;
 using System.Diagnostics;
 using System.Drawing;
+using System.IO;
+using System.Linq;
 
 namespace Verity.Game;
 
@@ -58,6 +61,36 @@ internal class Program
         }
         buildSettings ??= new BuildSettings();
 
+        // Initialize Input Filters
+        var filtersPath = Path.Combine(baseDir, "Assets", "Filters.json");
+        if (File.Exists(filtersPath)) {
+            FilterManager.SavePath = filtersPath;
+            FilterManager.Load();
+        } else {
+            var filtersJson = ReadResourceString(assembly, $"{assemblyName}.Assets.Filters.json");
+            if (filtersJson != null) FilterManager.LoadFromJson(filtersJson);
+        }
+        Verity.Input.Input.Enabled = true;
+
+        // Initialize Project Settings (Gravity, Layers, etc.)
+        ProjectSettings? projectSettings = null;
+        var projSettingsPath = Path.Combine(baseDir, "Assets", "ProjectSettings.json");
+        if (File.Exists(projSettingsPath)) {
+            try {
+                var json = File.ReadAllText(projSettingsPath);
+                projectSettings = JsonSerializer.Deserialize<ProjectSettings>(json, new JsonSerializerOptions { 
+                    Converters = { new Verity.Core.Serialization.Vector2Converter(), new Verity.Core.Serialization.ColorConverter() }
+                });
+            } catch { }
+        } else {
+            var json = ReadResourceString(assembly, $"{assemblyName}.Assets.ProjectSettings.json");
+            if (json != null) projectSettings = JsonSerializer.Deserialize<ProjectSettings>(json, new JsonSerializerOptions { 
+                Converters = { new Verity.Core.Serialization.Vector2Converter(), new Verity.Core.Serialization.ColorConverter() }
+            });
+        }
+        projectSettings ??= new ProjectSettings();
+        Verity.Graphics.SortingLayer.SyncWithSettings(projectSettings.SortingLayers);
+
         string? worldRelPath = (buildSettings.Worlds.Count > 0) 
             ? buildSettings.Worlds[Math.Clamp(buildSettings.StartWorldIndex, 0, buildSettings.Worlds.Count - 1)] 
             : null;
@@ -87,7 +120,7 @@ internal class Program
         }
 
         Time.Reset();
-        var gameLoop = new GameLoop();
+        var gameLoop = new GameLoop { ProjectSettings = projectSettings };
         var stopwatch = new Stopwatch();
         stopwatch.Start();
         long lastTicks = stopwatch.ElapsedTicks;

@@ -3,3 +3,19 @@ obj/
 /packages/
 riderModule.iml
 /_ReSharper.Caches/
+
+# User-specific files
+*.user
+*.userosscache
+*.sln.docstates
+
+# Verity Game Assets (Templates/Demo assets)
+Verity.Game/Assets/*
+!Verity.Game/Assets/.gitkeep
+Verity.Game/UserScripts.dll
+
+# IDEs
+.idea/
+.vscode/
+*.swp
+*.ini

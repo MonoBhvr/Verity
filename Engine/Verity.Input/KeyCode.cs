@@ -62,10 +62,10 @@ public enum KeyCode
     Tab = SDL2.SDL.SDL_Scancode.SDL_SCANCODE_TAB,
     Delete = SDL2.SDL.SDL_Scancode.SDL_SCANCODE_DELETE,
 
-    Up = SDL2.SDL.SDL_Scancode.SDL_SCANCODE_UP,
-    Down = SDL2.SDL.SDL_Scancode.SDL_SCANCODE_DOWN,
-    Left = SDL2.SDL.SDL_Scancode.SDL_SCANCODE_LEFT,
-    Right = SDL2.SDL.SDL_Scancode.SDL_SCANCODE_RIGHT,
+    UpArrow = SDL2.SDL.SDL_Scancode.SDL_SCANCODE_UP,
+    DownArrow = SDL2.SDL.SDL_Scancode.SDL_SCANCODE_DOWN,
+    LeftArrow = SDL2.SDL.SDL_Scancode.SDL_SCANCODE_LEFT,
+    RightArrow = SDL2.SDL.SDL_Scancode.SDL_SCANCODE_RIGHT,
 
     LeftShift = SDL2.SDL.SDL_Scancode.SDL_SCANCODE_LSHIFT,
     RightShift = SDL2.SDL.SDL_Scancode.SDL_SCANCODE_RSHIFT,

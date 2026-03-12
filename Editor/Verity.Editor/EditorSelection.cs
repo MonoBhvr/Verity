@@ -34,6 +34,7 @@ public static class EditorSelection
     public static string? DraggedAssetPath { get; set; }
     public static Entity? DraggedEntity { get; set; }
 
-    // Collider Editing state
-    public static bool IsEditingCollider { get; set; }
+    // Polygon Editing state
+    public static Component? EditingPolygonComponent { get; set; }
+    public static bool IsEditingPolygon => EditingPolygonComponent != null;
 }

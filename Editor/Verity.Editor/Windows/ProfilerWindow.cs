@@ -21,7 +21,7 @@ public class ProfilerWindow : EditorWindow
     private float _timer;
     private const float UpdateInterval = 1.0f;
 
-    public ProfilerWindow(EditorApp app) : base("Profiler")
+    public ProfilerWindow(EditorApp app) : base(L10n.Tr("window_profiler"))
     {
         _app = app;
         IsOpen = false; // Default disabled as requested
@@ -32,9 +32,9 @@ public class ProfilerWindow : EditorWindow
     {
         UpdateMetrics();
 
-        ImGui.Text($"FPS: {_fps:F3}");
-        ImGui.Text($"TPS (Actual): {_tps:F3}");
-        ImGui.Text($"PTPS (Actual): {_ptps:F3}");
+        ImGui.Text(L10n.Tr("label_fps", _fps.ToString("F3")));
+        ImGui.Text(L10n.Tr("label_tps_actual", _tps.ToString("F3")));
+        ImGui.Text(L10n.Tr("label_ptps_actual", _ptps.ToString("F3")));
         
         ImGui.Separator();
 
@@ -42,9 +42,11 @@ public class ProfilerWindow : EditorWindow
         int targetTPS = world?.UseCustomSettings == true ? world.CustomTPS : _app.ProjectSettings.TargetTPS;
         int targetPTPS = world?.UseCustomSettings == true ? world.CustomPTPS : _app.ProjectSettings.TargetPTPS;
 
-        ImGui.Text($"TPS (Setting): {targetTPS}");
-        ImGui.Text($"FTPS (Setting): {targetPTPS}");
+        ImGui.Text(L10n.Tr("label_tps_setting", targetTPS));
+        ImGui.Text(L10n.Tr("label_ptps_setting", targetPTPS));
     }
+
+    public override void RefreshTitle() { Title = L10n.Tr("window_profiler"); }
 
     private void UpdateMetrics()
     {

@@ -1,5 +1,6 @@
 using System.Numerics;
 using Verity.Core.ECS;
+using Verity.Core;
 
 namespace Verity.Core.Physics;
 
@@ -11,10 +12,32 @@ public abstract class PhysicalShape : Component
     [SerializeField]
     public Vector2 Offset { get; set; } = Vector2.Zero;
 
-    [SerializeField]
+    [SerializeField, PhysicsGroupSelector]
     public string GroupName { get; set; } = "Default";
 
-    public ulong GroupMask => Verity.Input.Filter.Get(GroupName)?.Mask ?? 1UL;
+    public ulong GroupMask => Verity.Input.Filter.Get(GroupName)?.Mask ?? Verity.Input.FilterRegistry.GetGroupMask(GroupName);
+
+    public Vector2 GetBaseScale()
+    {
+        var transform = Owner.GetComponent<Transform>();
+        if (transform == null) return Vector2.One;
+
+        var sizeComp = Owner.GetComponent<IHasSize>();
+        return transform.WorldScale * (sizeComp?.Size ?? Vector2.One);
+    }
+
+    public Vector2 GetWorldCenter()
+    {
+        var transform = Owner.Transform;
+        Vector2 baseScale = GetBaseScale();
+        float rotationRad = transform.WorldRotation * MathF.PI / 180.0f;
+        
+        float cos = MathF.Cos(rotationRad);
+        float sin = MathF.Sin(rotationRad);
+        Vector2 rotatedOffset = new Vector2(Offset.X * baseScale.X * cos - Offset.Y * baseScale.Y * sin, 
+                                            Offset.X * baseScale.X * sin + Offset.Y * baseScale.Y * cos);
+        return transform.WorldPosition + rotatedOffset;
+    }
 
     // AABB (Broad Phase용)
     public abstract AABB GetAABB();

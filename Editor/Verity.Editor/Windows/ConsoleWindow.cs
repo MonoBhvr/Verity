@@ -16,7 +16,7 @@ public class ConsoleWindow : EditorWindow
     private static readonly HashSet<int> _selectedIndices = [];
     private static int _dragStartIndex = -1;
 
-    public ConsoleWindow() : base("Console") { }
+    public ConsoleWindow() : base(L10n.Tr("window_console")) { }
 
     public static void Log(string message, LogLevel level = LogLevel.Info)
     {
@@ -36,10 +36,10 @@ public class ConsoleWindow : EditorWindow
 
     public override void OnGui()
     {
-        if (ImGui.Button("Clear"))
+        if (ImGui.Button(L10n.Tr("btn_clear")))
             Clear();
         ImGui.SameLine();
-        if (ImGui.Button("Copy All"))
+        if (ImGui.Button(L10n.Tr("btn_copy_all")))
         {
             var all = string.Join("\n", _entries.Select(e => e.Message));
             ImGui.SetClipboardText(all);
@@ -47,7 +47,7 @@ public class ConsoleWindow : EditorWindow
         if (_selectedIndices.Count > 0)
         {
             ImGui.SameLine();
-            if (ImGui.Button($"Copy Selected ({_selectedIndices.Count})"))
+            if (ImGui.Button(L10n.Tr("ctx_copy_all_selected") + $" ({_selectedIndices.Count})"))
             {
                 CopySelectedToClipboard();
             }
@@ -92,10 +92,6 @@ public class ConsoleWindow : EditorWindow
                     {
                         int min = _selectedIndices.Min();
                         int max = _selectedIndices.Max();
-                        // If current index is above the existing selection, expand from min
-                        // If below, expand from max. Or just use the first selected index.
-                        // Standard behavior: expand from the "anchor" (the first clicked item).
-                        // Since we don't track anchor specifically, we use min/max.
                         int start = Math.Min(i, min);
                         int end = Math.Max(i, max);
                         _selectedIndices.Clear();
@@ -121,15 +117,15 @@ public class ConsoleWindow : EditorWindow
 
                 if (ImGui.BeginPopupContextItem($"context_{i}"))
                 {
-                    if (ImGui.MenuItem("Copy Message"))
+                    if (ImGui.MenuItem(L10n.Tr("ctx_copy_message")))
                         ImGui.SetClipboardText(entry.Message);
                     
-                    if (_selectedIndices.Count > 1 && ImGui.MenuItem("Copy All Selected"))
+                    if (_selectedIndices.Count > 1 && ImGui.MenuItem(L10n.Tr("ctx_copy_all_selected")))
                     {
                         CopySelectedToClipboard();
                     }
 
-                    if (ImGui.MenuItem("Clear Console"))
+                    if (ImGui.MenuItem(L10n.Tr("ctx_clear_console")))
                         Clear();
                     
                     ImGui.EndPopup();
@@ -152,6 +148,8 @@ public class ConsoleWindow : EditorWindow
         }
         ImGui.EndChild();
     }
+
+    public override void RefreshTitle() { Title = L10n.Tr("window_console"); }
 
     private void CopySelectedToClipboard()
     {

@@ -1,48 +1,77 @@
+using System.Reflection;
+using System.Text.Json;
 using Verity.Core.World;
+using Verity.Core.Serialization;
+using Verity.Core.Engine;
 
 namespace Verity.Editor;
 
+internal class UndoState
+{
+    public string WorldJson { get; set; } = "";
+    public string ProjectSettingsJson { get; set; } = "";
+    public string BuildSettingsJson { get; set; } = "";
+}
+
 internal sealed class UndoSystem
 {
-    private readonly Stack<WorldSnapshot> _undoStack = new();
-    private readonly Stack<WorldSnapshot> _redoStack = new();
+    private readonly Stack<UndoState> _undoStack = new();
+    private readonly Stack<UndoState> _redoStack = new();
     private const int MaxHistory = 100;
 
-    private WorldSnapshot? _pendingSnapshot;
+    private UndoState? _pendingSnapshot;
 
-    public void Record(World world)
+    private UndoState CreateSnapshot(World world, ProjectSettings projectSettings, BuildSettings buildSettings)
     {
-        // Direct record (for discrete actions like Create/Delete)
-        _undoStack.Push(WorldSnapshot.Capture(world));
+        return new UndoState
+        {
+            WorldJson = SceneSerializer.Serialize(world),
+            ProjectSettingsJson = JsonSerializer.Serialize(projectSettings),
+            BuildSettingsJson = JsonSerializer.Serialize(buildSettings)
+        };
+    }
+
+    public void Record(World world, ProjectSettings projectSettings, BuildSettings buildSettings)
+    {
+        var current = CreateSnapshot(world, projectSettings, buildSettings);
+        if (_undoStack.Count > 0 && 
+            _undoStack.Peek().WorldJson == current.WorldJson && 
+            _undoStack.Peek().ProjectSettingsJson == current.ProjectSettingsJson &&
+            _undoStack.Peek().BuildSettingsJson == current.BuildSettingsJson) return;
+
+        _undoStack.Push(current);
         _redoStack.Clear();
         _pendingSnapshot = null;
 
         LimitStack(_undoStack);
     }
 
-    public void BeginContinuousAction(World world)
+    public void BeginContinuousAction(World world, ProjectSettings projectSettings, BuildSettings buildSettings)
     {
-        // Capture state BEFORE the change starts
         if (_pendingSnapshot == null)
         {
-            _pendingSnapshot = WorldSnapshot.Capture(world);
+            _pendingSnapshot = CreateSnapshot(world, projectSettings, buildSettings);
         }
     }
 
-    public void EndContinuousAction(World world)
+    public void EndContinuousAction(World world, ProjectSettings projectSettings, BuildSettings buildSettings)
     {
-        // If we have a pending snapshot, it means a change happened.
-        // We push the BEFORE state to the undo stack.
         if (_pendingSnapshot != null)
         {
-            _undoStack.Push(_pendingSnapshot);
-            _redoStack.Clear();
+            var current = CreateSnapshot(world, projectSettings, buildSettings);
+            if (current.WorldJson != _pendingSnapshot.WorldJson || 
+                current.ProjectSettingsJson != _pendingSnapshot.ProjectSettingsJson ||
+                current.BuildSettingsJson != _pendingSnapshot.BuildSettingsJson)
+            {
+                _undoStack.Push(_pendingSnapshot);
+                _redoStack.Clear();
+                LimitStack(_undoStack);
+            }
             _pendingSnapshot = null;
-            LimitStack(_undoStack);
         }
     }
 
-    private void LimitStack(Stack<WorldSnapshot> stack)
+    private void LimitStack<T>(Stack<T> stack)
     {
         if (stack.Count > MaxHistory)
         {
@@ -53,26 +82,36 @@ internal sealed class UndoSystem
         }
     }
 
-    public void Undo(World world)
+    public UndoState? Undo(World world, ProjectSettings projectSettings, BuildSettings buildSettings)
     {
-        if (_undoStack.Count == 0) return;
+        if (_undoStack.Count == 0) return null;
 
-        _redoStack.Push(WorldSnapshot.Capture(world));
+        var current = CreateSnapshot(world, projectSettings, buildSettings);
+        _redoStack.Push(current);
         LimitStack(_redoStack);
 
-        var snapshot = _undoStack.Pop();
-        snapshot.Restore(world);
+        var last = _undoStack.Pop();
+        // Skip if same
+        if (last.WorldJson == current.WorldJson && 
+            last.ProjectSettingsJson == current.ProjectSettingsJson && 
+            last.BuildSettingsJson == current.BuildSettingsJson && 
+            _undoStack.Count > 0)
+        {
+            last = _undoStack.Pop();
+        }
+
+        return last;
     }
 
-    public void Redo(World world)
+    public UndoState? Redo(World world, ProjectSettings projectSettings, BuildSettings buildSettings)
     {
-        if (_redoStack.Count == 0) return;
+        if (_redoStack.Count == 0) return null;
 
-        _undoStack.Push(WorldSnapshot.Capture(world));
+        var current = CreateSnapshot(world, projectSettings, buildSettings);
+        _undoStack.Push(current);
         LimitStack(_undoStack);
 
-        var snapshot = _redoStack.Pop();
-        snapshot.Restore(world);
+        return _redoStack.Pop();
     }
 
     public void Clear()

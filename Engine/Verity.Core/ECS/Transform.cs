@@ -1,22 +1,28 @@
 using System.Numerics;
+using Verity.Core;
 
 namespace Verity.Core.ECS;
 
 public sealed class Transform : Component
 {
+    private float _rotation;
     public Vector2 Position { get; set; }
-    public float Rotation { get; set; }
+    public float Rotation 
+    { 
+        get => _rotation; 
+        set => _rotation = value % 360f; 
+    }
     public Vector2 Scale { get; set; } = Vector2.One;
 
     private Transform? _parent;
     private readonly List<Transform> _children = [];
 
-        [HideInInspector]
-        public Transform? Parent
-        {
-            get => _parent;
-            set => SetParentInternal(value, preserveWorldPosition: false);
-        }
+    [HideInInspector]
+    public Transform? Parent
+    {
+        get => _parent;
+        set => SetParentInternal(value, preserveWorldPosition: true);
+    }
 
     public void SetParent(Transform? newParent, bool preserveWorldPosition = true)
     {
@@ -44,6 +50,7 @@ public sealed class Transform : Component
 
         var worldPos = preserveWorldPosition ? WorldPosition : (Vector2?)null;
         var worldRot = preserveWorldPosition ? WorldRotation : (float?)null;
+        var worldScale = preserveWorldPosition ? WorldScale : (Vector2?)null;
 
         _parent?._children.Remove(this);
         
@@ -63,19 +70,9 @@ public sealed class Transform : Component
 
         if (worldPos.HasValue)
         {
-            if (_parent != null)
-            {
-                var parentWorld = _parent.GetWorldMatrix();
-                Matrix4x4.Invert(parentWorld, out var parentInv);
-                var localPos3 = Vector3.Transform(new Vector3(worldPos.Value, 0f), parentInv);
-                Position = new Vector2(localPos3.X, localPos3.Y);
-                Rotation = worldRot!.Value - _parent.WorldRotation;
-            }
-            else
-            {
-                Position = worldPos.Value;
-                Rotation = worldRot!.Value;
-            }
+            WorldPosition = worldPos.Value;
+            WorldRotation = worldRot!.Value;
+            WorldScale = worldScale!.Value;
         }
     }
 
@@ -92,15 +89,26 @@ public sealed class Transform : Component
     public Matrix4x4 GetWorldMatrix()
     {
         var local = GetLocalMatrix();
-        return _parent != null ? local * _parent.GetWorldMatrix() : local;
+        if (_parent == null) return local;
+        return local * _parent.GetWorldMatrix();
     }
 
     public Vector2 WorldPosition
     {
         get
         {
-            var world = GetWorldMatrix();
-            return new Vector2(world.M41, world.M42);
+            var m = GetWorldMatrix();
+            return new Vector2(m.M41, m.M42);
+        }
+        set
+        {
+            if (_parent == null) Position = value;
+            else
+            {
+                Matrix4x4.Invert(_parent.GetWorldMatrix(), out var invParent);
+                var localPos3 = Vector3.Transform(new Vector3(value, 0f), invParent);
+                Position = new Vector2(localPos3.X, localPos3.Y);
+            }
         }
     }
 
@@ -111,6 +119,11 @@ public sealed class Transform : Component
             if (_parent == null) return Rotation;
             return Rotation + _parent.WorldRotation;
         }
+        set
+        {
+            if (_parent == null) Rotation = value;
+            else Rotation = value - _parent.WorldRotation;
+        }
     }
 
     public Vector2 WorldScale
@@ -119,6 +132,18 @@ public sealed class Transform : Component
         {
             if (_parent == null) return Scale;
             return Scale * _parent.WorldScale;
+        }
+        set
+        {
+            if (_parent == null) Scale = value;
+            else
+            {
+                var pScale = _parent.WorldScale;
+                Scale = new Vector2(
+                    MathF.Abs(pScale.X) > 0.0001f ? value.X / pScale.X : value.X,
+                    MathF.Abs(pScale.Y) > 0.0001f ? value.Y / pScale.Y : value.Y
+                );
+            }
         }
     }
 }

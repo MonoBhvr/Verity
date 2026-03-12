@@ -77,6 +77,18 @@ public static class FilterManager
         try
         {
             var json = File.ReadAllText(_savePath);
+            LoadFromJson(json);
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[FilterManager] Error loading filters from file: {ex.Message}");
+        }
+    }
+
+    public static void LoadFromJson(string json)
+    {
+        try
+        {
             var filters = JsonSerializer.Deserialize<List<Filter>>(json);
             if (filters != null)
             {
@@ -86,11 +98,12 @@ public static class FilterManager
                     f.UpdateCache();
                     _filters[f.Name] = f;
                 }
+                _loaded = true;
             }
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"[FilterManager] Error loading filters: {ex.Message}");
+            Console.WriteLine($"[FilterManager] Error loading filters from JSON: {ex.Message}");
         }
     }
 

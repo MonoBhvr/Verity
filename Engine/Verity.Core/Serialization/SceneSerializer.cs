@@ -9,7 +9,10 @@ namespace Verity.Core.Serialization;
 
 public static class SceneSerializer
 {
-    private static readonly JsonSerializerOptions _options = new() { WriteIndented = true };
+    private static readonly JsonSerializerOptions _options = new() { 
+        WriteIndented = true,
+        Converters = { new Vector2Converter(), new ColorConverter() }
+    };
 
     public static string Serialize(World.World world)
     {
@@ -149,7 +152,7 @@ public static class SceneSerializer
         if (typeName.Contains("Sprite")) return new JsonObject { ["Path"] = NormalizePath((string?)GetReflectedValue(value, "Path")) };
 
         // Fallback for custom nested objects
-        try { return JsonNode.Parse(JsonSerializer.Serialize(value)); } catch { return null; }
+        try { return JsonNode.Parse(JsonSerializer.Serialize(value, _options)); } catch { return null; }
     }
 
     private static JsonNode? GetReflectedValue(object obj, string memberName)
@@ -221,19 +224,17 @@ public static class SceneSerializer
     {
         var entities = new List<Entity>();
 
+        // 1. Create all entities
         foreach (var node in array)
         {
             if (node == null) continue;
             var entity = world.CreateEntity((string?)node["Name"] ?? "Entity");
             if (Guid.TryParse((string?)node["Id"], out var guid)) entity.Id = guid;
-            
             entity.Active = (bool?)node["Active"] ?? true;
-            entity.Transform.Position = DeserializeVector2(node["Position"]);
-            entity.Transform.Rotation = (float?)node["Rotation"] ?? 0f;
-            entity.Transform.Scale = DeserializeVector2(node["Scale"]);
             entities.Add(entity);
         }
 
+        // 2. Restore hierarchy FIRST
         for (int i = 0; i < array.Count; i++)
         {
             int pIdx = (int?)array[i]?["ParentIndex"] ?? -1;
@@ -241,6 +242,17 @@ public static class SceneSerializer
                 entities[i].Transform.SetParent(entities[pIdx].Transform, false);
         }
 
+        // 3. Set local transforms (now they are correctly relative to restored parents)
+        for (int i = 0; i < array.Count; i++)
+        {
+            var node = array[i];
+            if (node == null) continue;
+            entities[i].Transform.Position = DeserializeVector2(node["Position"]);
+            entities[i].Transform.Rotation = (float?)node["Rotation"] ?? 0f;
+            entities[i].Transform.Scale = DeserializeVector2(node["Scale"]);
+        }
+
+        // 4. Restore components
         for (int i = 0; i < array.Count; i++)
         {
             var comps = array[i]?["Components"]?.AsArray();

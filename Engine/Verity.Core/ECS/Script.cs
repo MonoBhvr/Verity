@@ -1,6 +1,7 @@
 using System.Collections;
 using System.Reflection;
 using Verity.Core.Physics;
+using Verity.Core.Engine;
 
 namespace Verity.Core.ECS;
 
@@ -9,6 +10,7 @@ public class Coroutine
     internal IEnumerator Routine;
     internal object? Wait;
     internal float Timer;
+    internal int StartTick;
     internal bool IsDone;
     
     public Coroutine(IEnumerator routine) => Routine = routine;
@@ -18,6 +20,18 @@ public class WaitForSeconds
 {
     public float Seconds { get; }
     public WaitForSeconds(float seconds) => Seconds = seconds;
+}
+
+public class WaitForTicks
+{
+    public int Ticks { get; }
+    public WaitForTicks(int ticks) => Ticks = ticks;
+}
+
+public class WaitForPhysicalTicks
+{
+    public int Ticks { get; }
+    public WaitForPhysicalTicks(int ticks) => Ticks = ticks;
 }
 
 public class WaitUntil
@@ -34,6 +48,7 @@ public class WaitWhile
 
 public abstract class Script : Component
 {
+    internal bool HasAwoken;
     internal bool HasStarted;
 
     // Lifecycle delegates
@@ -163,6 +178,10 @@ public abstract class Script : Component
 
             coroutine.Wait = coroutine.Routine.Current;
             coroutine.Timer = 0;
+            if (coroutine.Wait is WaitForTicks)
+                coroutine.StartTick = Time.LogicTickCount;
+            else if (coroutine.Wait is WaitForPhysicalTicks)
+                coroutine.StartTick = Time.PhysicsTickCount;
         }
     }
 
@@ -174,6 +193,16 @@ public abstract class Script : Component
         {
             coroutine.Timer += deltaTime;
             return coroutine.Timer < wfs.Seconds;
+        }
+
+        if (coroutine.Wait is WaitForTicks wft)
+        {
+            return (Time.LogicTickCount - coroutine.StartTick) < wft.Ticks;
+        }
+
+        if (coroutine.Wait is WaitForPhysicalTicks wfpt)
+        {
+            return (Time.PhysicsTickCount - coroutine.StartTick) < wfpt.Ticks;
         }
 
         if (coroutine.Wait is WaitUntil wu) return !wu.Predicate();
@@ -189,6 +218,7 @@ public abstract class Script : Component
     }
 
     public virtual void Awake() { }
+    public virtual void Start() { }
     public virtual void Update() { }
     public virtual void FixedUpdate() { }
     public virtual void LateUpdate() { }
@@ -204,4 +234,17 @@ public abstract class Script : Component
     public virtual void OnDetectEnd(Entity other) { }
 
     public override void OnDestroy() { StopAllCoroutines(); }
+
+    #region Static Shortcuts
+    public static Entity? Find(string name) => Entity.Find(name);
+    public static Entity? FindWithTag(string tag) => Entity.FindWithTag(tag);
+    public static Entity[] FindEntitiesWithTag(string tag) => Entity.FindEntitiesWithTag(tag);
+    public static T? FindObjectOfType<T>(bool includeInactive = false) where T : Component => Entity.FindObjectOfType<T>(includeInactive);
+    public static T[] FindObjectsOfType<T>(bool includeInactive = false) where T : Component => Entity.FindObjectsOfType<T>(includeInactive);
+    public static void Destroy(Entity entity) => Entity.Destroy(entity);
+    public static void Destroy(Component component) => Entity.Destroy(component);
+    public static Entity Instantiate(string name = "New Entity") => Entity.Instantiate(name);
+    public static Entity? Instantiate(Entity original) => Entity.Instantiate(original);
+    public static T? Instantiate<T>(T original) where T : Component => Entity.Instantiate(original);
+    #endregion
 }

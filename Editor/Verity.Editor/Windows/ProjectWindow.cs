@@ -1,6 +1,8 @@
 using System.Diagnostics;
 using System.Reflection;
+using System.Text.Json;
 using Hexa.NET.ImGui;
+using Verity.Core;
 using Verity.Core.Serialization;
 using Verity.Core.World;
 using Verity.Core.Engine;
@@ -15,66 +17,99 @@ public class ProjectWindow : EditorWindow
     
     private string _inputBuffer = "";
     private string? _targetPath;
+    private string? _creationShaderPath; // Track shader path for style creation
     private ModalMode _activeMode = ModalMode.None;
     private CreationType _creationType = CreationType.Folder;
     private bool _shouldOpenPopup = false;
 
     private enum ModalMode { None, Create, Rename }
-    private enum CreationType { Script, World, Folder }
+    private enum CreationType { Script, World, Folder, Shader, Style }
 
-    public ProjectWindow(EditorApp app) : base("Asset") { _app = app; }
+    public ProjectWindow(EditorApp app) : base(L10n.Tr("window_project")) { _app = app; }
 
     public override void OnGui()
     {
         if (_app.AssetsPath == null) return;
         Directory.CreateDirectory(_app.AssetsPath);
-        _contextDirectory ??= _app.AssetsPath;
+        
+        // Ensure _contextDirectory is always within AssetsPath
+        if (_contextDirectory == null || !_contextDirectory.StartsWith(_app.AssetsPath))
+            _contextDirectory = _app.AssetsPath;
 
         HandleShortcuts();
 
         if (_shouldOpenPopup) { ImGui.OpenPopup("AssetInputModal"); _shouldOpenPopup = false; }
         DrawInputModal();
 
-        ImGui.TextDisabled($"Project: {_app.CurrentProjectName}"); ImGui.Separator();
+        ImGui.TextDisabled($"{L10n.Tr("window_project")}: {_app.CurrentProjectName}"); ImGui.Separator();
 
         if (ImGui.BeginChild("AssetTreeContainer", new System.Numerics.Vector2(0, 0), ImGuiChildFlags.None, ImGuiWindowFlags.NoMove))
         {
             DrawDirectoryNode(_app.AssetsPath, true);
 
-            // Fill remaining space with an invisible button to catch drops on background
             var remainingSpace = ImGui.GetContentRegionAvail();
-            if (remainingSpace.Y < 50) remainingSpace.Y = 50; // Ensure at least a small zone
+            // Ensure there's always at least some space to click
+            if (remainingSpace.Y < 100) remainingSpace.Y = 100; 
+            
+            // Background area for clicking and context menu
             ImGui.InvisibleButton("##ProjectBackgroundDropZone", remainingSpace);
             
+            if (ImGui.IsItemClicked(ImGuiMouseButton.Left))
+            {
+                EditorSelection.SelectedAssetPath = null;
+                _contextDirectory = _app.AssetsPath;
+            }
+
             if (ImGui.BeginDragDropTarget())
             {
                 unsafe
                 {
-                    var entityPayload = ImGui.AcceptDragDropPayload("HIERARCHY_ENTITY");
-                    if (entityPayload.Handle != null && EditorSelection.DraggedEntity != null)
+                    var assetPayload = ImGui.AcceptDragDropPayload("ASSET_PATH");
+                    if (assetPayload.Handle != null && EditorSelection.DraggedAssetPath != null)
                     {
-                        _app.SaveEntityAsBlueprint(EditorSelection.DraggedEntity, _app.AssetsPath);
+                        MoveAsset(EditorSelection.DraggedAssetPath, _app.AssetsPath);
+                        EditorSelection.DraggedAssetPath = null;
+                    }
+
+                    var entityPayload = ImGui.AcceptDragDropPayload("HIERARCHY_ENTITIES");
+                    if (entityPayload.Handle != null)
+                    {
+                        Verity.Core.Debug.Log($"[ProjectWindow] Background drop detected. Selected entities: {EditorSelection.SelectedEntities.Count}");
+                        foreach (var ent in EditorSelection.SelectedEntities)
+                            _app.SaveEntityAsBlueprint(ent, _app.AssetsPath);
                         EditorSelection.DraggedEntity = null;
                     }
                 }
                 ImGui.EndDragDropTarget();
             }
 
-            if (ImGui.BeginPopupContextWindow("AssetBgContext", ImGuiPopupFlags.MouseButtonRight | ImGuiPopupFlags.NoOpenOverItems))
+            // Global context menu for empty space
+            if (ImGui.BeginPopupContextItem("AssetBgContext"))
             {
-                var target = ResolveContextDirectory();
-                if (ImGui.BeginMenu("Create"))
-                {
-                    if (ImGui.MenuItem("World")) OpenCreatePopup(target, CreationType.World);
-                    if (ImGui.MenuItem("Script")) OpenCreatePopup(target, CreationType.Script);
-                    if (ImGui.MenuItem("Folder", "Ctrl+N")) OpenCreatePopup(target, CreationType.Folder);
-                    ImGui.EndMenu();
-                }
+                _contextDirectory = _app.AssetsPath;
+                _creationShaderPath = null;
+                DrawCreateMenu(_app.AssetsPath);
                 ImGui.Separator();
-                if (ImGui.MenuItem("Show in Explorer") && _app.AssetsPath != null) Process.Start("explorer.exe", _app.AssetsPath.Replace("/", "\\"));
+                if (ImGui.MenuItem(L10n.Tr("menu_show_in_explorer")) && _app.AssetsPath != null) Process.Start("explorer.exe", _app.AssetsPath.Replace("/", "\\"));
                 ImGui.EndPopup();
             }
-            ImGui.EndChild();
+        }
+        ImGui.EndChild();
+    }
+
+    public override void RefreshTitle() { Title = L10n.Tr("window_project"); }
+
+    private void DrawCreateMenu(string target)
+    {
+        if (ImGui.BeginMenu(L10n.Tr("menu_create")))
+        {
+            if (ImGui.MenuItem(L10n.Tr("CreationType_World"))) OpenCreatePopup(target, CreationType.World);
+            if (ImGui.MenuItem(L10n.Tr("CreationType_Script"))) OpenCreatePopup(target, CreationType.Script);
+            if (ImGui.MenuItem(L10n.Tr("CreationType_Folder"), "Ctrl+N")) OpenCreatePopup(target, CreationType.Folder);
+            ImGui.Separator();
+            if (ImGui.MenuItem(L10n.Tr("CreationType_Shader"))) OpenCreatePopup(target, CreationType.Shader);
+            if (ImGui.MenuItem(L10n.Tr("CreationType_Style"))) OpenCreatePopup(target, CreationType.Style);
+            ImGui.EndMenu();
         }
     }
 
@@ -85,30 +120,10 @@ public class ProjectWindow : EditorWindow
         if (io.WantCaptureKeyboard) return;
 
         bool ctrl = io.KeyCtrl;
-
-        // Ctrl + N: Create Folder
-        if (ctrl && ImGui.IsKeyPressed(ImGuiKey.N))
-        {
-            OpenCreatePopup(ResolveContextDirectory(), CreationType.Folder);
-        }
-
-        // Delete: Delete Asset
-        if (ImGui.IsKeyPressed(ImGuiKey.Delete) && EditorSelection.SelectedAssetPath != null)
-        {
-            DeleteAsset(EditorSelection.SelectedAssetPath);
-        }
-
-        // F2: Rename Asset
-        if (ImGui.IsKeyPressed(ImGuiKey.F2) && EditorSelection.SelectedAssetPath != null)
-        {
-            OpenRenamePopup(EditorSelection.SelectedAssetPath);
-        }
-
-        // Ctrl + D: Duplicate Asset
-        if (ctrl && ImGui.IsKeyPressed(ImGuiKey.D) && EditorSelection.SelectedAssetPath != null)
-        {
-            DuplicateAsset(EditorSelection.SelectedAssetPath);
-        }
+        if (ctrl && ImGui.IsKeyPressed(ImGuiKey.N)) OpenCreatePopup(ResolveContextDirectory(), CreationType.Folder);
+        if (ImGui.IsKeyPressed(ImGuiKey.Delete) && EditorSelection.SelectedAssetPath != null) DeleteAsset(EditorSelection.SelectedAssetPath);
+        if (ImGui.IsKeyPressed(ImGuiKey.F2) && EditorSelection.SelectedAssetPath != null) OpenRenamePopup(EditorSelection.SelectedAssetPath);
+        if (ctrl && ImGui.IsKeyPressed(ImGuiKey.D) && EditorSelection.SelectedAssetPath != null) DuplicateAsset(EditorSelection.SelectedAssetPath);
     }
 
     private void DeleteAsset(string path)
@@ -127,7 +142,6 @@ public class ProjectWindow : EditorWindow
             var name = Path.GetFileNameWithoutExtension(path);
             var ext = Path.GetExtension(path);
             var next = Path.Combine(dir, name + " (Copy)" + ext);
-            
             if (File.Exists(path)) File.Copy(path, next, true);
             else if (Directory.Exists(path)) CopyDirectory(path, next);
         } catch (Exception e) { Verity.Core.Debug.LogError($"[Asset] Duplicate Failed: {e.Message}"); }
@@ -140,31 +154,87 @@ public class ProjectWindow : EditorWindow
         ImGui.PushID(normalizedPath);
         var flags = ImGuiTreeNodeFlags.OpenOnArrow | ImGuiTreeNodeFlags.SpanAvailWidth;
         if (isRoot) flags |= ImGuiTreeNodeFlags.DefaultOpen;
+        
         bool opened = ImGui.TreeNodeEx("##node", flags, name);
         if (ImGui.IsItemClicked()) { _contextDirectory = path; EditorSelection.SelectedAssetPath = null; }
+        
         if (!isRoot && ImGui.BeginDragDropSource()) { EditorSelection.DraggedAssetPath = normalizedPath; ImGui.SetDragDropPayload("ASSET_PATH", null, 0); ImGui.Text($"Move Folder: {name}"); ImGui.EndDragDropSource(); }
         if (ImGui.BeginDragDropTarget())
         {
-            unsafe
+            var payload = ImGui.AcceptDragDropPayload("ASSET_PATH");
+            if (payload.Handle != null && EditorSelection.DraggedAssetPath != null) { MoveAsset(EditorSelection.DraggedAssetPath, normalizedPath); EditorSelection.DraggedAssetPath = null; }
+            var entityPayload = ImGui.AcceptDragDropPayload("HIERARCHY_ENTITIES");
+            if (entityPayload.Handle != null)
             {
-                var payload = ImGui.AcceptDragDropPayload("ASSET_PATH");
-                if (payload.Handle != null && EditorSelection.DraggedAssetPath != null)
-                {
-                    MoveAsset(EditorSelection.DraggedAssetPath, normalizedPath);
-                    EditorSelection.DraggedAssetPath = null;
-                }
-
-                var entityPayload = ImGui.AcceptDragDropPayload("HIERARCHY_ENTITY");
-                if (entityPayload.Handle != null && EditorSelection.DraggedEntity != null)
-                {
-                    _app.SaveEntityAsBlueprint(EditorSelection.DraggedEntity, normalizedPath);
-                    EditorSelection.DraggedEntity = null;
-                }
+                Verity.Core.Debug.Log($"[ProjectWindow] Folder drop detected on {normalizedPath}. Selected entities: {EditorSelection.SelectedEntities.Count}");
+                foreach (var ent in EditorSelection.SelectedEntities)
+                    _app.SaveEntityAsBlueprint(ent, normalizedPath);
+                EditorSelection.DraggedEntity = null;
             }
             ImGui.EndDragDropTarget();
         }
-        if (ImGui.BeginPopupContextItem("FolderContext")) { _contextDirectory = path; if (ImGui.MenuItem("Show in Explorer")) Process.Start("explorer.exe", path.Replace("/", "\\")); ImGui.Separator(); if (!isRoot) { if (ImGui.MenuItem("Rename")) OpenRenamePopup(path); ImGui.Separator(); } if (ImGui.BeginMenu("Create")) { if (ImGui.MenuItem("World")) OpenCreatePopup(path, CreationType.World); if (ImGui.MenuItem("Script")) OpenCreatePopup(path, CreationType.Script); if (ImGui.MenuItem("Folder")) OpenCreatePopup(path, CreationType.Folder); ImGui.EndMenu(); } ImGui.EndPopup(); }
-        if (opened) { foreach (var d in Directory.GetDirectories(path).OrderBy(Path.GetFileName)) DrawDirectoryNode(d, false); foreach (var f in Directory.GetFiles(path).OrderBy(Path.GetFileName)) { var normalizedFile = f.Replace("\\", "/"); var fileName = Path.GetFileName(f); ImGui.PushID(normalizedFile); bool selected = string.Equals(EditorSelection.SelectedAssetPath, normalizedFile, StringComparison.OrdinalIgnoreCase); if (ImGui.Selectable(fileName, selected, ImGuiSelectableFlags.SpanAllColumns)) { EditorSelection.SelectedAssetPath = normalizedFile; EditorSelection.SelectedEntity = null; _contextDirectory = Path.GetDirectoryName(f); } if (ImGui.BeginDragDropSource()) { EditorSelection.DraggedAssetPath = normalizedFile; ImGui.SetDragDropPayload("ASSET_PATH", null, 0); ImGui.Text($"Move File: {fileName}"); ImGui.EndDragDropSource(); } if (ImGui.IsItemHovered() && ImGui.IsMouseDoubleClicked(0)) OnAssetDoubleClicked(normalizedFile); if (ImGui.BeginPopupContextItem("FileContext")) { EditorSelection.SelectedAssetPath = normalizedFile; EditorSelection.SelectedEntity = null; if (ImGui.MenuItem("Show in Explorer")) Process.Start("explorer.exe", $"/select,\"{f.Replace("/", "\\")}\""); if (ImGui.MenuItem("Rename")) OpenRenamePopup(normalizedFile); if (ImGui.MenuItem("Delete")) { File.Delete(f); } ImGui.EndPopup(); } ImGui.PopID(); } ImGui.TreePop(); }
+
+        if (ImGui.BeginPopupContextItem("FolderContext")) 
+        { 
+            _contextDirectory = path; 
+            _creationShaderPath = null;
+            if (ImGui.MenuItem(L10n.Tr("menu_show_in_explorer"))) Process.Start("explorer.exe", path.Replace("/", "\\")); 
+            ImGui.Separator(); 
+            if (!isRoot) 
+            { 
+                if (ImGui.MenuItem(L10n.Tr("btn_rename"))) OpenRenamePopup(path); 
+                if (ImGui.MenuItem(L10n.Tr("btn_delete"))) DeleteAsset(path);
+                ImGui.Separator(); 
+            } 
+            DrawCreateMenu(path); 
+            ImGui.EndPopup(); 
+        }
+
+        if (opened) 
+        { 
+            foreach (var d in Directory.GetDirectories(path).OrderBy(Path.GetFileName)) 
+                DrawDirectoryNode(d, false); 
+            
+            foreach (var f in Directory.GetFiles(path).OrderBy(Path.GetFileName)) 
+            { 
+                var normalizedFile = f.Replace("\\", "/"); 
+                var fileName = Path.GetFileName(f); 
+                ImGui.PushID(normalizedFile); 
+                bool selected = string.Equals(EditorSelection.SelectedAssetPath, normalizedFile, StringComparison.OrdinalIgnoreCase); 
+                
+                if (ImGui.Selectable(fileName, selected, ImGuiSelectableFlags.SpanAllColumns)) 
+                { 
+                    EditorSelection.SelectedAssetPath = normalizedFile; 
+                    EditorSelection.SelectedEntity = null; 
+                    _contextDirectory = Path.GetDirectoryName(f); 
+                } 
+                
+                if (ImGui.BeginDragDropSource()) { EditorSelection.DraggedAssetPath = normalizedFile; ImGui.SetDragDropPayload("ASSET_PATH", null, 0); ImGui.Text($"Move File: {fileName}"); ImGui.EndDragDropSource(); } 
+                if (ImGui.IsItemHovered() && ImGui.IsMouseDoubleClicked(0)) OnAssetDoubleClicked(normalizedFile); 
+                
+                if (ImGui.BeginPopupContextItem("FileContext")) 
+                { 
+                    EditorSelection.SelectedAssetPath = normalizedFile; 
+                    EditorSelection.SelectedEntity = null; 
+                    var parentDir = Path.GetDirectoryName(f)!;
+                    _contextDirectory = parentDir;
+
+                    if (ImGui.MenuItem(L10n.Tr("menu_show_in_explorer"))) Process.Start("explorer.exe", $"/select,\"{f.Replace("/", "\\")}\""); 
+                    if (ImGui.MenuItem(L10n.Tr("btn_rename"))) OpenRenamePopup(normalizedFile); 
+                    if (ImGui.MenuItem(L10n.Tr("btn_delete"))) { File.Delete(f); if (EditorSelection.SelectedAssetPath == normalizedFile) EditorSelection.SelectedAssetPath = null; } 
+                    ImGui.Separator();
+                    
+                    // Check if right-clicked file is a shader
+                    if (f.EndsWith(".shader")) _creationShaderPath = Path.GetRelativePath(_app.ProjectPath!, f).Replace("\\", "/");
+                    else _creationShaderPath = null;
+
+                    DrawCreateMenu(parentDir);
+                    ImGui.EndPopup(); 
+                } 
+                ImGui.PopID(); 
+            } 
+            ImGui.TreePop(); 
+        }
         ImGui.PopID();
     }
 
@@ -178,20 +248,48 @@ public class ProjectWindow : EditorWindow
         try { var dest = Path.Combine(targetDir, Path.GetFileName(source)); if (File.Exists(source)) File.Move(source, dest); else if (Directory.Exists(source)) Directory.Move(source, dest); if (EditorSelection.SelectedAssetPath == source) EditorSelection.SelectedAssetPath = dest; } catch (Exception e) { Verity.Core.Debug.LogError($"[Asset] Move Failed: {e.Message}"); }
     }
 
-    private void OpenCreatePopup(string dir, CreationType type) { _activeMode = ModalMode.Create; _creationType = type; _targetPath = dir; _inputBuffer = type switch { CreationType.Script => "NewScript", CreationType.World => "NewWorld", _ => "NewFolder" }; _shouldOpenPopup = true; }
+    private void OpenCreatePopup(string dir, CreationType type) { _activeMode = ModalMode.Create; _creationType = type; _targetPath = dir; _inputBuffer = type switch { CreationType.Script => "NewScript", CreationType.World => "NewWorld", CreationType.Shader => "NewShader", CreationType.Style => "NewStyle", _ => "NewFolder" }; _shouldOpenPopup = true; }
     private void OpenRenamePopup(string path) { _activeMode = ModalMode.Rename; _targetPath = path; _inputBuffer = Path.GetFileNameWithoutExtension(path); _shouldOpenPopup = true; }
 
     private unsafe void DrawInputModal()
     {
         var viewport = ImGui.GetMainViewport(); var center = new System.Numerics.Vector2(viewport.Pos.X + viewport.Size.X * 0.5f, viewport.Pos.Y + viewport.Size.Y * 0.5f);
         ImGui.SetNextWindowPos(center, ImGuiCond.Appearing, new System.Numerics.Vector2(0.5f, 0.5f));
-        if (ImGui.BeginPopupModal("AssetInputModal", null, ImGuiWindowFlags.AlwaysAutoResize)) { ImGui.Text(_activeMode == ModalMode.Create ? $"Create {_creationType}" : "Rename Asset"); ImGui.Separator(); if (ImGui.IsWindowAppearing()) ImGui.SetKeyboardFocusHere(); ImGui.InputText("Name", ref _inputBuffer, 64); var btnSize = new System.Numerics.Vector2(120, 0); if (ImGui.Button("OK", btnSize) || ImGui.IsKeyPressed(ImGuiKey.Enter)) { if (_activeMode == ModalMode.Create) FinalizeCreate(); else if (_activeMode == ModalMode.Rename) FinalizeRename(); ImGui.CloseCurrentPopup(); } ImGui.SameLine(); if (ImGui.Button("Cancel", btnSize) || ImGui.IsKeyPressed(ImGuiKey.Escape)) ImGui.CloseCurrentPopup(); ImGui.EndPopup(); }
+        if (ImGui.BeginPopupModal("AssetInputModal", null, ImGuiWindowFlags.AlwaysAutoResize)) { 
+            string title = _activeMode == ModalMode.Create ? L10n.Tr("msg_create_asset", L10n.Tr($"CreationType_{_creationType}")) : L10n.Tr("msg_rename_asset");
+            ImGui.Text(title); 
+            ImGui.Separator(); 
+            if (ImGui.IsWindowAppearing()) ImGui.SetKeyboardFocusHere(); 
+            ImGui.InputText(L10n.Tr("label_name"), ref _inputBuffer, 64); 
+            var btnSize = new System.Numerics.Vector2(120, 0); 
+            if (ImGui.Button(L10n.Tr("btn_ok"), btnSize) || ImGui.IsKeyPressed(ImGuiKey.Enter)) { 
+                if (_activeMode == ModalMode.Create) FinalizeCreate(); 
+                else if (_activeMode == ModalMode.Rename) FinalizeRename(); 
+                ImGui.CloseCurrentPopup(); 
+            } 
+            ImGui.SameLine(); 
+            if (ImGui.Button(L10n.Tr("btn_cancel"), btnSize) || ImGui.IsKeyPressed(ImGuiKey.Escape)) ImGui.CloseCurrentPopup(); 
+            ImGui.EndPopup(); 
+        }
     }
 
     private void FinalizeCreate()
     {
         if (_targetPath == null || string.IsNullOrWhiteSpace(_inputBuffer)) return;
-        try { switch (_creationType) { case CreationType.Script: File.WriteAllText(Path.Combine(_targetPath, _inputBuffer + ".cs"), $"using Verity.Core.ECS;\n\npublic class {_inputBuffer} : Script\n{{\n    void Start()\n    {{\n    }}\n\n    void Update()\n    {{\n    }}\n}}"); break; case CreationType.World: var w = new World(_inputBuffer); var c = w.CreateEntity("Main Camera"); c.AddComponent<Camera>(); var p = Path.Combine(_targetPath, _inputBuffer + ".verity"); File.WriteAllText(p, SceneSerializer.Serialize(w)); LoadWorldByPath(p); break; case CreationType.Folder: Directory.CreateDirectory(Path.Combine(_targetPath, _inputBuffer)); break; } } catch (Exception e) { Verity.Core.Debug.LogError(e.Message); }
+        try { 
+            var fullPath = Path.Combine(_targetPath, _inputBuffer);
+            switch (_creationType) { 
+                case CreationType.Script: File.WriteAllText(fullPath + ".cs", $"// using Verity.Core;\n// using Verity.Graphics;\n// using Verity.Input;\n// using System.Numerics;\nusing Verity.Core.ECS;\n\npublic class {_inputBuffer} : Script\n{{\n    void Start()\n    {{\n    }}\n\n    void Update()\n    {{\n    }}\n}}"); break; 
+                case CreationType.World: var w = new World(_inputBuffer); var c = w.CreateEntity("Main Camera"); c.AddComponent<Camera>(); var p = fullPath + ".verity"; File.WriteAllText(p, SceneSerializer.Serialize(w)); LoadWorldByPath(p); break; 
+                case CreationType.Folder: Directory.CreateDirectory(fullPath); break; 
+                case CreationType.Shader: File.WriteAllText(fullPath + ".shader", "// VERTEX\n#version 330 core\nlayout(location = 0) in vec2 aPosition;\nlayout(location = 1) in vec2 aTexCoord;\nuniform mat4 uProjection;\nuniform mat4 uView;\nuniform mat4 uModel;\nout vec2 vTexCoord;\nvoid main() {\n    vTexCoord = aTexCoord;\n    gl_Position = uProjection * uView * uModel * vec4(aPosition, 0.0, 1.0);\n}\n\n// FRAGMENT\n#version 330 core\nin vec2 vTexCoord;\nuniform sampler2D uTexture;\nuniform vec4 uColor;\nout vec4 FragColor;\nvoid main() {\n    FragColor = texture(uTexture, vTexCoord) * uColor;\n}"); break;
+                case CreationType.Style: 
+                    var sd = new StyleData(); 
+                    if (!string.IsNullOrEmpty(_creationShaderPath)) sd.ShaderPath = _creationShaderPath;
+                    File.WriteAllText(fullPath + ".style", JsonSerializer.Serialize(sd, new JsonSerializerOptions { WriteIndented = true })); 
+                    break;
+            } 
+        } catch (Exception e) { Verity.Core.Debug.LogError(e.Message); }
     }
 
     private void FinalizeRename()
@@ -200,46 +298,34 @@ public class ProjectWindow : EditorWindow
         try { var dir = Path.GetDirectoryName(_targetPath)!; var next = Path.Combine(dir, _inputBuffer + Path.GetExtension(_targetPath)).Replace("\\", "/"); if (File.Exists(_targetPath)) File.Move(_targetPath, next); else if (Directory.Exists(_targetPath)) Directory.Move(_targetPath, next); if (EditorSelection.SelectedAssetPath == _targetPath) EditorSelection.SelectedAssetPath = next; } catch (Exception e) { Verity.Core.Debug.LogError(e.Message); }
     }
 
-    private void OnAssetDoubleClicked(string path) { if (path.EndsWith(".verity")) LoadWorldByPath(path); else if (path.EndsWith(".blueprint")) _app.InstantiateBlueprint(path); else if (path.EndsWith(".cs")) Process.Start(new ProcessStartInfo { FileName = path, UseShellExecute = true }); }
+    private void OnAssetDoubleClicked(string path) { if (path.EndsWith(".verity")) LoadWorldByPath(path); else if (path.EndsWith(".cs") || path.EndsWith(".shader") || path.EndsWith(".style")) Process.Start(new ProcessStartInfo { FileName = path, UseShellExecute = true }); }
 
     public void LoadWorldByPath(string path) {
         if (!File.Exists(path)) return;
-        
-        // Ensure we exit play mode before switching worlds
         if (_app.IsPlaying) _app.ExitPlayMode();
-
         var w = WorldManager.CreateOrReplaceWorld(Path.GetFileNameWithoutExtension(path));
         SceneSerializer.Deserialize(w, File.ReadAllText(path), _app.ScriptCompiler?.CompiledAssembly);
-
-        // Re-bind textures for all sprite renderers
         foreach (var entity in w.GetAllEntities()) {
             var sr = entity.GetComponent<SpriteRenderer>();
             if (sr != null && !string.IsNullOrWhiteSpace(sr.Sprite.Path)) {
                 var fullPath = Path.Combine(_app.ProjectPath!, sr.Sprite.Path);
-                if (File.Exists(fullPath)) {
-                    sr.Texture = _app.TextureManager.Load(fullPath);
-                }
+                if (File.Exists(fullPath)) sr.Texture = _app.TextureManager.Load(fullPath);
             }
         }
-
         WorldManager.SetActiveWorld(w);
+        _app.ResetDirty();
     }
 
     public void CreateWorldInProject() => OpenCreatePopup(_app.AssetsPath!, CreationType.World);
     public void SaveActiveWorldAsAsset() 
     { 
-        if (_app.IsPlaying)
-        {
-            _app.ShowOverlayMessage("Cannot save world during Play Mode!", 3.0f);
-            return;
-        }
+        if (_app.IsPlaying) { _app.ShowOverlayMessage("Cannot save world during Play Mode!", 3.0f); return; }
         if (WorldManager.ActiveWorld == null || _app.AssetsPath == null) return; 
         var p = Path.Combine(_app.AssetsPath, $"{WorldManager.ActiveWorld.Name}.verity"); 
         File.WriteAllText(p, SceneSerializer.Serialize(WorldManager.ActiveWorld)); 
+        _app.ResetDirty();
         _app.ShowOverlayMessage($"World saved: {WorldManager.ActiveWorld.Name}");
     }
-
-    public void BuildAndRun() { /* Removed per user request */ }
 
     public void PublishSingleFile()
     {
@@ -251,28 +337,19 @@ public class ProjectWindow : EditorWindow
                 var publishDir = Path.Combine(_app.ProjectPath, "Build");
                 if (Directory.Exists(publishDir)) try { Directory.Delete(publishDir, true); } catch {}
                 Directory.CreateDirectory(publishDir);
-
                 var projectRoot = ResolveProjectRoot();
                 if (projectRoot == null) { Verity.Core.Debug.LogError("[Publish] Could not find solution root."); return; }
                 var gameProjDir = Path.Combine(projectRoot, "Verity.Game");
-
-                // 1. Sync Assets to Game Project temporarily for embedding
                 _app.BuildStatus = "Syncing Assets to Game Engine...";
                 var gameAssets = Path.Combine(gameProjDir, "Assets");
                 if (Directory.Exists(gameAssets)) Directory.Delete(gameAssets, true);
                 CopyDirectory(_app.AssetsPath!, gameAssets);
-
-                // 2. Sync BuildSettings.json
                 _app.BuildStatus = "Syncing Build Settings...";
                 var settingsSrc = Path.Combine(_app.ProjectPath, "BuildSettings.json");
                 if (File.Exists(settingsSrc)) File.Copy(settingsSrc, Path.Combine(gameProjDir, "BuildSettings.json"), true);
-
-                // 3. Compile Scripts
                 _app.BuildStatus = "Compiling Script Library...";
                 var gameDll = Path.Combine(gameProjDir, "UserScripts.dll");
                 _app.ScriptCompiler?.CompileToFile(gameDll);
-
-                // 4. Run dotnet publish
                 _app.BuildStatus = "Running .NET Publish (May take a minute)...";
                 var psi = new ProcessStartInfo("dotnet", $"publish \"{Path.Combine(gameProjDir, "Verity.Game.csproj")}\" -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -o \"{publishDir}\"") {
                     CreateNoWindow = true, UseShellExecute = false, RedirectStandardOutput = true, RedirectStandardError = true
@@ -283,13 +360,8 @@ public class ProjectWindow : EditorWindow
                     if (line != null) _app.BuildStatus = line.Length > 40 ? line.Substring(0, 40) + "..." : line;
                 }
                 proc.WaitForExit();
-
-                if (proc.ExitCode == 0) {
-                    _app.BuildStatus = "Done!";
-                    Process.Start("explorer.exe", publishDir);
-                } else {
-                    Verity.Core.Debug.LogError("[Publish] Publish failed. See console.");
-                }
+                if (proc.ExitCode == 0) { _app.BuildStatus = "Done!"; Process.Start("explorer.exe", publishDir); }
+                else { Verity.Core.Debug.LogError("[Publish] Publish failed. See console."); }
             } catch (Exception e) { Verity.Core.Debug.LogError($"[Publish] Error: {e.Message}"); }
             finally { _app.IsBuilding = false; }
         });

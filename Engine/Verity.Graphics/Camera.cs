@@ -1,6 +1,7 @@
 using System.Numerics;
 using Verity.Core.ECS;
 using Verity.Core.World;
+using Verity.Core;
 
 namespace Verity.Graphics;
 
@@ -25,8 +26,13 @@ public class Camera : Component
     [HideInInspector]
     public Vector2 Position { get; set; } = Vector2.Zero;
 
+    private float _rotation;
     [HideInInspector]
-    public float Rotation { get; set; } = 0.0f;
+    public float Rotation 
+    { 
+        get => _rotation; 
+        set => _rotation = value % 360f; 
+    }
 
     [SerializeField]
     public bool FixedAspectRatio { get; set; } = false;
@@ -44,7 +50,7 @@ public class Camera : Component
     public int ViewportWidth => _viewportW;
     public int ViewportHeight => _viewportH;
 
-    public float TargetAspectRatio => (AspectWidth > 0 && AspectHeight > 0) ? AspectWidth / AspectHeight : 1.777f;
+    public float TargetAspectRatio => (AspectWidth > 0.0001f && AspectHeight > 0.0001f) ? AspectWidth / AspectHeight : 1.777f;
     public float CurrentAspectRatio => _viewportH > 0 ? (float)_viewportW / _viewportH : TargetAspectRatio;
 
     // Editor Helpers
@@ -53,7 +59,7 @@ public class Camera : Component
 
     public void SetViewportRect(int x, int y, int w, int h)
     {
-        _viewportX = x; _viewportY = y; _viewportW = w; _viewportH = h;
+        _viewportX = x; _viewportY = y; _viewportW = Math.Max(1, w); _viewportH = Math.Max(1, h);
     }
 
     public void SetViewportSize(int w, int h) => SetViewportRect(0, 0, w, h);
@@ -65,6 +71,7 @@ public class Camera : Component
 
     public Matrix4x4 GetProjectionMatrix(float viewportAspect)
     {
+        if (viewportAspect < 0.0001f) viewportAspect = 1.0f;
         float hH = VisibleHalfHeight;
         float hW = hH * viewportAspect;
         
@@ -94,8 +101,8 @@ public class Camera : Component
     {
         float lx = screenPos.X - _viewportX;
         float ly = screenPos.Y - _viewportY;
-        float ndcX = (2f * lx / _viewportW) - 1f;
-        float ndcY = 1f - (2f * ly / _viewportH);
+        float ndcX = _viewportW > 0 ? (2f * lx / _viewportW) - 1f : 0f;
+        float ndcY = _viewportH > 0 ? 1f - (2f * ly / _viewportH) : 0f;
         var inv = Matrix4x4.Identity;
         if (Matrix4x4.Invert(GetViewMatrix() * GetProjectionMatrix(), out inv))
         {

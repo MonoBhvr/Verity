@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 
 namespace Verity.Input;
 
@@ -8,25 +9,27 @@ namespace Verity.Input;
 /// </summary>
 public static class FilterRegistry
 {
-    private static readonly Dictionary<(Type, string), int> _valueToBit = new();
-    private static readonly Dictionary<int, (Type Type, string Name)> _bitToValue = new();
+    private static readonly Dictionary<(string, string), int> _valueToBit = new();
+    private static readonly Dictionary<int, (string TypeName, string Name)> _bitToValue = new();
     private static readonly object _lock = new();
     private static int _nextBitIndex = 0;
     private const int MaxBits = 64;
 
-    /// <summary>
-    /// 특정 Enum 값에 할당된 비트 인덱스를 가져옵니다. 없으면 새로 할당합니다.
-    /// </summary>
     public static int GetBitIndex<T>(T value) where T : struct, Enum
     {
-        return GetBitIndex(typeof(T), value.ToString()!);
+        return GetBitIndex(typeof(T).FullName ?? typeof(T).Name, value.ToString()!);
     }
 
     public static int GetBitIndex(Type enumType, string valueName)
     {
+        return GetBitIndex(enumType.FullName ?? enumType.Name, valueName);
+    }
+
+    public static int GetBitIndex(string typeName, string valueName)
+    {
         lock (_lock)
         {
-            var key = (enumType, valueName);
+            var key = (typeName, valueName);
             if (_valueToBit.TryGetValue(key, out int index))
                 return index;
 
@@ -37,22 +40,19 @@ public static class FilterRegistry
 
             index = _nextBitIndex++;
             _valueToBit[key] = index;
-            _bitToValue[index] = (enumType, valueName);
+            _bitToValue[index] = (typeName, valueName);
             return index;
         }
     }
 
-    /// <summary>
-    /// 마스크 내에서 특정 Enum 타입에 해당하는 모든 값들을 반환합니다.
-    /// </summary>
     public static IEnumerable<T> GetValuesFromMask<T>(ulong mask) where T : struct, Enum
     {
-        var targetType = typeof(T);
+        var targetTypeName = typeof(T).FullName ?? typeof(T).Name;
         for (int i = 0; i < MaxBits; i++)
         {
             if ((mask & (1UL << i)) != 0)
             {
-                if (_bitToValue.TryGetValue(i, out var info) && info.Type == targetType)
+                if (_bitToValue.TryGetValue(i, out var info) && info.TypeName == targetTypeName)
                 {
                     if (Enum.TryParse<T>(info.Name, out var result))
                         yield return result;
@@ -61,9 +61,6 @@ public static class FilterRegistry
         }
     }
 
-    /// <summary>
-    /// 특정 Enum 값에 해당하는 비트 마스크(1 << index)를 가져옵니다.
-    /// </summary>
     public static ulong GetMask<T>(T value) where T : struct, Enum
     {
         return 1UL << GetBitIndex(value);
@@ -72,6 +69,17 @@ public static class FilterRegistry
     public static ulong GetMask(Type enumType, string valueName)
     {
         return 1UL << GetBitIndex(enumType, valueName);
+    }
+
+    public static ulong GetMask(string typeName, string valueName)
+    {
+        return 1UL << GetBitIndex(typeName, valueName);
+    }
+
+    public static ulong GetGroupMask(string groupName)
+    {
+        // "PhysicsGroup" is the conventional type name used for physics identity layers
+        return GetMask("PhysicsGroup", groupName);
     }
 
     public static void Clear()

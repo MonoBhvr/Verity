@@ -56,52 +56,28 @@ public static class Input
     public static bool GetKey(Filter? filter)
     {
         if (filter == null || !_enabled) return false;
-        if (filter.Mode == FilterMode.Whitelist)
-        {
-            foreach (var key in filter.GetValues<KeyCode>())
-                if (GetKey(key)) return true;
-            return false;
-        }
-        else
-        {
-            foreach (var key in _keysDown)
-                if (!filter.Check(key)) return true;
-            return false;
-        }
+        
+        foreach (var k in _keysDown) if (filter.Check(k)) return true;
+        foreach (var b in _buttonsDown) if (filter.Check(b)) return true;
+        return false;
     }
 
     public static bool GetKeyDown(Filter? filter)
     {
         if (filter == null || !_enabled) return false;
-        if (filter.Mode == FilterMode.Whitelist)
-        {
-            foreach (var key in filter.GetValues<KeyCode>())
-                if (GetKeyDown(key)) return true;
-            return false;
-        }
-        else
-        {
-            foreach (var key in _pressedThisTick)
-                if (!filter.Check(key)) return true;
-            return false;
-        }
+        
+        foreach (var k in _pressedThisTick) if (filter.Check(k)) return true;
+        foreach (var b in _mousePressedThisTick) if (filter.Check(b)) return true;
+        return false;
     }
 
     public static bool GetKeyUp(Filter? filter)
     {
         if (filter == null || !_enabled) return false;
-        if (filter.Mode == FilterMode.Whitelist)
-        {
-            foreach (var key in filter.GetValues<KeyCode>())
-                if (GetKeyUp(key)) return true;
-            return false;
-        }
-        else
-        {
-            foreach (var key in _releasedThisTick)
-                if (!filter.Check(key)) return true;
-            return false;
-        }
+        
+        foreach (var k in _releasedThisTick) if (filter.Check(k)) return true;
+        foreach (var b in _mouseReleasedThisTick) if (filter.Check(b)) return true;
+        return false;
     }
 
     public static bool GetKey(string filterName) => GetKey(Filter.Get(filterName));

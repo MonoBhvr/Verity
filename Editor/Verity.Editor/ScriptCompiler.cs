@@ -75,34 +75,60 @@ public class ScriptCompiler : IDisposable
             return true;
         }
 
-        var syntaxTrees = csFiles.Select(f => CSharpSyntaxTree.ParseText(File.ReadAllText(f), path: f)).ToList();
+        Verity.Core.Debug.Log($"[ScriptCompiler] Starting compilation of {csFiles.Length} files...");
+
+        var fileContents = csFiles.ToDictionary(f => f, f => File.ReadAllText(f));
+        var syntaxTrees = fileContents.Select(kvp => CSharpSyntaxTree.ParseText(kvp.Value, path: kvp.Key)).ToList();
         var references = GetMetadataReferences();
 
-        var compilation = CSharpCompilation.Create(
-            "VerityUserScripts_" + Guid.NewGuid().ToString("N"),
-            syntaxTrees,
-            references,
-            new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary).WithAllowUnsafe(true));
+        var compilation = CreateCompilation(syntaxTrees, references);
 
         using var ms = new MemoryStream();
         var result = compilation.Emit(ms);
 
         if (!result.Success)
         {
-            foreach (var diag in result.Diagnostics.Where(d => d.Severity == DiagnosticSeverity.Error))
-                Verity.Core.Debug.LogError($"[ScriptCompiler] {diag}");
+            var errors = result.Diagnostics.Where(d => d.Severity == DiagnosticSeverity.Error).ToList();
+            var brokenFiles = errors.Select(d => d.Location.SourceTree?.FilePath).Where(p => p != null).Distinct().ToHashSet();
+
+            Verity.Core.Debug.LogError($"[ScriptCompiler] Compilation failed with {errors.Count} errors in {brokenFiles.Count} files.");
+            
+            foreach (var diag in errors)
+            {
+                var lineSpan = diag.Location.GetLineSpan();
+                var fileName = Path.GetFileName(lineSpan.Path);
+                Verity.Core.Debug.LogError($"  - {fileName}({lineSpan.StartLinePosition.Line + 1},{lineSpan.StartLinePosition.Character + 1}): {diag.GetMessage()}");
+            }
+
+            // [FIX] 컴파일 실패 시 기존 어셈블리를 그대로 유지하여 데이터 유실 방지
+            // lock (_lock) { _compiledAssembly = null; _componentTypes.Clear(); }
+            OnCompilationFinished?.Invoke();
             return false;
         }
 
-        var newAssembly = Assembly.Load(ms.ToArray());
+        Verity.Core.Debug.Log("[ScriptCompiler] Compilation successful!");
+        LoadAssembly(ms.ToArray());
+        return true;
+    }
+
+    private CSharpCompilation CreateCompilation(IEnumerable<SyntaxTree> trees, IEnumerable<MetadataReference> refs)
+    {
+        return CSharpCompilation.Create(
+            "VerityUserScripts_" + Guid.NewGuid().ToString("N"),
+            trees,
+            refs,
+            new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary).WithAllowUnsafe(true));
+    }
+
+    private void LoadAssembly(byte[] rawAssembly)
+    {
+        var newAssembly = Assembly.Load(rawAssembly);
         lock (_lock)
         {
             _compiledAssembly = newAssembly;
             DiscoverComponentTypes();
         }
-
         OnCompilationFinished?.Invoke();
-        return true;
     }
 
     public bool CompileToFile(string outputPath)
@@ -166,6 +192,38 @@ public class ScriptCompiler : IDisposable
         }
         lock (_lock) { types.AddRange(_componentTypes); }
         return types.OrderBy(t => t.Name).ToList();
+    }
+
+    public List<Type> GetAllEnumTypes()
+    {
+        var types = new List<Type>();
+        var assemblies = new HashSet<Assembly>
+        {
+            typeof(Component).Assembly,
+            typeof(Verity.Graphics.Camera).Assembly,
+            typeof(Verity.Input.Input).Assembly,
+            typeof(Verity.Core.World.World).Assembly
+        };
+
+        foreach (var asm in assemblies)
+        {
+            foreach (var type in asm.GetTypes())
+            {
+                if (type.IsEnum && type.IsPublic) types.Add(type);
+            }
+        }
+
+        lock (_lock)
+        {
+            if (_compiledAssembly != null)
+            {
+                foreach (var type in _compiledAssembly.GetTypes())
+                {
+                    if (type.IsEnum && type.IsPublic) types.Add(type);
+                }
+            }
+        }
+        return types.OrderBy(t => t.FullName).ToList();
     }
 
     public void Dispose() { _watcher?.Dispose(); _debounceTimer?.Dispose(); }

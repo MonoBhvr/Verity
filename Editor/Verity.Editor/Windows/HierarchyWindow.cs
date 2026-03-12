@@ -9,24 +9,27 @@ public unsafe class HierarchyWindow : EditorWindow
 {
     private readonly EditorApp _app;
 
-    public HierarchyWindow(EditorApp app) : base("Hierarchy")
+    public HierarchyWindow(EditorApp app) : base(L10n.Tr("window_hierarchy"))
     {
         _app = app;
     }
-
     public override void OnGui()
     {
         var world = WorldManager.ActiveWorld;
         if (world == null)
         {
-            ImGui.Text("No active world");
+            ImGui.Text(L10n.Tr("msg_no_active_world"));
             return;
         }
 
         DrawInputModal();
         HandleShortcuts(world);
 
-        ImGui.Text(world.Name);
+        DrawHierarchy(world);
+    }
+
+    private void DrawHierarchy(World world)
+    {
         ImGui.Separator();
 
         foreach (var entity in world.RootEntities.ToArray())
@@ -35,41 +38,60 @@ public unsafe class HierarchyWindow : EditorWindow
         DrawRootDropZone(world);
 
         if (ImGui.IsMouseClicked(ImGuiMouseButton.Left) && ImGui.IsWindowHovered() && !ImGui.IsAnyItemHovered())
-            EditorSelection.SelectedEntity = null;
+            EditorSelection.ClearSelection();
 
         if (ImGui.BeginPopupContextWindow())
         {
-            if (ImGui.MenuItem("Create Empty", "Ctrl+N"))
+            if (ImGui.MenuItem(L10n.Tr("ctx_create_empty"), "Ctrl+N"))
             {
                 _app.RecordUndo();
-                world.CreateEntity("GameObject");
+                var ent = world.CreateEntity(L10n.Tr("CreationType_Entity"));
+                EditorSelection.SelectedEntity = ent;
             }
 
-            if (ImGui.BeginMenu("Create"))
+            if (ImGui.BeginMenu(L10n.Tr("menu_create")))
             {
-                if (ImGui.MenuItem("Sprite"))
+                if (ImGui.MenuItem(L10n.Tr("CreationType_Sprite")))
                 {
                     _app.RecordUndo();
-                    var sprite = world.CreateEntity("Sprite");
+                    var sprite = world.CreateEntity(L10n.Tr("CreationType_Sprite"));
                     sprite.AddComponent<SpriteRenderer>();
+                    EditorSelection.SelectedEntity = sprite;
                 }
 
                 if (!WorldHasCamera(world))
                 {
-                    if (ImGui.MenuItem("Camera"))
+                    if (ImGui.MenuItem(L10n.Tr("CreationType_Camera")))
                     {
                         _app.RecordUndo();
-                        var camera = world.CreateEntity("Camera");
+                        var camera = world.CreateEntity(L10n.Tr("CreationType_Camera"));
                         camera.AddComponent<Camera>();
+                        EditorSelection.SelectedEntity = camera;
                     }
                 }
 
                 ImGui.EndMenu();
             }
 
+            if (EditorSelection.SelectedEntities.Count > 0)
+            {
+                ImGui.Separator();
+                if (ImGui.MenuItem(L10n.Tr("ctx_copy"), "Ctrl+C")) CopySelected();
+                if (ImGui.MenuItem(L10n.Tr("ctx_paste"), "Ctrl+V")) Paste(world);
+                if (ImGui.MenuItem(L10n.Tr("ctx_duplicate"), "Ctrl+D")) DuplicateSelected(world);
+                if (ImGui.MenuItem(L10n.Tr("ctx_delete"), "Del")) DeleteSelected(world);
+            }
+            else if (CanPaste())
+            {
+                ImGui.Separator();
+                if (ImGui.MenuItem(L10n.Tr("ctx_paste"), "Ctrl+V")) Paste(world);
+            }
+
             ImGui.EndPopup();
         }
     }
+
+    public override void RefreshTitle() { Title = L10n.Tr("window_hierarchy"); }
 
     private void HandleShortcuts(World world)
     {
@@ -83,17 +105,16 @@ public unsafe class HierarchyWindow : EditorWindow
         if (ctrl && ImGui.IsKeyPressed(ImGuiKey.N))
         {
             _app.RecordUndo();
-            var entity = world.CreateEntity("GameObject");
+            var entity = world.CreateEntity(L10n.Tr("CreationType_Entity"));
             if (EditorSelection.SelectedEntity != null)
                 SetParent(entity, EditorSelection.SelectedEntity);
             EditorSelection.SelectedEntity = entity;
         }
 
         // Delete: Delete Entity
-        if (ImGui.IsKeyPressed(ImGuiKey.Delete) && EditorSelection.SelectedEntity != null)
+        if (ImGui.IsKeyPressed(ImGuiKey.Delete) && EditorSelection.SelectedEntities.Count > 0)
         {
-            _app.RecordUndo();
-            DeleteEntity(EditorSelection.SelectedEntity, world);
+            DeleteSelected(world);
         }
 
         // F: Focus selected entity
@@ -109,31 +130,61 @@ public unsafe class HierarchyWindow : EditorWindow
         }
 
         // Ctrl + D: Duplicate Entity
-        if (ctrl && ImGui.IsKeyPressed(ImGuiKey.D) && EditorSelection.SelectedEntity != null)
+        if (ctrl && ImGui.IsKeyPressed(ImGuiKey.D) && EditorSelection.SelectedEntities.Count > 0)
         {
-            _app.RecordUndo();
-            DuplicateEntity(EditorSelection.SelectedEntity, world);
+            DuplicateSelected(world);
+        }
+
+        if (ctrl && ImGui.IsKeyPressed(ImGuiKey.C)) CopySelected();
+        if (ctrl && ImGui.IsKeyPressed(ImGuiKey.V)) Paste(world);
+    }
+
+    public void DeleteSelected(World world)
+    {
+        _app.RecordUndo();
+        var toDelete = EditorSelection.SelectedEntities.ToList();
+        EditorSelection.ClearSelection();
+        foreach (var entity in toDelete)
+        {
+            DeleteEntity(entity, world);
         }
     }
 
-    private void DuplicateEntity(Entity original, World world)
+    public void DuplicateSelected(World world)
     {
-        void CopyRecursive(Entity src, Entity? targetParent)
+        _app.RecordUndo();
+        var originals = EditorSelection.SelectedEntities.ToList();
+        var clones = new List<Entity>();
+        foreach (var original in originals)
+        {
+            var clone = DuplicateEntityInternal(original, world, original.Transform.Parent?.Owner);
+            if (clone != null) clones.Add(clone);
+        }
+        EditorSelection.ClearSelection();
+        foreach (var clone in clones) EditorSelection.Select(clone, true);
+    }
+
+    private Entity? DuplicateEntityInternal(Entity original, World world, Entity? targetParent)
+    {
+        Entity? rootClone = null;
+        void CopyRecursive(Entity src, Entity? parent)
         {
             var clone = world.CreateEntity(src.Name + " (Copy)");
+            if (rootClone == null) rootClone = clone;
+
+            // 1. Set Parent First
+            if (parent != null)
+                clone.Transform.SetParent(parent.Transform, preserveWorldPosition: false);
+
+            // 2. Set Local Transforms
             clone.Transform.Position = src.Transform.Position;
             clone.Transform.Rotation = src.Transform.Rotation;
             clone.Transform.Scale = src.Transform.Scale;
-            
-            if (targetParent != null)
-                clone.Transform.SetParent(targetParent.Transform, preserveWorldPosition: true);
 
             foreach (var comp in src.GetAllComponents())
             {
                 if (comp is Transform) continue;
                 var cloneComp = clone.AddComponent(comp.GetType());
-                
-                // Copy properties via reflection
                 foreach (var prop in comp.GetType().GetProperties(System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance))
                 {
                     if (prop.CanRead && prop.CanWrite && prop.DeclaringType != typeof(Component))
@@ -151,7 +202,42 @@ public unsafe class HierarchyWindow : EditorWindow
                 CopyRecursive(child.Owner, clone);
         }
 
-        CopyRecursive(original, original.Transform.Parent?.Owner);
+        CopyRecursive(original, targetParent);
+        return rootClone;
+    }
+
+    private static string? _copyBuffer;
+    public void CopySelected()
+    {
+        if (EditorSelection.SelectedEntities.Count == 0) return;
+        var json = new System.Text.Json.Nodes.JsonArray();
+        foreach (var ent in EditorSelection.SelectedEntities)
+            json.Add(System.Text.Json.Nodes.JsonNode.Parse(Verity.Core.Serialization.SceneSerializer.SerializeEntity(ent)));
+        _copyBuffer = json.ToString();
+    }
+
+    public bool CanPaste() => !string.IsNullOrEmpty(_copyBuffer);
+
+    public void Paste(World world)
+    {
+        if (string.IsNullOrEmpty(_copyBuffer)) return;
+        _app.RecordUndo();
+        var array = System.Text.Json.Nodes.JsonNode.Parse(_copyBuffer)?.AsArray();
+        if (array == null) return;
+
+        var targetParent = EditorSelection.SelectedEntity;
+        var pasted = new List<Entity>();
+        foreach (var node in array)
+        {
+            var ent = Verity.Core.Serialization.SceneSerializer.DeserializeEntity(world, node!.ToString(), _app.ScriptCompiler?.CompiledAssembly);
+            if (ent != null)
+            {
+                if (targetParent != null) ent.Transform.SetParent(targetParent.Transform, false);
+                pasted.Add(ent);
+            }
+        }
+        EditorSelection.ClearSelection();
+        foreach (var ent in pasted) EditorSelection.Select(ent, true);
     }
 
     private string _renameBuffer = "";
@@ -175,17 +261,17 @@ public unsafe class HierarchyWindow : EditorWindow
 
         if (ImGui.BeginPopupModal("RenameEntityModal", null, ImGuiWindowFlags.AlwaysAutoResize))
         {
-            ImGui.Text("Rename Entity");
+            ImGui.Text(L10n.Tr("msg_rename_entity"));
             ImGui.Separator();
             if (ImGui.IsWindowAppearing()) { 
                 ImGui.SetKeyboardFocusHere();
                 _app.BeginUndoAction(); 
             }
             
-            ImGui.InputText("Name", ref _renameBuffer, 64);
+            ImGui.InputText(L10n.Tr("label_name"), ref _renameBuffer, 64);
             
             var btnSize = new System.Numerics.Vector2(120, 0);
-            if (ImGui.Button("OK", btnSize) || ImGui.IsKeyPressed(ImGuiKey.Enter))
+            if (ImGui.Button(L10n.Tr("btn_ok"), btnSize) || ImGui.IsKeyPressed(ImGuiKey.Enter))
             {
                 if (_renameTarget != null && !string.IsNullOrWhiteSpace(_renameBuffer))
                 {
@@ -195,7 +281,7 @@ public unsafe class HierarchyWindow : EditorWindow
                 ImGui.CloseCurrentPopup();
             }
             ImGui.SameLine();
-            if (ImGui.Button("Cancel", btnSize) || ImGui.IsKeyPressed(ImGuiKey.Escape))
+            if (ImGui.Button(L10n.Tr("btn_cancel"), btnSize) || ImGui.IsKeyPressed(ImGuiKey.Escape))
             {
                 _app.EndUndoAction(); // Close without changes
                 ImGui.CloseCurrentPopup();
@@ -206,16 +292,22 @@ public unsafe class HierarchyWindow : EditorWindow
 
     private void DrawRootDropZone(World world)
     {
-        ImGui.InvisibleButton("##rootdrop", new System.Numerics.Vector2(-1, ImGui.GetFrameHeight()));
+        var remaining = ImGui.GetContentRegionAvail();
+        if (remaining.Y < 50) remaining.Y = 50;
+        ImGui.InvisibleButton("##rootdrop", remaining);
         if (ImGui.BeginDragDropTarget())
         {
             unsafe
             {
-                var payload = ImGui.AcceptDragDropPayload("HIERARCHY_ENTITY");
-                if (payload.Handle != null && EditorSelection.DraggedEntity != null && EditorSelection.DraggedEntity.Transform.Parent != null)
+                var payload = ImGui.AcceptDragDropPayload("HIERARCHY_ENTITIES");
+                if (payload.Handle != null)
                 {
                     _app.RecordUndo();
-                    SetParent(EditorSelection.DraggedEntity, null);
+                    foreach (var ent in EditorSelection.SelectedEntities.ToArray())
+                    {
+                        if (ent.Transform.Parent != null)
+                            SetParent(ent, null);
+                    }
                     EditorSelection.DraggedEntity = null;
                 }
 
@@ -228,7 +320,7 @@ public unsafe class HierarchyWindow : EditorWindow
                 }
                 else if (EditorSelection.DraggedAssetPath != null && EditorSelection.DraggedAssetPath.EndsWith(".blueprint"))
                 {
-                    ImGui.SetTooltip($"Add Blueprint to World: {System.IO.Path.GetFileNameWithoutExtension(EditorSelection.DraggedAssetPath)}");
+                    ImGui.SetTooltip(L10n.Tr("msg_add_blueprint_to_world", System.IO.Path.GetFileNameWithoutExtension(EditorSelection.DraggedAssetPath)));
                 }
             }
             ImGui.EndDragDropTarget();
@@ -265,16 +357,41 @@ public unsafe class HierarchyWindow : EditorWindow
         if (entity.Transform.Children.Count == 0)
             flags |= ImGuiTreeNodeFlags.Leaf;
 
-        if (EditorSelection.SelectedEntity == entity)
+        if (EditorSelection.IsSelected(entity))
             flags |= ImGuiTreeNodeFlags.Selected;
 
         ImGui.PushID(entity.GetHashCode());
         bool opened = ImGui.TreeNodeEx(entity.Name, flags);
 
         if (ImGui.IsItemClicked())
-            EditorSelection.SelectedEntity = entity;
+        {
+            var io = ImGui.GetIO();
+            if (io.KeyCtrl)
+            {
+                if (EditorSelection.IsSelected(entity)) EditorSelection.Deselect(entity);
+                else EditorSelection.Select(entity, true);
+            }
+            else if (io.KeyShift && EditorSelection.SelectedEntity != null)
+            {
+                var world = WorldManager.ActiveWorld;
+                if (world != null)
+                {
+                    var all = world.GetAllEntities().ToList();
+                    int start = all.IndexOf(EditorSelection.SelectedEntity);
+                    int end = all.IndexOf(entity);
+                    if (start != -1 && end != -1)
+                    {
+                        for (int i = Math.Min(start, end); i <= Math.Max(start, end); i++)
+                            EditorSelection.Select(all[i], true);
+                    }
+                }
+            }
+            else
+            {
+                EditorSelection.SelectedEntity = entity;
+            }
+        }
 
-        // Double-click to focus (Mirroring 'F' shortcut)
         if (ImGui.IsItemHovered() && ImGui.IsMouseDoubleClicked(ImGuiMouseButton.Left))
         {
             _app.FocusEntity(entity);
@@ -282,9 +399,11 @@ public unsafe class HierarchyWindow : EditorWindow
 
         if (ImGui.BeginDragDropSource())
         {
+            if (!EditorSelection.IsSelected(entity)) EditorSelection.SelectedEntity = entity;
             EditorSelection.DraggedEntity = entity;
-            ImGui.SetDragDropPayload("HIERARCHY_ENTITY", null, 0);
-            ImGui.Text(entity.Name);
+            
+            ImGui.SetDragDropPayload("HIERARCHY_ENTITIES", null, 0);
+            ImGui.Text(L10n.Tr("msg_moving_entities", EditorSelection.SelectedEntities.Count));
             ImGui.EndDragDropSource();
         }
 
@@ -292,15 +411,15 @@ public unsafe class HierarchyWindow : EditorWindow
         {
             unsafe
             {
-                var payload = ImGui.AcceptDragDropPayload("HIERARCHY_ENTITY");
-                if (payload.Handle != null && EditorSelection.DraggedEntity != null && EditorSelection.DraggedEntity != entity)
+                var payload = ImGui.AcceptDragDropPayload("HIERARCHY_ENTITIES");
+                if (payload.Handle != null)
                 {
-                    if (!IsDescendantOf(entity, EditorSelection.DraggedEntity))
+                    _app.RecordUndo();
+                    foreach (var ent in EditorSelection.SelectedEntities.ToArray())
                     {
-                        _app.RecordUndo();
-                        SetParent(EditorSelection.DraggedEntity, entity);
+                        if (ent != entity && !IsDescendantOf(entity, ent))
+                            SetParent(ent, entity);
                     }
-                    EditorSelection.DraggedEntity = null;
                 }
 
                 var assetPayload = ImGui.AcceptDragDropPayload("ASSET_PATH");
@@ -310,27 +429,19 @@ public unsafe class HierarchyWindow : EditorWindow
                     _app.InstantiateBlueprint(EditorSelection.DraggedAssetPath, null, entity);
                     EditorSelection.DraggedAssetPath = null;
                 }
-                else if (EditorSelection.DraggedAssetPath != null && EditorSelection.DraggedAssetPath.EndsWith(".blueprint"))
-                {
-                    ImGui.SetTooltip($"Add Blueprint as Child: {System.IO.Path.GetFileNameWithoutExtension(EditorSelection.DraggedAssetPath)}");
-                }
             }
             ImGui.EndDragDropTarget();
         }
 
         if (ImGui.BeginPopupContextItem())
         {
-            if (ImGui.MenuItem("Save as Blueprint"))
+            if (ImGui.MenuItem(L10n.Tr("ctx_save_as_blueprint")))
             {
-                _app.SaveEntityAsBlueprint(entity);
+                foreach (var ent in EditorSelection.SelectedEntities) _app.SaveEntityAsBlueprint(ent);
             }
             ImGui.Separator();
-            if (ImGui.MenuItem("Delete"))
-            {
-                var world = WorldManager.ActiveWorld;
-                if (world != null)
-                    DeleteEntity(entity, world);
-            }
+            if (ImGui.MenuItem(L10n.Tr("ctx_duplicate"), "Ctrl+D")) DuplicateSelected(WorldManager.ActiveWorld!);
+            if (ImGui.MenuItem(L10n.Tr("ctx_delete"), "Del")) DeleteSelected(WorldManager.ActiveWorld!);
             ImGui.EndPopup();
         }
 

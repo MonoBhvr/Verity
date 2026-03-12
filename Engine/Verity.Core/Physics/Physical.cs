@@ -1,5 +1,6 @@
 using System.Numerics;
 using Verity.Core.ECS;
+using Verity.Core;
 using Verity.Input;
 
 namespace Verity.Core.Physics;
@@ -28,6 +29,8 @@ public class Physical : Component
 
     public Vector2 Velocity { get; set; } = Vector2.Zero;
     public float AngularVelocity { get; set; } = 0.0f;
+
+    [HideInInspector]
     public float TorqueAccumulator { get; set; } = 0.0f;
 
     public float? LinearDamping { get; set; } = null;
@@ -35,8 +38,9 @@ public class Physical : Component
     public float? Friction { get; set; } = null;
     public float? Bounciness { get; set; } = null;
 
+    [SerializeField, PhysicsGroupSelector]
     public string GroupName { get; set; } = "Default";
-    public ulong GroupMask => Filter.Get(GroupName)?.Mask ?? 1UL;
+    public ulong GroupMask => Filter.Get(GroupName)?.Mask ?? FilterRegistry.GetGroupMask(GroupName);
 
     public float GravityScale { get; set; } = 1.0f;
     public float SleepThreshold { get; set; } = 0.01f;
@@ -50,6 +54,7 @@ public class Physical : Component
     public void Push(Vector2 force)
     {
         if (IsStatic) return;
+        if (force.LengthSquared() < 0.005f) return;
         ForceAccumulator += force;
         WakeUp();
     }
@@ -57,6 +62,7 @@ public class Physical : Component
     public void PushTorque(float torque)
     {
         if (IsStatic || IsRotationLocked) return;
+        if (MathF.Abs(torque) < 0.005f) return;
         TorqueAccumulator += torque;
         WakeUp();
     }
@@ -69,7 +75,9 @@ public class Physical : Component
 
     public bool IsTouchingAnything() => PhysicsManager.IsTouchingAnything(this);
     public bool IsTouching(string groupName) => PhysicsManager.IsTouching(this, groupName);
+    public bool IsTouchingGroup(string groupName) => PhysicsManager.IsTouching(this, groupName);
     public bool IsTouching(Entity entity) => PhysicsManager.IsTouching(this, entity);
+    public bool IsGrounded(string groupName) => PhysicsManager.IsGrounded(this, groupName);
     public IEnumerable<Entity> GetTouchingEntities() => PhysicsManager.GetTouchingEntities(this);
 
     internal void UpdateSleepStatus(float deltaTime, float physicsThreshold)

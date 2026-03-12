@@ -20,7 +20,7 @@ app.AddWindow(new ConsoleWindow());
 app.AddWindow(new ProjectWindow(app));
 app.AddWindow(new BuildSettingsWindow(app));
 app.AddWindow(new ProfilerWindow(app));
-app.AddWindow(new FilterEditorWindow());
+app.AddWindow(new FilterEditorWindow(app));
 
 if (!string.IsNullOrEmpty(initialProject))
 {

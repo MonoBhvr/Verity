@@ -1,4 +1,19 @@
+using System;
+
 namespace Verity.Core;
+
+[AttributeUsage(AttributeTargets.Field | AttributeTargets.Property)]
+public class SerializeFieldAttribute : Attribute { }
+
+[AttributeUsage(AttributeTargets.Field | AttributeTargets.Property)]
+public class HideInInspectorAttribute : Attribute { }
+
+[AttributeUsage(AttributeTargets.Field | AttributeTargets.Property)]
+public class AssetReferenceAttribute : Attribute
+{
+    public string Extension { get; }
+    public AssetReferenceAttribute(string extension = "") { Extension = extension; }
+}
 
 [AttributeUsage(AttributeTargets.Method)]
 public class ButtonAttribute : Attribute
@@ -6,3 +21,21 @@ public class ButtonAttribute : Attribute
     public string? Label { get; }
     public ButtonAttribute(string? label = null) => Label = label;
 }
+
+// 용도별 선택기 어트리뷰트
+[AttributeUsage(AttributeTargets.Field | AttributeTargets.Property)]
+public class TagSelectorAttribute : Attribute { }
+
+[AttributeUsage(AttributeTargets.Field | AttributeTargets.Property)]
+public class PhysicsGroupSelectorAttribute : Attribute { }
+
+[AttributeUsage(AttributeTargets.Field | AttributeTargets.Property)]
+public class SortingLayerSelectorAttribute : Attribute { }
+
+[AttributeUsage(AttributeTargets.Field | AttributeTargets.Property)]
+public class FilterSelectorAttribute : Attribute { }
+
+// 필터 시스템에서 사용할 타입 마커
+public sealed class Tag { }
+public sealed class SortingLayer { }
+public sealed class PhysicsGroup { }

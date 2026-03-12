@@ -7,9 +7,9 @@ Verity 엔진의 강력한 2D 물리 엔진 설계 문서입니다.
 | 기존 용어 | Verity 용어 | 설명 |
 | :--- | :--- | :--- |
 | Rigidbody | **Physical** | 물리 법칙이 적용되는 실체 컴포넌트 |
-| Collider | **PhysicalShape** | 충돌 영역을 정의하는 컴포넌트의 기반 |
-| Box/Circle Collider | **BoxShape / CircleShape** | 상자 및 원형 충돌 형태 |
-| Polygon Collider | **PolygonShape** | 다각형 충돌 형태 (SAT 알고리즘 사용) |
+| Shape | **PhysicalShape** | 충돌 영역을 정의하는 컴포넌트의 기반 |
+| Box/Circle Shape | **BoxShape / CircleShape** | 상자 및 원형 충돌 형태 |
+| Polygon Shape | **PolygonShape** | 다각형 충돌 형태 (SAT 알고리즘 사용) |
 | Trigger | **Sensor** | 물리적 충돌 없이 감지만 수행하는 설정 |
 | Restitution | **Bounciness** | 튕기는 정도 (0~1) |
 | Layer / Filter | **Group** | 충돌 여부를 결정하는 그룹 (Matrix 기반) |

@@ -8,11 +8,13 @@ namespace Verity.Graphics;
 public class DebugDraw
 {
     private readonly Shader2D _shader;
+    private readonly Irodori.Buffer.VertexBuffer.Uploaded _quadBuffer;
     private TextureObjectUploaded? _whitePixel;
 
-    public DebugDraw(Shader2D shader)
+    public DebugDraw(Shader2D shader, Irodori.Buffer.VertexBuffer.Uploaded quadBuffer)
     {
         _shader = shader;
+        _quadBuffer = quadBuffer;
     }
 
     public void SetWhitePixel(TextureObjectUploaded whitePixel)
@@ -36,7 +38,7 @@ public class DebugDraw
             _shader.SetModel(model);
             _shader.SetTexture(_whitePixel);
             _shader.SetColor(line.Color);
-            _shader.QuadBuffer.Draw(_shader.Program, targetFbo);
+            _quadBuffer.Draw(_shader.Program, targetFbo);
         }
     }
 

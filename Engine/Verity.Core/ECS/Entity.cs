@@ -4,6 +4,7 @@ public class Entity
 {
     public Guid Id { get; internal set; } = Guid.NewGuid();
     public string Name { get; set; }
+    public string Tag { get; set; } = "Untagged";
     public bool Active { get; set; } = true;
     public Transform Transform { get; }
 
@@ -18,6 +19,92 @@ public class Entity
         _components.Add(Transform);
     }
 
+    #region Find Methods
+    public static Entity? Find(string name)
+    {
+        var world = Verity.Core.World.WorldManager.ActiveWorld;
+        if (world == null) return null;
+        return world.GetAllEntities().FirstOrDefault(e => e.Name == name);
+    }
+
+    public static Entity? FindWithTag(string tag)
+    {
+        var world = Verity.Core.World.WorldManager.ActiveWorld;
+        if (world == null) return null;
+        return world.GetAllEntities().FirstOrDefault(e => e.Tag == tag);
+    }
+
+    public static Entity[] FindEntitiesWithTag(string tag)
+    {
+        var world = Verity.Core.World.WorldManager.ActiveWorld;
+        if (world == null) return Array.Empty<Entity>();
+        return world.GetAllEntities().Where(e => e.Tag == tag).ToArray();
+    }
+
+    public static T? FindObjectOfType<T>(bool includeInactive = false) where T : class
+    {
+        var world = Verity.Core.World.WorldManager.ActiveWorld;
+        if (world == null) return null;
+        foreach (var entity in world.GetAllEntities())
+        {
+            if (!includeInactive && !entity.Active) continue;
+            var comp = entity.GetComponent<T>();
+            if (comp != null) return comp;
+        }
+        return null;
+    }
+
+    public static T[] FindObjectsOfType<T>(bool includeInactive = false) where T : class
+    {
+        var world = Verity.Core.World.WorldManager.ActiveWorld;
+        if (world == null) return Array.Empty<T>();
+        var results = new List<T>();
+        foreach (var entity in world.GetAllEntities())
+        {
+            if (!includeInactive && !entity.Active) continue;
+            results.AddRange(entity.GetComponents<T>());
+        }
+        return results.ToArray();
+    }
+
+    public static void Destroy(Entity entity)
+    {
+        entity.World?.DestroyEntity(entity);
+    }
+
+    public static void Destroy(Component component)
+    {
+        component.Owner.RemoveComponent(component);
+    }
+
+    public static Entity Instantiate(string name = "New Entity")
+    {
+        var world = Verity.Core.World.WorldManager.ActiveWorld;
+        if (world == null) throw new InvalidOperationException("No active world to instantiate entity.");
+        return world.CreateEntity(name);
+    }
+
+    public static Entity? Instantiate(Entity original)
+    {
+        var world = Verity.Core.World.WorldManager.ActiveWorld;
+        if (world == null) return null;
+        
+        string json = Verity.Core.Serialization.SceneSerializer.SerializeEntity(original);
+        var clone = Verity.Core.Serialization.SceneSerializer.DeserializeEntity(world, json);
+        if (clone != null)
+        {
+            clone.Name = original.Name + " (Clone)";
+        }
+        return clone;
+    }
+
+    public static T? Instantiate<T>(T original) where T : Component
+    {
+        var cloneEntity = Instantiate(original.Owner);
+        return cloneEntity?.GetComponent<T>();
+    }
+    #endregion
+
     public T AddComponent<T>() where T : Component, new()
     {
         if (typeof(T) == typeof(Transform))
@@ -26,8 +113,11 @@ public class Entity
         var component = new T { Owner = this };
         _components.Add(component);
 
-        if (component is Script script)
-            script.Awake();
+        // [SYNC] PolygonShape가 추가될 때 PolygonRenderer가 이미 있으면 동기화
+        if (component is Verity.Core.Physics.PolygonShape poly)
+        {
+            poly.SyncWithRenderer();
+        }
 
         return component;
     }
@@ -44,20 +134,23 @@ public class Entity
         component.Owner = this;
         _components.Add(component);
 
-        if (component is Script script)
-            script.Awake();
+        // [SYNC] PolygonShape가 추가될 때 PolygonRenderer가 이미 있으면 동기화
+        if (component is Verity.Core.Physics.PolygonShape poly)
+        {
+            poly.SyncWithRenderer();
+        }
 
         return component;
     }
 
-    public T? GetComponent<T>() where T : Component
+    public T? GetComponent<T>() where T : class
     {
         foreach (var component in _components)
         {
             if (component is T typed)
                 return typed;
         }
-        return null;
+        return default;
     }
 
     public Component? GetComponent(Type type)
@@ -70,12 +163,66 @@ public class Entity
         return null;
     }
 
-    public IEnumerable<T> GetComponents<T>() where T : Component
+    public IEnumerable<T> GetComponents<T>() where T : class
     {
         foreach (var component in _components)
         {
             if (component is T typed)
                 yield return typed;
+        }
+    }
+
+    public T? GetComponentInChildren<T>(bool includeInactive = false) where T : class
+    {
+        if (!includeInactive && !Active) return default;
+
+        var comp = GetComponent<T>();
+        if (comp != null) return comp;
+
+        foreach (var child in Transform.Children)
+        {
+            var found = child.Owner.GetComponentInChildren<T>(includeInactive);
+            if (found != null) return found;
+        }
+
+        return default;
+    }
+
+    public IEnumerable<T> GetComponentsInChildren<T>(bool includeInactive = false) where T : class
+    {
+        if (!includeInactive && !Active) yield break;
+
+        foreach (var comp in GetComponents<T>())
+            yield return comp;
+
+        foreach (var child in Transform.Children)
+        {
+            foreach (var found in child.Owner.GetComponentsInChildren<T>(includeInactive))
+                yield return found;
+        }
+    }
+
+    public T? GetComponentInParent<T>(bool includeInactive = false) where T : class
+    {
+        if (!includeInactive && !Active) return default;
+
+        var comp = GetComponent<T>();
+        if (comp != null) return comp;
+
+        return Transform.Parent?.Owner.GetComponentInParent<T>(includeInactive);
+    }
+
+    public IEnumerable<T> GetComponentsInParent<T>(bool includeInactive = false) where T : class
+    {
+        if (!includeInactive && !Active) yield break;
+
+        foreach (var comp in GetComponents<T>())
+            yield return comp;
+
+        if (Transform.Parent != null)
+        {
+            foreach (var found in Transform.Parent.Owner.GetComponentsInParent<T>(includeInactive))
+                yield return found;
         }
     }
 

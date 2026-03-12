@@ -92,14 +92,41 @@ internal sealed class WorldSnapshot
         world.ClearAllEntities();
 
         var created = new List<Entity>(_entities.Count);
+        
+        // 1. Create all entities first
         foreach (var snapshot in _entities)
         {
             var entity = world.CreateEntity(snapshot.Name);
             entity.Id = snapshot.Id;
             entity.Active = snapshot.Active;
+            created.Add(entity);
+        }
+
+        // 2. Restore hierarchy FIRST before setting transforms
+        for (int i = 0; i < _entities.Count; i++)
+        {
+            var parentIndex = _entities[i].ParentIndex;
+            if (parentIndex >= 0)
+            {
+                created[i].Transform.SetParent(created[parentIndex].Transform, false);
+            }
+        }
+
+        // 3. Now set local transforms (they are now correctly relative to parents)
+        for (int i = 0; i < _entities.Count; i++)
+        {
+            var snapshot = _entities[i];
+            var entity = created[i];
             entity.Transform.Position = snapshot.Position;
             entity.Transform.Rotation = snapshot.Rotation;
             entity.Transform.Scale = snapshot.Scale;
+        }
+
+        // 4. Restore components
+        for (int i = 0; i < _entities.Count; i++)
+        {
+            var snapshot = _entities[i];
+            var entity = created[i];
 
             foreach (var componentSnapshot in snapshot.Components)
             {
@@ -122,14 +149,6 @@ internal sealed class WorldSnapshot
                     }
                 }
             }
-
-            created.Add(entity);
-        }
-
-        for (int i = 0; i < _entities.Count; i++)
-        {
-            var parentIndex = _entities[i].ParentIndex;
-            created[i].Transform.Parent = parentIndex >= 0 ? created[parentIndex].Transform : null;
         }
 
         foreach (var entity in created)

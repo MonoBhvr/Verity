@@ -11,7 +11,7 @@ public class ScreenWindow : EditorWindow
 {
     private readonly EditorApp _app;
 
-    public ScreenWindow(EditorApp app) : base("Screen")
+    public ScreenWindow(EditorApp app) : base(L10n.Tr("window_screen"))
     {
         _app = app;
     }
@@ -53,6 +53,8 @@ public class ScreenWindow : EditorWindow
             }
         }
     }
+
+    public override void RefreshTitle() { Title = L10n.Tr("window_screen"); }
 
     private void HandleInteraction(Camera camera, Vector2 imgMin, Vector2 imgSize)
     {

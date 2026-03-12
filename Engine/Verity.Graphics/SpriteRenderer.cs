@@ -5,18 +5,24 @@ using Verity.Core;
 
 namespace Verity.Graphics;
 
-public class SpriteRenderer : Component
+public class SpriteRenderer : Component, IHasSize
 {
     [SerializeField]
     public Sprite Sprite { get; set; }
 
+    [SerializeField]
+    public StyleAsset Style { get; set; }
+
     [HideInInspector]
     public TextureObjectUploaded? Texture { get; set; }
+
+    [HideInInspector]
+    public StyleRuntime? StyleRuntime { get; set; }
 
     [SerializeField]
     public Verity.Core.Color Color { get; set; } = Verity.Core.Color.White;
 
-    [SerializeField]
+    [SerializeField, SortingLayerSelector]
     public string SortingLayerName { get; set; } = "Default";
 
     [SerializeField]
@@ -24,6 +30,9 @@ public class SpriteRenderer : Component
 
     [SerializeField]
     public Vector2 Pivot { get; set; } = new(0.5f, 0.5f);
+
+    [SerializeField]
+    public Vector2 Size { get; set; } = Vector2.One;
 
     [SerializeField]
     public bool FlipX { get; set; } = false;
@@ -38,19 +47,19 @@ public class SpriteRenderer : Component
 
         float texW = Texture.Width;
         float texH = Texture.Height;
-        if (texW <= 0 || texH <= 0) return;
+        if (texW <= 0.0001f || texH <= 0.0001f) return;
 
         float aspect = texW / texH;
-        Vector2 currentScale = Owner.Transform.Scale;
-        float maxScale = MathF.Max(MathF.Abs(currentScale.X), MathF.Abs(currentScale.Y));
+        Vector2 currentSize = Size;
+        float maxSize = MathF.Max(MathF.Abs(currentSize.X), MathF.Abs(currentSize.Y));
 
         if (aspect >= 1.0f) // 가로가 더 길거나 같음
         {
-            Owner.Transform.Scale = new Vector2(maxScale, maxScale / aspect);
+            Size = new Vector2(maxSize, maxSize / aspect);
         }
         else // 세로가 더 김
         {
-            Owner.Transform.Scale = new Vector2(maxScale * aspect, maxScale);
+            Size = new Vector2(maxSize * aspect, maxSize);
         }
     }
 

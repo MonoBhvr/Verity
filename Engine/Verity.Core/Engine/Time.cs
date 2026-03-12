@@ -6,6 +6,16 @@ namespace Verity.Core.Engine;
 public static class Time
 {
     /// <summary>
+    /// Current target Ticks Per Second for logic.
+    /// </summary>
+    public static int TargetTPS { get; internal set; } = 60;
+
+    /// <summary>
+    /// Current target Physics Ticks Per Second.
+    /// </summary>
+    public static int TargetPTPS { get; internal set; } = 50;
+
+    /// <summary>
     /// Time in seconds since the last frame.
     /// </summary>
     public static float DeltaTime { get; internal set; }

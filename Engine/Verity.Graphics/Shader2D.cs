@@ -39,24 +39,40 @@ void main()
 ";
 
     private readonly ShaderProgram.Linked _program;
-    private readonly VertexBuffer.Uploaded _quadBuffer;
 
     public ShaderProgram.Linked Program => _program;
-    public VertexBuffer.Uploaded QuadBuffer => _quadBuffer;
 
-    private Shader2D(ShaderProgram.Linked program, VertexBuffer.Uploaded quadBuffer)
+    public struct ShaderUniform
     {
-        _program = program;
-        _quadBuffer = quadBuffer;
+        public string Type;
+        public string Name;
     }
 
-    public static Shader2D Create(GraphicsDevice device)
+    public static List<ShaderUniform> ParseUniforms(string source)
     {
-        var vertexShader = device.CreateShader(EShaderType.Vertex, VertexSource)
+        var uniforms = new List<ShaderUniform>();
+        if (string.IsNullOrWhiteSpace(source)) return uniforms;
+
+        var matches = System.Text.RegularExpressions.Regex.Matches(source, @"uniform\s+(\w+)\s+(\w+)\s*;");
+        foreach (System.Text.RegularExpressions.Match match in matches)
+        {
+            uniforms.Add(new ShaderUniform { Type = match.Groups[1].Value, Name = match.Groups[2].Value });
+        }
+        return uniforms;
+    }
+
+    private Shader2D(ShaderProgram.Linked program)
+    {
+        _program = program;
+    }
+
+    public static Shader2D Create(GraphicsDevice device, string? vertexSource = null, string? fragmentSource = null)
+    {
+        var vertexShader = device.CreateShader(EShaderType.Vertex, vertexSource ?? VertexSource)
             .Compile()
             .Unwrap();
 
-        var fragmentShader = device.CreateShader(EShaderType.Fragment, FragmentSource)
+        var fragmentShader = device.CreateShader(EShaderType.Fragment, fragmentSource ?? FragmentSource)
             .Compile()
             .Unwrap();
 
@@ -69,31 +85,7 @@ void main()
         vertexShader.Dispose();
         fragmentShader.Dispose();
 
-        var quadBuffer = CreateQuadBuffer(device);
-
-        return new Shader2D(program, quadBuffer);
-    }
-
-    // Unit quad: [0,0] to [1,1] — model matrix handles position, scale, rotation
-    private static VertexBuffer.Uploaded CreateQuadBuffer(GraphicsDevice device)
-    {
-        var format = VertexBufferFormat.Create()
-            .AddAttrib(VertexBufferFormat.Attrib.Vector2())  // aPosition
-            .AddAttrib(VertexBufferFormat.Attrib.Vector2()); // aTexCoord
-
-        var data = IVertexData.Create<Vector2, Vector2>();
-        //   0---1
-        //   | / |
-        //   2---3
-        data.AddVertex(new Vector2(0, 0), new Vector2(0, 0)); // top-left
-        data.AddVertex(new Vector2(1, 0), new Vector2(1, 0)); // top-right
-        data.AddVertex(new Vector2(0, 1), new Vector2(0, 1)); // bottom-left
-        data.AddVertex(new Vector2(1, 1), new Vector2(1, 1)); // bottom-right
-
-        var indices = new int[] { 0, 2, 1, 1, 2, 3 };
-
-        var buffer = device.CreateVertexBuffer(format);
-        return buffer.Upload(data, indices).Unwrap();
+        return new Shader2D(program);
     }
 
     public void SetProjection(Matrix4x4 projection)
@@ -116,14 +108,24 @@ void main()
         _program.SetTexture("uTexture", texture);
     }
 
+    public void SetTexture(string name, TextureObjectUploaded texture)
+    {
+        _program.SetTexture(name, texture);
+    }
+
     public void SetColor(Verity.Core.Color color)
     {
         _program.SetVec4("uColor", color);
     }
 
+    public void SetFloat(string name, float value) => _program.SetFloat(name, value);
+    public void SetVec2(string name, Vector2 value) => _program.SetVec2(name, value);
+    public void SetVec3(string name, Vector3 value) => _program.SetVec3(name, value);
+    public void SetVec4(string name, Vector4 value) => _program.SetVec4(name, value);
+    public void SetMat4(string name, Matrix4x4 value) => _program.SetMat4(name, value);
+
     public void Dispose()
     {
         _program.Dispose();
-        _quadBuffer.Dispose();
     }
 }

@@ -83,7 +83,7 @@ public class Filter
         if (!string.IsNullOrEmpty(EnumTypeName))
         {
             var type = FilterManager.ResolveTypeInternal(EnumTypeName);
-            if (type != null && type.IsEnum)
+            if (type != null)
             {
                 foreach (var v in Values)
                 {
@@ -96,7 +96,7 @@ public class Filter
         foreach (var mv in MixedValues)
         {
             var type = FilterManager.ResolveTypeInternal(mv.TypeName);
-            if (type != null && type.IsEnum)
+            if (type != null)
             {
                 _mask |= FilterRegistry.GetMask(type, mv.Value);
             }

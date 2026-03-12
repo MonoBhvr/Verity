@@ -28,6 +28,9 @@ public class GameLoop
         int targetTPS = world.UseCustomSettings ? world.CustomTPS : ProjectSettings.TargetTPS;
         int targetPTPS = world.UseCustomSettings ? world.CustomPTPS : ProjectSettings.TargetPTPS;
 
+        Time.TargetTPS = targetTPS;
+        Time.TargetPTPS = targetPTPS;
+
         float logicFixedDelta = 1.0f / Math.Max(1, targetTPS);
         float physicsFixedDelta = 1.0f / Math.Max(1, targetPTPS);
 
@@ -61,13 +64,18 @@ public class GameLoop
         // Start Phase
         foreach (var script in scripts)
         {
-            if (!script.HasStarted)
+            if (!script.HasAwoken)
             {
                 script._awakeDelegate?.Invoke();
-                
-                // Regular Start (now handles both void and IEnumerator via internal wrapping)
+                script.HasAwoken = true;
+            }
+        }
+
+        foreach (var script in scripts)
+        {
+            if (!script.HasStarted)
+            {
                 script._startDelegate?.Invoke();
-                
                 script.HasStarted = true;
             }
         }
@@ -91,7 +99,7 @@ public class GameLoop
     private void PerformPhysicsTick(World.World world, float fixedDelta)
     {
         Time.PhysicsTickCount++;
-        Verity.Core.Physics.PhysicsManager.Step(fixedDelta, world);
+        Verity.Core.Physics.PhysicsManager.Step(fixedDelta, world, ProjectSettings);
         OnPhysicsTick?.Invoke();
     }
 
