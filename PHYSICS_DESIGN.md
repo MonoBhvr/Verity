@@ -1,6 +1,7 @@
 # Verity Physics Engine Design Specification
 
 Verity 엔진의 강력한 2D 물리 엔진 설계 문서입니다.
+초기 설계 문서로, 현재와 차이가 있을 수 있습니다.
 
 ## 1. 핵심 네이밍 가이드 (Naming Convention)
 
