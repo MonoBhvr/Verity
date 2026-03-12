@@ -15,7 +15,8 @@ if (Test-Path $distPath) {
 
 # 3. 에디터(Editor) 빌드 및 게시
 Write-Host ">> [1/4] 에디터(Editor) 빌드 중..." -ForegroundColor Yellow
-dotnet publish Editor/Verity.Editor.App/Verity.Editor.App.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -o $editorDist --nologo
+# PublishSingleFile을 사용하되, 네이티브 DLL은 외부로 노출하여 로딩 문제를 방지합니다.
+dotnet publish Editor/Verity.Editor.App/Verity.Editor.App.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:EnableCompressionInSingleFile=true -o $editorDist --nologo
 
 # 4. 런타임(Runtime/Game Player) 빌드 및 게시
 Write-Host ">> [2/4] 런타임 엔진(Runtime) 빌드 중..." -ForegroundColor Yellow
