@@ -81,6 +81,9 @@ dotnet run --project Editor/Verity.Editor.App/Verity.Editor.App.csproj
 
 Verity Engine은 현재 활발히 개발 중인 Alpha 단계 프로젝트입니다. 핵심 기능들이 지속적으로 추가 및 개선되고 있습니다.
 ### Inprogress...
+- **UI**
+- **Rope**
+- **Fracture**
 - **TileMap**
 - **Sprite Setting**
 - **Animation**
