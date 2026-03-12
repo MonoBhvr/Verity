@@ -74,7 +74,6 @@ dotnet run --project Editor/Verity.Editor.App/Verity.Editor.App.csproj
 엔진의 상세 아키텍처와 스크립팅 API에 대한 정보는 아래 문서에서 확인하실 수 있습니다.
 
 -   [Architecture & Scripting API Reference](ARCHITECTURE.md)
--   [Physics Engine Design Specification](PHYSICS_DESIGN.md)
 
 ---
 

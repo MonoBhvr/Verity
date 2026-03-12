@@ -15,9 +15,11 @@ public class SpatialHashGrid
 
     private long GetKey(int x, int y) => ((long)x << 32) | (uint)y;
 
-    public void Add(Physical physical)
+    public void Add(Physical physical, List<PhysicalShape> shapes)
     {
-        var aabb = GetAABB(physical);
+        var aabb = GetCombinedAABB(shapes);
+        if (aabb.IsDefault()) return;
+
         int minX = (int)Math.Floor(aabb.Min.X / _cellSize);
         int minY = (int)Math.Floor(aabb.Min.Y / _cellSize);
         int maxX = (int)Math.Floor(aabb.Max.X / _cellSize);
@@ -38,9 +40,11 @@ public class SpatialHashGrid
         }
     }
 
-    public IEnumerable<Physical> GetPotentialCollisions(Physical physical)
+    public IEnumerable<Physical> GetPotentialCollisions(Physical physical, List<PhysicalShape> shapes)
     {
-        var aabb = GetAABB(physical);
+        var aabb = GetCombinedAABB(shapes);
+        if (aabb.IsDefault()) return Enumerable.Empty<Physical>();
+
         int minX = (int)Math.Floor(aabb.Min.X / _cellSize);
         int minY = (int)Math.Floor(aabb.Min.Y / _cellSize);
         int maxX = (int)Math.Floor(aabb.Max.X / _cellSize);
@@ -64,10 +68,23 @@ public class SpatialHashGrid
         return potentials;
     }
 
-    private AABB GetAABB(Physical physical)
+    private AABB GetCombinedAABB(List<PhysicalShape> shapes)
     {
-        var shape = physical.Owner.GetComponent<PhysicalShape>();
-        return shape?.GetAABB() ?? new AABB();
+        if (shapes == null || shapes.Count == 0) return new AABB(Vector2.Zero, Vector2.Zero);
+        
+        Vector2 min = new Vector2(float.MaxValue);
+        Vector2 max = new Vector2(float.MinValue);
+        bool any = false;
+
+        foreach (var shape in shapes)
+        {
+            var aabb = shape.GetAABB();
+            min = Vector2.Min(min, aabb.Min);
+            max = Vector2.Max(max, aabb.Max);
+            any = true;
+        }
+
+        return any ? new AABB(min, max) : new AABB(Vector2.Zero, Vector2.Zero);
     }
 
     public void Clear() => _grid.Clear();

@@ -58,7 +58,17 @@ public class EditorApp : IDisposable
     public string? ProjectPath => CurrentProjectName != null ? Path.Combine(ProjectsRoot, CurrentProjectName) : null;
     public string? AssetsPath => ProjectPath != null ? Path.Combine(ProjectPath, "Assets") : null;
 
-    public string EditorLogoPath => Path.Combine(AppContext.BaseDirectory, "EditorResources", "EditorLogo.png");
+    public string EditorLogoPath {
+        get {
+            string[] searchPaths = {
+                Path.Combine(AppContext.BaseDirectory, "EditorResources", "EditorLogo.png"),
+                Path.Combine(AppContext.BaseDirectory, "..", "EditorResources", "EditorLogo.png"),
+                Path.Combine(Directory.GetCurrentDirectory(), "EditorResources", "EditorLogo.png")
+            };
+            return searchPaths.FirstOrDefault(File.Exists) ?? Path.Combine(AppContext.BaseDirectory, "EditorLogo.png");
+        }
+    }
+
     private string GlobalSettingsPath => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "VerityProjects", "GlobalSettings.json");
 
     public GraphicsDevice Device => _device;
@@ -233,11 +243,19 @@ public class EditorApp : IDisposable
 
     private string? FindKoreanFont()
     {
-        string appDir = AppContext.BaseDirectory;
-        string globalFontsDir = Path.Combine(appDir, "EditorResources", "Fonts");
-        Directory.CreateDirectory(globalFontsDir);
-        var files = Directory.GetFiles(globalFontsDir, "*.ttf");
-        return files.Length > 0 ? files[0] : null;
+        string[] searchPaths = {
+            Path.Combine(AppContext.BaseDirectory, "EditorResources", "Fonts"),
+            Path.Combine(AppContext.BaseDirectory, "..", "EditorResources", "Fonts"),
+            Path.Combine(Directory.GetCurrentDirectory(), "EditorResources", "Fonts")
+        };
+        
+        foreach (var path in searchPaths) {
+            if (Directory.Exists(path)) {
+                var files = Directory.GetFiles(path, "*.ttf");
+                if (files.Length > 0) return files[0];
+            }
+        }
+        return null;
     }
 
     private FileStream? _projectLock;
@@ -753,7 +771,7 @@ public class EditorApp : IDisposable
     {
         var viewport = ImGui.GetMainViewport();
         ImGui.SetNextWindowPos(viewport.Pos); ImGui.SetNextWindowSize(viewport.Size);
-        var flags = ImGuiWindowFlags.MenuBar | ImGuiWindowFlags.NoDocking | ImGuiWindowFlags.NoTitleBar | ImGuiWindowFlags.NoCollapse | ImGuiWindowFlags.NoResize | ImGuiWindowFlags.NoMove | ImGuiWindowFlags.NoBringToFrontOnFocus | ImGuiWindowFlags.NoNavFocus;
+        var flags = ImGuiWindowFlags.MenuBar | ImGuiWindowFlags.NoDocking | ImGuiWindowFlags.NoTitleBar | ImGuiWindowFlags.NoCollapse | ImGuiWindowFlags.NoResize | ImGuiWindowFlags.NoMove | ImGuiWindowFlags.NoBringToFrontOnFocus | ImGuiWindowFlags.NoBringToFrontOnFocus | ImGuiWindowFlags.NoNavFocus;
         ImGui.PushStyleVar(ImGuiStyleVar.WindowRounding, 0.0f); ImGui.PushStyleVar(ImGuiStyleVar.WindowBorderSize, 0.0f); ImGui.PushStyleVar(ImGuiStyleVar.WindowPadding, new Vector2(0, 0));
         ImGui.Begin("DockSpace", flags); ImGui.PopStyleVar(3);
         

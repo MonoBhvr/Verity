@@ -189,20 +189,69 @@ Verity의 로직 실행 단위는 **Tick**입니다.
 
 ## 4. Filter System (`Verity.Input.Filter`)
 
-Verity Engine은 복잡한 조건 비교 로직을 데이터화하여 관리할 수 있는 **Filter** 시스템을 제공합니다. 모든 필터 데이터는 `Assets/Filters.json`에 저장됩니다.
+Verity Engine은 복잡한 조건 비교 로직을 데이터화하여 관리할 수 있는 **Filter** 시스템을 제공합니다. 필터는 코드에 하드코딩되는 복잡한 `if`문이나 `switch`문을 줄이고, 에디터에서 데이터 기반으로 게임 규칙을 동적으로 제어하기 위해 설계되었습니다.
 
-### 4.1. 개념 (Concept)
-필터는 **"여러 개의 Enum 값을 하나의 논리적 그룹으로 묶는 것"**입니다. 이를 통해 데이터 기반으로 게임 규칙을 동적으로 제어할 수 있습니다.
+### 4.1. 핵심 개념 (Core Concept)
+필터는 **"여러 개의 값(Enum 또는 String)을 하나의 논리적 그룹으로 묶는 단위"**입니다.
+예를 들어, "점프 가능한 모든 키"를 `JumpAction`이라는 이름의 필터로 묶거나, "플레이어가 충돌해야 하는 모든 레이어"를 `Obstacles` 필터로 묶을 수 있습니다.
 
-### 4.2. Filter 종류
-*   **Filter (단일 타입)**: 하나의 Enum 타입 내에서 복수의 값을 비교합니다.
-*   **Mixed-Filter (혼합 타입)**: 서로 다른 여러 Enum 타입의 값들을 한꺼번에 담을 수 있습니다.
+### 4.2. Filter 구성 요소
+- **Name**: 필터의 고유 식별자입니다. 코드에서 이 이름을 통해 필터를 참조합니다.
+- **Mode (동작 모드)**:
+    - **Whitelist**: 리스트에 **포함된** 값에 대해서만 `Check()` 결과가 `true`가 됩니다. (A OR B OR C...)
+    - **Blacklist**: 리스트에 **포함되지 않은** 모든 값에 대해 `true`를 반환합니다. 특정 대상을 제외한 전체를 선택할 때 유용합니다.
+- **Values**: 필터링 대상이 되는 실제 값들의 목록입니다.
 
-| Name | Type | Description |
-| :--- | :--- | :--- |
-| `Name` | `string` | 필터의 고유 식별 이름입니다. |
-| `Mode` | `FilterMode` | `Whitelist`(포함 시 True) 또는 `Blacklist`(제외 시 True)를 결정합니다. |
-| `Check(value)` | `Method` | 특정 Enum 값이 필터 조건에 맞는지 검사합니다. |
+### 4.3. Filter의 종류
+1.  **단일 타입 필터 (Basic Filter)**:
+    - 하나의 특정 Enum 타입(예: `KeyCode`)에 속한 값들만 가질 수 있습니다.
+    - 주로 **입력 시스템(Input Mapping)**에서 여러 키를 하나의 동작으로 묶을 때 사용합니다.
+2.  **혼합 타입 필터 (Mixed Filter)**:
+    - 서로 다른 여러 타입의 Enum이나 문자열 값을 하나의 리스트에 담을 수 있습니다.
+    - 주로 **물리 시스템(Collision Filtering)**이나 **태그 검사** 등 범용적인 분류에 사용됩니다.
+
+### 4.4. 사용 예제 (Usage Examples)
+
+#### 4.4.1. 입력 매핑 (Input Mapping)
+에디터에서 `MoveRight`라는 필터를 만들고 `D`키와 `RightArrow`키를 추가했다면, 코드에서는 다음과 같이 간단하게 처리할 수 있습니다.
+
+```csharp
+using Verity.Input;
+
+public class PlayerController : Script {
+    void Update() {
+        // 'MoveRight' 필터에 등록된 어떤 키라도 눌리면 true 반환
+        if (Input.GetKey("MoveRight")) {
+            Transform.Position += new Vector2(5 * Time.DeltaTime, 0);
+        }
+    }
+}
+```
+
+#### 4.4.2. 물리 충돌 필터링 (Physics Masking)
+특정 물리 그룹들만 골라서 충돌 검사를 수행하고 싶을 때 사용합니다.
+
+```csharp
+using Verity.Core.Physics;
+using Verity.Input;
+
+public class EnemyAI : Script {
+    void Update() {
+        // "Obstacles" 필터(MixedFilter)에 정의된 그룹들만 대상으로 레이캐스트나 오버랩 검사 수행
+        // 예: "Wall" 그룹은 포함(Whitelist), "Ignore" 그룹은 제외 등
+        var results = PhysicsManager.OverlapCircle(Transform.Position, 2.0f, "Obstacles");
+        
+        foreach (var entity in results) {
+            Debug.Log($"Detected obstacle: {entity.Name}");
+        }
+    }
+}
+```
+
+### 4.5. 데이터 저장 및 관리
+- 모든 필터 데이터는 `Assets/Filters.json` 파일에 JSON 형식으로 직렬화되어 저장됩니다.
+- 이 파일은 버전 관리 시스템(Git 등)을 통해 팀원 간에 쉽게 공유될 수 있으며, 텍스트 에디터로 직접 수정하는 것도 가능합니다.
+- **Filter Registry**: 엔진 시작 시 모든 필터는 전역 레지스트리에 등록되어, 어디서든 이름만으로 즉시 접근할 수 있습니다.
 
 ---
 

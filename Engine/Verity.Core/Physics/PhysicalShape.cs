@@ -65,4 +65,6 @@ public struct AABB
         return (Max.X >= other.Min.X && Min.X <= other.Max.X) &&
                (Max.Y >= other.Min.Y && Min.Y <= other.Max.Y);
     }
+
+    public bool IsDefault() => Min == Vector2.Zero && Max == Vector2.Zero;
 }

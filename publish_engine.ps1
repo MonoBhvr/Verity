@@ -1,3 +1,8 @@
+# 0. 터미널 인코딩 설정 (한글 깨짐 방지)
+chcp 65001 >$null
+$OutputEncoding = [System.Text.Encoding]::UTF8
+[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+
 # 1. 배포 경로 설정 (프로젝트 루트 내 Dist 폴더)
 $distPath = ".\Dist"
 $editorDist = "$distPath\Editor"
@@ -15,12 +20,12 @@ if (Test-Path $distPath) {
 
 # 3. 에디터(Editor) 빌드 및 게시
 Write-Host ">> [1/4] 에디터(Editor) 빌드 중..." -ForegroundColor Yellow
-# PublishSingleFile을 사용하되, 네이티브 DLL은 외부로 노출하여 로딩 문제를 방지합니다.
-dotnet publish Editor/Verity.Editor.App/Verity.Editor.App.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:EnableCompressionInSingleFile=true -o $editorDist --nologo
+# 네이티브 라이브러리 호환성을 위해 PublishSingleFile을 사용하지 않고 안정적인 폴더 배포를 선택합니다.
+dotnet publish Editor/Verity.Editor.App/Verity.Editor.App.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=false -o $editorDist --nologo
 
 # 4. 런타임(Runtime/Game Player) 빌드 및 게시
 Write-Host ">> [2/4] 런타임 엔진(Runtime) 빌드 중..." -ForegroundColor Yellow
-dotnet publish Verity.Game/Verity.Game.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -o $runtimeDist --nologo
+dotnet publish Verity.Game/Verity.Game.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=false -o $runtimeDist --nologo
 
 # 5. 필수 리소스 복사 및 배포판 정제
 Write-Host ">> [3/4] 배포판 리소스 정제 및 복사 중..." -ForegroundColor Yellow
@@ -29,6 +34,12 @@ Write-Host ">> [3/4] 배포판 리소스 정제 및 복사 중..." -ForegroundCo
 $localeSrc = "Editor/Verity.Editor/Locales"
 if (Test-Path $localeSrc) {
     Copy-Item -Recurse -Force $localeSrc "$editorDist\Locales"
+}
+
+# 에디터 리소스(폰트 및 로고 이미지) 복사
+$resourceSrc = "Editor/Verity.Editor/EditorResources"
+if (Test-Path $resourceSrc) {
+    Copy-Item -Recurse -Force $resourceSrc "$editorDist\EditorResources"
 }
 
 # 런타임 폴더 내의 개발용 테스트 에셋 제거 (Dist 폴더 내에서만 삭제됨)
