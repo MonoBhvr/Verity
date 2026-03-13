@@ -1,9 +1,27 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
     <OutputType>WinExe</OutputType>
+    <TargetFramework>net9.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <ApplicationIcon>obj\GeneratedEditorIcon.ico</ApplicationIcon>
   </PropertyGroup>
 
   <ItemGroup>
     <ProjectReference Include="..\Verity.Editor\Verity.Editor.csproj" />
   </ItemGroup>
+
+  <Target Name="ConvertPngToIco" BeforeTargets="BeforeBuild;PrepareForBuild">
+    <PropertyGroup>
+      <PngPath>..\Verity.Editor\EditorResources\EditorLogo.png</PngPath>
+      <IcoPath>obj\GeneratedEditorIcon.ico</IcoPath>
+    </PropertyGroup>
+    
+    <MakeDir Directories="obj" Condition="!Exists('obj')" />
+    
+    <Message Importance="high" Text="[Verity] Automatically converting PNG to ICO for application icon..." />
+    
+    <Exec Command="powershell -NoProfile -Command &quot;Add-Type -AssemblyName System.Drawing; try { $bmp = [System.Drawing.Bitmap]::FromFile('$(PngPath)'); $hIcon = $bmp.GetHicon(); $icon = [System.Drawing.Icon]::FromHandle($hIcon); $stream = [System.IO.File]::Create('$(IcoPath)'); $icon.Save($stream); $stream.Close(); $bmp.Dispose(); } catch { Write-Error 'Failed to convert icon' }&quot;" 
+          Condition="Exists('$(PngPath)')" />
+  </Target>
 </Project>

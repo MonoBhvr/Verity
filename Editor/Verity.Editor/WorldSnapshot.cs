@@ -4,6 +4,7 @@ using Verity.Core.ECS;
 using Verity.Core.World;
 using Verity.Core;
 using Verity.Graphics;
+using Verity.Core.Serialization;
 
 namespace Verity.Editor;
 
@@ -84,10 +85,11 @@ internal sealed class WorldSnapshot
             }
         }
 
-        return new ComponentSnapshot(type, component.Enabled, data);
+        // Store FullName to resolve it later against potentially new assembly
+        return new ComponentSnapshot(type.FullName ?? type.Name, component.Enabled, data);
     }
 
-    public void Restore(World world)
+    public void Restore(World world, Assembly? userAssembly = null)
     {
         world.ClearAllEntities();
 
@@ -130,22 +132,30 @@ internal sealed class WorldSnapshot
 
             foreach (var componentSnapshot in snapshot.Components)
             {
-                var component = AddComponentByType(entity, componentSnapshot.Type);
+                // RESOLVE TYPE using latest assembly!
+                Type? type = ResolveType(componentSnapshot.TypeName, userAssembly);
+                if (type == null)
+                {
+                    Verity.Core.Debug.LogError($"[WorldSnapshot] Failed to resolve type '{componentSnapshot.TypeName}' during restore.");
+                    continue;
+                }
+
+                var component = entity.AddComponent(type);
                 component.Enabled = componentSnapshot.Enabled;
 
                 foreach (var kvp in componentSnapshot.Data)
                 {
-                    var field = componentSnapshot.Type.GetField(kvp.Key, BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
+                    var field = type.GetField(kvp.Key, BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
                     if (field != null)
                     {
-                        field.SetValue(component, kvp.Value);
+                        try { field.SetValue(component, kvp.Value); } catch { }
                         continue;
                     }
 
-                    var prop = componentSnapshot.Type.GetProperty(kvp.Key, BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
+                    var prop = type.GetProperty(kvp.Key, BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
                     if (prop != null && prop.CanWrite)
                     {
-                        prop.SetValue(component, kvp.Value);
+                        try { prop.SetValue(component, kvp.Value); } catch { }
                     }
                 }
             }
@@ -156,6 +166,34 @@ internal sealed class WorldSnapshot
             foreach (var script in entity.GetScripts())
                 script.HasStarted = false;
         }
+    }
+
+    private static Type? ResolveType(string name, Assembly? userAsm)
+    {
+        // Reuse logic from SceneSerializer or similar
+        string[] engineNamespaces = { "Verity.Core", "Verity.Graphics", "Verity.Input" };
+        bool looksLikeUserScript = !engineNamespaces.Any(ns => name.StartsWith(ns));
+
+        if (looksLikeUserScript && userAsm != null)
+        {
+            var t = userAsm.GetType(name);
+            if (t != null) return t;
+            string shortName = name.Contains('.') ? name.Substring(name.LastIndexOf('.') + 1) : name;
+            foreach (var type in userAsm.GetTypes())
+            {
+                if (type.Name == shortName || type.FullName == name) return type;
+            }
+        }
+
+        foreach (var asm in AppDomain.CurrentDomain.GetAssemblies())
+        {
+            try {
+                var t = asm.GetType(name);
+                if (t != null) return t;
+            } catch { }
+        }
+
+        return null;
     }
 
     private static List<Entity> BuildOrderedEntityList(World world)
@@ -191,20 +229,15 @@ internal sealed class WorldSnapshot
 
     private sealed class ComponentSnapshot
     {
-        public Type Type { get; }
+        public string TypeName { get; }
         public bool Enabled { get; }
         public Dictionary<string, object?> Data { get; }
 
-        public ComponentSnapshot(Type type, bool enabled, Dictionary<string, object?> data)
+        public ComponentSnapshot(string typeName, bool enabled, Dictionary<string, object?> data)
         {
-            Type = type;
+            TypeName = typeName;
             Enabled = enabled;
             Data = data;
         }
-    }
-
-    private static Component AddComponentByType(Entity entity, Type componentType)
-    {
-        return entity.AddComponent(componentType);
     }
 }

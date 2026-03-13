@@ -521,10 +521,74 @@ public class EditorApp : IDisposable
         } catch { }
     }
 
-    private void OnScriptsCompiled() { var world = WorldManager.ActiveWorld; if (world == null || IsPlaying) return; var json = Verity.Core.Serialization.SceneSerializer.Serialize(world); world.ClearAllEntities(); Verity.Core.Serialization.SceneSerializer.Deserialize(world, json, _scriptCompiler?.CompiledAssembly); EditorSelection.SelectedEntity = null; }
+    private void OnScriptsCompiled() 
+    { 
+        var world = WorldManager.ActiveWorld; 
+        if (world == null) return;
 
-    public void EnterPlayMode() { if (WorldManager.ActiveWorld == null || IsPlaying) return; _snapshot = WorldSnapshot.Capture(WorldManager.ActiveWorld); Time.Reset(); _gameLoop = new GameLoop { ProjectSettings = this.ProjectSettings }; IsPlaying = true; }
-    public void ExitPlayMode() { if (!IsPlaying || WorldManager.ActiveWorld == null) return; EditorSelection.SelectedEntity = null; _snapshot?.Restore(WorldManager.ActiveWorld); _snapshot = null; _gameLoop = null; IsPlaying = false; Verity.Input.Input.Enabled = true; }
+        if (IsPlaying)
+        {
+            CoreDebug.Log("[Editor] Scripts compiled during Play Mode. Hot-reload will occur after exiting Play Mode.");
+            return;
+        }
+
+        CoreDebug.Log("[Editor] Scripts compiled. Performing hot-reload of active world...");
+
+        // Preserve selection
+        Guid? selectedId = EditorSelection.SelectedEntity?.Id;
+        
+        try {
+            // 1. Serialize current state
+            var json = Verity.Core.Serialization.SceneSerializer.Serialize(world); 
+            
+            // 2. Clear all entities (this triggers removal from engine-level lists)
+            world.ClearAllEntities(); 
+            
+            // 3. Re-deserialize using the NEWLY compiled assembly
+            Verity.Core.Serialization.SceneSerializer.Deserialize(world, json, _scriptCompiler?.CompiledAssembly); 
+            
+            // 4. Restore selection
+            if (selectedId.HasValue)
+                EditorSelection.SelectedEntity = world.GetAllEntities().FirstOrDefault(e => e.Id == selectedId.Value);
+
+            // 5. AUTO-SAVE after successful compilation to prevent "reverting to initial state" when reopening world
+            GetWindow<Windows.ProjectWindow>()?.SaveActiveWorldAsAsset();
+            ResetDirty();
+            
+            ShowOverlayMessage(L10n.Tr("msg_scripts_reloaded") ?? "Scripts reloaded and world updated.");
+            CoreDebug.Log("[Editor] Hot-reload successful.");
+        } catch (Exception e) {
+            CoreDebug.LogError($"[Editor] Critical error during script hot-reload: {e.Message}");
+        }
+    }
+
+    public void EnterPlayMode() 
+    { 
+        if (WorldManager.ActiveWorld == null || IsPlaying) return; 
+        
+        // Pause compiler during play mode
+        if (_scriptCompiler != null) _scriptCompiler.IsPaused = true;
+
+        _snapshot = WorldSnapshot.Capture(WorldManager.ActiveWorld); 
+        Time.Reset(); 
+        _gameLoop = new GameLoop { ProjectSettings = this.ProjectSettings }; 
+        IsPlaying = true; 
+    }
+    
+    public void ExitPlayMode() 
+    { 
+        if (!IsPlaying || WorldManager.ActiveWorld == null) return; 
+        EditorSelection.SelectedEntity = null; 
+        
+        _snapshot?.Restore(WorldManager.ActiveWorld, _scriptCompiler?.CompiledAssembly); 
+        _snapshot = null; 
+        _gameLoop = null; 
+        IsPlaying = false; 
+        Verity.Input.Input.Enabled = true; 
+
+        // Resume compiler after play mode
+        if (_scriptCompiler != null) _scriptCompiler.IsPaused = false;
+    }
 
     public void Run()
     {

@@ -17,6 +17,24 @@ public class ScriptCompiler : IDisposable
 
     public event Action? OnCompilationFinished;
 
+    private bool _isPaused;
+    private bool _needsCompile;
+
+    public bool IsPaused
+    {
+        get => _isPaused;
+        set
+        {
+            if (_isPaused == value) return;
+            _isPaused = value;
+            if (!_isPaused && _needsCompile)
+            {
+                _needsCompile = false;
+                Compile();
+            }
+        }
+    }
+
     public IReadOnlyList<Type> ComponentTypes
     {
         get { lock (_lock) return _componentTypes.ToList(); }
@@ -59,12 +77,16 @@ public class ScriptCompiler : IDisposable
 
     private void OnFileChanged(object sender, FileSystemEventArgs e)
     {
+        _needsCompile = true;
+        if (IsPaused) return;
+
         _debounceTimer?.Dispose();
-        _debounceTimer = new Timer(_ => Compile(), null, DebounceDelayMs, Timeout.Infinite);
+        _debounceTimer = new Timer(_ => { if (!IsPaused) Compile(); }, null, DebounceDelayMs, Timeout.Infinite);
     }
 
     public bool Compile()
     {
+        if (IsPaused) { _needsCompile = true; return false; }
         if (!Directory.Exists(_assetsPath)) return false;
 
         var csFiles = Directory.GetFiles(_assetsPath, "*.cs", SearchOption.AllDirectories);
@@ -99,120 +121,115 @@ public class ScriptCompiler : IDisposable
                 var fileName = Path.GetFileName(lineSpan.Path);
                 Verity.Core.Debug.LogError($"  - {fileName}({lineSpan.StartLinePosition.Line + 1},{lineSpan.StartLinePosition.Character + 1}): {diag.GetMessage()}");
             }
-
-            // [FIX] 컴파일 실패 시 기존 어셈블리를 그대로 유지하여 데이터 유실 방지
-            // lock (_lock) { _compiledAssembly = null; _componentTypes.Clear(); }
-            OnCompilationFinished?.Invoke();
             return false;
         }
 
-        Verity.Core.Debug.Log("[ScriptCompiler] Compilation successful!");
-        LoadAssembly(ms.ToArray());
-        return true;
-    }
+        ms.Seek(0, SeekOrigin.Begin);
+        var assembly = Assembly.Load(ms.ToArray());
 
-    private CSharpCompilation CreateCompilation(IEnumerable<SyntaxTree> trees, IEnumerable<MetadataReference> refs)
-    {
-        return CSharpCompilation.Create(
-            "VerityUserScripts_" + Guid.NewGuid().ToString("N"),
-            trees,
-            refs,
-            new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary).WithAllowUnsafe(true));
-    }
-
-    private void LoadAssembly(byte[] rawAssembly)
-    {
-        var newAssembly = Assembly.Load(rawAssembly);
         lock (_lock)
         {
-            _compiledAssembly = newAssembly;
-            DiscoverComponentTypes();
+            _compiledAssembly = assembly;
+            _componentTypes.Clear();
+            foreach (var type in assembly.GetTypes())
+            {
+                if (typeof(Component).IsAssignableFrom(type) && !type.IsAbstract && type.IsPublic)
+                {
+                    _componentTypes.Add(type);
+                }
+            }
         }
+
+        Verity.Core.Debug.Log($"[ScriptCompiler] Compilation successful. Loaded {assembly.FullName}");
         OnCompilationFinished?.Invoke();
+        return true;
     }
 
     public bool CompileToFile(string outputPath)
     {
         if (!Directory.Exists(_assetsPath)) return false;
         var csFiles = Directory.GetFiles(_assetsPath, "*.cs", SearchOption.AllDirectories);
-        if (csFiles.Length == 0) return true;
+        if (csFiles.Length == 0) return false;
 
-        var syntaxTrees = csFiles.Select(f => CSharpSyntaxTree.ParseText(File.ReadAllText(f), path: f)).ToList();
-        var compilation = CSharpCompilation.Create("UserScripts", syntaxTrees, GetMetadataReferences(),
-            new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary).WithAllowUnsafe(true));
+        var fileContents = csFiles.ToDictionary(f => f, f => File.ReadAllText(f));
+        var syntaxTrees = fileContents.Select(kvp => CSharpSyntaxTree.ParseText(kvp.Value, path: kvp.Key)).ToList();
+        var references = GetMetadataReferences();
 
+        var compilation = CreateCompilation(syntaxTrees, references);
         var result = compilation.Emit(outputPath);
-        return result.Success;
+
+        if (!result.Success)
+        {
+            foreach (var diag in result.Diagnostics.Where(d => d.Severity == DiagnosticSeverity.Error))
+                Verity.Core.Debug.LogError($"[ScriptCompiler] Export Error: {diag.GetMessage()}");
+            return false;
+        }
+        return true;
     }
 
-    private void DiscoverComponentTypes()
+    private CSharpCompilation CreateCompilation(List<SyntaxTree> syntaxTrees, List<MetadataReference> references)
     {
-        if (_compiledAssembly == null) return;
-        lock (_lock)
-        {
-            _componentTypes.Clear();
-            foreach (var type in _compiledAssembly.GetTypes())
-            {
-                if (type.IsAbstract || type.IsInterface || !type.IsPublic) continue;
-                if (typeof(Component).IsAssignableFrom(type) && type != typeof(Transform))
-                {
-                    _componentTypes.Add(type);
-                    Verity.Core.Debug.Log($"[ScriptCompiler] Found: {type.Name}");
-                }
-            }
-        }
+        return CSharpCompilation.Create(
+            $"Verity.UserScripts_{Guid.NewGuid():N}",
+            syntaxTrees,
+            references,
+            new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary)
+                .WithOptimizationLevel(OptimizationLevel.Release)
+                .WithAllowUnsafe(true)
+        );
     }
 
-    private static List<MetadataReference> GetMetadataReferences()
+    private List<MetadataReference> GetMetadataReferences()
     {
-        var refs = new List<MetadataReference>();
-        foreach (var assembly in AppDomain.CurrentDomain.GetAssemblies())
+        var references = new List<MetadataReference>();
+        var assemblies = AppDomain.CurrentDomain.GetAssemblies();
+
+        foreach (var assembly in assemblies)
         {
-            if (assembly.IsDynamic || string.IsNullOrEmpty(assembly.Location)) continue;
-            refs.Add(MetadataReference.CreateFromFile(assembly.Location));
+            if (assembly.IsDynamic || string.IsNullOrWhiteSpace(assembly.Location)) continue;
+            references.Add(MetadataReference.CreateFromFile(assembly.Location));
         }
-        return refs;
+
+        return references;
     }
 
     public List<Type> GetAllAddableComponentTypes()
     {
         var types = new List<Type>();
-        var engineAssemblies = new[] { typeof(Component).Assembly, typeof(Verity.Graphics.Camera).Assembly };
-        foreach (var asm in engineAssemblies)
+        
+        // 1. Engine types
+        foreach (var asm in AppDomain.CurrentDomain.GetAssemblies())
         {
-            foreach (var type in asm.GetTypes())
+            string name = asm.GetName().Name ?? "";
+            if (name.StartsWith("Verity.Core") || name.StartsWith("Verity.Graphics"))
             {
-                if (type.IsAbstract || type.IsInterface) continue;
-                
-                // Explicitly exclude Transform and Camera as per user request
-                if (type == typeof(Transform) || type == typeof(Verity.Graphics.Camera)) continue;
-                
-                if (typeof(Component).IsAssignableFrom(type)) types.Add(type);
+                try {
+                    foreach (var type in asm.GetTypes())
+                    {
+                        if (typeof(Component).IsAssignableFrom(type) && !type.IsAbstract && type.IsPublic && type != typeof(Transform))
+                            types.Add(type);
+                    }
+                } catch { }
             }
         }
-        lock (_lock) { types.AddRange(_componentTypes); }
+
+        // 2. User types
+        lock (_lock)
+        {
+            foreach (var type in _componentTypes)
+            {
+                if (!types.Contains(type)) types.Add(type);
+            }
+        }
+
         return types.OrderBy(t => t.Name).ToList();
     }
 
     public List<Type> GetAllEnumTypes()
     {
         var types = new List<Type>();
-        var assemblies = new HashSet<Assembly>
-        {
-            typeof(Component).Assembly,
-            typeof(Verity.Graphics.Camera).Assembly,
-            typeof(Verity.Input.Input).Assembly,
-            typeof(Verity.Core.World.World).Assembly
-        };
-
-        foreach (var asm in assemblies)
-        {
-            foreach (var type in asm.GetTypes())
-            {
-                if (type.IsEnum && type.IsPublic) types.Add(type);
-            }
-        }
-
+        
+        // From User Assembly
         lock (_lock)
         {
             if (_compiledAssembly != null)
@@ -220,6 +237,38 @@ public class ScriptCompiler : IDisposable
                 foreach (var type in _compiledAssembly.GetTypes())
                 {
                     if (type.IsEnum && type.IsPublic) types.Add(type);
+                }
+            }
+        }
+
+        // From Engine Assemblies
+        foreach (var asm in AppDomain.CurrentDomain.GetAssemblies())
+        {
+            string name = asm.GetName().Name ?? "";
+            if (name.StartsWith("Verity.Core"))
+            {
+                try {
+                    foreach (var type in asm.GetTypes())
+                    {
+                        if (type.IsEnum && type.IsPublic) types.Add(type);
+                    }
+                } catch { }
+            }
+        }
+
+        return types.OrderBy(t => t.FullName).ToList();
+    }
+
+    public List<Type> GetUserScripts()
+    {
+        var types = new List<Type>();
+        lock (_lock)
+        {
+            if (_compiledAssembly != null)
+            {
+                foreach (var type in _compiledAssembly.GetTypes())
+                {
+                    if (typeof(Script).IsAssignableFrom(type) && !type.IsAbstract && type.IsPublic) types.Add(type);
                 }
             }
         }

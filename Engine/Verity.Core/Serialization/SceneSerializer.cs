@@ -282,12 +282,50 @@ public static class SceneSerializer
 
     private static Type? ResolveType(string name, Assembly? userAsm)
     {
+        // List of core engine namespaces to search in AppDomain
+        string[] engineNamespaces = { "Verity.Core", "Verity.Graphics", "Verity.Input" };
+
+        // 1. If it looks like a user script (no engine namespace), check userAsm FIRST
+        bool looksLikeUserScript = !engineNamespaces.Any(ns => name.StartsWith(ns));
+
+        if (looksLikeUserScript && userAsm != null)
+        {
+            var t = userAsm.GetType(name);
+            if (t != null) return t;
+
+            // Fallback: search by short name in user assembly
+            string shortName = name.Contains('.') ? name.Substring(name.LastIndexOf('.') + 1) : name;
+            foreach (var type in userAsm.GetTypes())
+            {
+                if (type.Name == shortName || type.FullName == name) return type;
+            }
+        }
+
+        // 2. Search in AppDomain (Engine types)
         foreach (var asm in AppDomain.CurrentDomain.GetAssemblies())
         {
-            var t = asm.GetType(name);
-            if (t != null) return t;
+            try {
+                var t = asm.GetType(name);
+                if (t != null) return t;
+            } catch { }
         }
-        return userAsm?.GetType(name);
+
+        // 3. Last resort: Global search by short name (only if userAsm didn't yield anything)
+        if (userAsm == null)
+        {
+            string shortName = name.Contains('.') ? name.Substring(name.LastIndexOf('.') + 1) : name;
+            foreach (var asm in AppDomain.CurrentDomain.GetAssemblies())
+            {
+                try {
+                    foreach (var type in asm.GetTypes())
+                    {
+                        if (type.Name == shortName) return type;
+                    }
+                } catch { }
+            }
+        }
+
+        return null;
     }
 
     private static void ApplyJsonToMember(object target, string name, JsonNode? node)
