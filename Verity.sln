@@ -27,8 +27,6 @@ EndProject
 # Game Project
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Verity.Game", "Verity.Game\Verity.Game.csproj", "{F6A7B8C9-D0E1-2345-F012-456789012345}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "UserScripts", "Verity.Game\Assets\Script\UserScripts.csproj", "{7A8B9C0D-E1F2-3A4B-5C6D-E7F8A9B0C1D2}"
-EndProject
 
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
@@ -60,10 +58,7 @@ Global
 		{F6A7B8C9-D0E1-2345-F012-456789012345}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{F6A7B8C9-D0E1-2345-F012-456789012345}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{F6A7B8C9-D0E1-2345-F012-456789012345}.Release|Any CPU.Build.0 = Release|Any CPU
-		{7A8B9C0D-E1F2-3A4B-5C6D-E7F8A9B0C1D2}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
-		{7A8B9C0D-E1F2-3A4B-5C6D-E7F8A9B0C1D2}.Debug|Any CPU.Build.0 = Debug|Any CPU
-		{7A8B9C0D-E1F2-3A4B-5C6D-E7F8A9B0C1D2}.Release|Any CPU.ActiveCfg = Release|Any CPU
-		{7A8B9C0D-E1F2-3A4B-5C6D-E7F8A9B0C1D2}.Release|Any CPU.Build.0 = Release|Any CPU
+
 	EndGlobalSection
 	GlobalSection(NestedProjects) = preSolution
 		{A1B2C3D4-E5F6-7890-ABCD-EF1234567890} = {1A2B3C4D-5E6F-7A8B-9C0D-E1F2A3B4C5D6}

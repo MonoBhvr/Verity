@@ -1,6 +1,7 @@
 using Hexa.NET.ImGui;
 using Verity.Core.ECS;
 using Verity.Core.World;
+using Verity.Core.Physics;
 using Verity.Graphics;
 
 namespace Verity.Editor.Windows;
@@ -59,7 +60,24 @@ public unsafe class HierarchyWindow : EditorWindow
                     EditorSelection.SelectedEntity = sprite;
                 }
 
+                if (ImGui.MenuItem(L10n.Tr("btn_add_tilemap_with_shape")))
+                {
+                    _app.RecordUndo();
+                    var tm = world.CreateEntity("Tilemap");
+                    tm.AddComponent<TilemapRenderer>();
+                    tm.AddComponent<TilemapShape>();
+                    EditorSelection.SelectedEntity = tm;
+                }
+
+                if (ImGui.MenuItem(L10n.Tr("btn_add_tilemap_no_shape")))
+                {
+                    _app.RecordUndo();
+                    var tm = world.CreateEntity("Tilemap");
+                    tm.AddComponent<TilemapRenderer>();
+                    EditorSelection.SelectedEntity = tm;
+                }
                 if (!WorldHasCamera(world))
+
                 {
                     if (ImGui.MenuItem(L10n.Tr("CreationType_Camera")))
                     {
@@ -107,7 +125,7 @@ public unsafe class HierarchyWindow : EditorWindow
             _app.RecordUndo();
             var entity = world.CreateEntity(L10n.Tr("CreationType_Entity"));
             if (EditorSelection.SelectedEntity != null)
-                SetParent(entity, EditorSelection.SelectedEntity);
+                SetParent(entity, EditorSelection.SelectedEntity.Transform.Parent?.Owner);
             EditorSelection.SelectedEntity = entity;
         }
 
@@ -153,15 +171,43 @@ public unsafe class HierarchyWindow : EditorWindow
     public void DuplicateSelected(World world)
     {
         _app.RecordUndo();
-        var originals = EditorSelection.SelectedEntities.ToList();
+        
+        // Sort by hierarchy depth to avoid duplicating children twice if parents are also selected
+        var originals = EditorSelection.SelectedEntities
+            .OrderBy(e => GetHierarchyDepth(e))
+            .ToList();
+            
         var clones = new List<Entity>();
+
         foreach (var original in originals)
         {
+            // Skip if this entity is a descendant of another selected entity (it will be cloned by its ancestor)
+            if (IsDescendantOfAny(original, originals)) continue;
+
             var clone = DuplicateEntityInternal(original, world, original.Transform.Parent?.Owner);
             if (clone != null) clones.Add(clone);
         }
+        
         EditorSelection.ClearSelection();
         foreach (var clone in clones) EditorSelection.Select(clone, true);
+    }
+
+    private int GetHierarchyDepth(Entity e)
+    {
+        int depth = 0;
+        var curr = e.Transform.Parent;
+        while (curr != null) { depth++; curr = curr.Parent; }
+        return depth;
+    }
+
+    private bool IsDescendantOfAny(Entity e, List<Entity> ancestors)
+    {
+        foreach (var a in ancestors)
+        {
+            if (e == a) continue;
+            if (IsDescendantOf(e, a)) return true;
+        }
+        return false;
     }
 
     private Entity? DuplicateEntityInternal(Entity original, World world, Entity? targetParent)
@@ -184,6 +230,7 @@ public unsafe class HierarchyWindow : EditorWindow
             foreach (var comp in src.GetAllComponents())
             {
                 if (comp is Transform) continue;
+                if (!clone.CanAddComponent(comp.GetType(), out _)) continue;
                 var cloneComp = clone.AddComponent(comp.GetType());
                 foreach (var prop in comp.GetType().GetProperties(System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance))
                 {
@@ -210,8 +257,14 @@ public unsafe class HierarchyWindow : EditorWindow
     public void CopySelected()
     {
         if (EditorSelection.SelectedEntities.Count == 0) return;
+        
+        // Only copy top-level selected entities
+        var toCopy = EditorSelection.SelectedEntities
+            .Where(e => !IsDescendantOfAny(e, EditorSelection.SelectedEntities.ToList()))
+            .ToList();
+
         var json = new System.Text.Json.Nodes.JsonArray();
-        foreach (var ent in EditorSelection.SelectedEntities)
+        foreach (var ent in toCopy)
             json.Add(System.Text.Json.Nodes.JsonNode.Parse(Verity.Core.Serialization.SceneSerializer.SerializeEntity(ent)));
         _copyBuffer = json.ToString();
     }
@@ -225,7 +278,9 @@ public unsafe class HierarchyWindow : EditorWindow
         var array = System.Text.Json.Nodes.JsonNode.Parse(_copyBuffer)?.AsArray();
         if (array == null) return;
 
-        var targetParent = EditorSelection.SelectedEntity;
+        // Paste as SIBLINGS of the current selection
+        var targetParent = EditorSelection.SelectedEntity?.Transform.Parent?.Owner;
+        
         var pasted = new List<Entity>();
         foreach (var node in array)
         {

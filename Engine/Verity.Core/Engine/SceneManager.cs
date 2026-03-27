@@ -1,6 +1,7 @@
 using System.Reflection;
 using System.Text.Json;
 using Verity.Core.Serialization;
+using Verity.Core.UI;
 using Verity.Core.World;
 
 namespace Verity.Core.Engine;
@@ -30,6 +31,7 @@ public static class WorldLoader
     {
         try {
             var world = WorldManager.CreateOrReplaceWorld(name);
+            UiSystem.Clear();
             SceneSerializer.Deserialize(world, json, userAssembly);
             WorldManager.SetActiveWorld(world);
             Debug.Log($"[WorldLoader] Successfully loaded world: {name}");

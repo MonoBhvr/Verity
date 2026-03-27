@@ -4,19 +4,23 @@ using Verity.Core.Serialization;
 
 namespace Verity.Core;
 
-public struct ShaderAsset
+public struct ShaderAsset : IPathAsset
 {
     public string Path { get; set; }
-    public ShaderAsset(string path) { Path = path; }
+    public string Guid { get; set; }
+    public ShaderAsset(string path) { Path = AssetPathUtility.Normalize(path); Guid = System.IO.Path.IsPathRooted(path) ? AssetPathUtility.EnsureMetaAndGetGuid(path) : string.Empty; }
+    public ShaderAsset(string path, string guid) { Path = AssetPathUtility.Normalize(path); Guid = guid ?? string.Empty; }
     public static implicit operator ShaderAsset(string path) => new ShaderAsset(path);
     public static implicit operator string(ShaderAsset asset) => asset.Path ?? string.Empty;
     public override string ToString() => Path ?? "None";
 }
 
-public struct StyleAsset
+public struct StyleAsset : IPathAsset
 {
     public string Path { get; set; }
-    public StyleAsset(string path) { Path = path; }
+    public string Guid { get; set; }
+    public StyleAsset(string path) { Path = AssetPathUtility.Normalize(path); Guid = System.IO.Path.IsPathRooted(path) ? AssetPathUtility.EnsureMetaAndGetGuid(path) : string.Empty; }
+    public StyleAsset(string path, string guid) { Path = AssetPathUtility.Normalize(path); Guid = guid ?? string.Empty; }
     public static implicit operator StyleAsset(string path) => new StyleAsset(path);
     public static implicit operator string(StyleAsset asset) => asset.Path ?? string.Empty;
     public override string ToString() => Path ?? "None";
@@ -33,7 +37,7 @@ public class StyleData
     public Dictionary<string, string> Textures { get; set; } = new(); 
 
     private static readonly JsonSerializerOptions _options = new() {
-        Converters = { new Vector2Converter(), new ColorConverter() },
+        Converters = { new Vector2Converter(), new Vector3Converter(), new Vector4Converter(), new SpriteConverter(), new StyleAssetConverter(), new ShaderAssetConverter(), new ColorConverter() },
         PropertyNameCaseInsensitive = true,
         WriteIndented = true
     };

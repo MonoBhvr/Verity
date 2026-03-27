@@ -161,6 +161,42 @@ public static class PhysicsManager
                 {
                     foreach (var sB in shapesB)
                     {
+                        if (sA is TilemapShape tsA)
+                        {
+                            foreach (var poly in tsA.GetWorldPolygons())
+                            {
+                                if (sB is CircleShape cB)
+                                {
+                                    var result = PhysicsMath.TestSAT(cB, poly);
+                                    if (result.IsColliding) { result.Normal = -result.Normal; AddSubStepContacts(subStepContacts, a, b, result); }
+                                }
+                                else
+                                {
+                                    var result = PhysicsMath.TestSAT(poly, sB.GetVertices());
+                                    if (result.IsColliding) AddSubStepContacts(subStepContacts, a, b, result);
+                                }
+                            }
+                            continue;
+                        }
+                        
+                        if (sB is TilemapShape tsB)
+                        {
+                            foreach (var poly in tsB.GetWorldPolygons())
+                            {
+                                if (sA is CircleShape cA)
+                                {
+                                    var result = PhysicsMath.TestSAT(cA, poly);
+                                    if (result.IsColliding) AddSubStepContacts(subStepContacts, a, b, result);
+                                }
+                                else
+                                {
+                                    var result = PhysicsMath.TestSAT(sA.GetVertices(), poly);
+                                    if (result.IsColliding) AddSubStepContacts(subStepContacts, a, b, result);
+                                }
+                            }
+                            continue;
+                        }
+
                         if (sA is CircleShape && sB is CircleShape)
                         {
                             var result = PhysicsMath.TestSAT(sA, sB);
@@ -169,12 +205,12 @@ public static class PhysicsManager
                         }
                         var subA = (sA is PolygonShape psA) ? psA.GetConvexSubShapes() : new List<Vector2[]> { sA.GetVertices() };
                         var subB = (sB is PolygonShape psB) ? psB.GetConvexSubShapes() : new List<Vector2[]> { sB.GetVertices() };
-                        if (sA is CircleShape cA)
+                        if (sA is CircleShape cA1)
                         {
                             foreach (var vB in subB)
                             {
                                 if (vB.Length == 0) continue;
-                                var result = PhysicsMath.TestSAT(cA, vB);
+                                var result = PhysicsMath.TestSAT(cA1, vB);
                                 if (result.IsColliding) AddSubStepContacts(subStepContacts, a, b, result);
                             }
                         }
@@ -387,6 +423,7 @@ public static class PhysicsManager
             var physical = FindNearestPhysicalAncestor(entity);
             var color = shape.IsSensor ? Color.Blue : (physical != null && IsTouchingAnything(physical) ? Color.Red : Color.Green);
             if (shape is CircleShape circle) DrawCircleGizmo(circle, color);
+            else if (shape is TilemapShape tilemapShape) tilemapShape.DrawGizmos(color);
             else { var vertices = shape.GetVertices(); if (vertices.Length < 2) continue; for (int i = 0; i < vertices.Length; i++) Verity.Core.Debug.DrawLine(vertices[i], vertices[(i + 1) % vertices.Length], color, 0.02f); }
         }
     }
@@ -407,6 +444,111 @@ public static class PhysicsManager
     public static IEnumerable<Entity> GetTouchingEntities(Physical p) { Guid id = p.Owner.Id; foreach (var pair in _currentContacts) { if (pair.Key.Item1 == id) yield return pair.Value[0].B.Owner; else if (pair.Key.Item2 == id) yield return pair.Value[0].A.Owner; } }
     public static bool IsTouching(Physical p, string groupName) { var groupMask = Verity.Input.Filter.Get(groupName)?.Mask ?? Verity.Input.FilterRegistry.GetGroupMask(groupName); return GetTouchingEntities(p).Any(e => { var otherPhys = e.GetComponent<Physical>(); return otherPhys != null && (otherPhys.GroupMask & groupMask) != 0; }); }
     public static bool IsTouching(Physical p, Entity target) => GetTouchingEntities(p).Any(e => e == target);
+
+    public static bool IsTouchingDirection(Physical p, Vector2 direction, string? groupName = null)
+    {
+        return GetTouchingEntitiesDirection(p, direction, groupName).Any();
+    }
+
+    public static bool IsTouchingLocalDirection(Physical p, Vector2 localDirection, string? groupName = null)
+    {
+        return GetTouchingEntitiesLocalDirection(p, localDirection, groupName).Any();
+    }
+
+    public static int GetTouchingCountDirection(Physical p, Vector2 direction, string? groupName = null)
+    {
+        return GetTouchingEntitiesDirection(p, direction, groupName).Count();
+    }
+
+    public static int GetTouchingCountLocalDirection(Physical p, Vector2 localDirection, string? groupName = null)
+    {
+        return GetTouchingEntitiesLocalDirection(p, localDirection, groupName).Count();
+    }
+
+    public static IEnumerable<Entity> GetTouchingEntitiesDirection(Physical p, Vector2 direction, string? groupName = null)
+    {
+        if (direction == Vector2.Zero) yield break;
+
+        Vector2 cardinalDir = SnapToCardinal(direction);
+        Guid myId = p.Owner.Id;
+        ulong groupMask = groupName != null ? (Verity.Input.Filter.Get(groupName)?.Mask ?? Verity.Input.FilterRegistry.GetGroupMask(groupName)) : ulong.MaxValue;
+
+        foreach (var pair in _currentContacts)
+        {
+            if (pair.Key.Item1 == myId || pair.Key.Item2 == myId)
+            {
+                bool isA = pair.Key.Item1 == myId;
+                var other = isA ? pair.Value[0].B : pair.Value[0].A;
+
+                if (groupName != null && (other.GroupMask & groupMask) == 0) continue;
+
+                foreach (var contact in pair.Value)
+                {
+                    Vector2 contactNormal = isA ? contact.Normal : -contact.Normal;
+                    if (Vector2.Dot(contactNormal, cardinalDir) > 0.7f)
+                    {
+                        yield return other.Owner;
+                        break; // Move to next pair (other entity)
+                    }
+                }
+            }
+        }
+    }
+
+    public static IEnumerable<Entity> GetTouchingEntitiesLocalDirection(Physical p, Vector2 localDirection, string? groupName = null)
+    {
+        if (localDirection == Vector2.Zero) yield break;
+
+        var transform = p.Owner.GetComponent<Transform>();
+        Vector2 worldDir = localDirection;
+        if (transform != null)
+        {
+            float rad = transform.WorldRotation * MathF.PI / 180.0f;
+            worldDir = RotateVector(localDirection, rad);
+        }
+
+        Guid myId = p.Owner.Id;
+        ulong groupMask = groupName != null ? (Verity.Input.Filter.Get(groupName)?.Mask ?? Verity.Input.FilterRegistry.GetGroupMask(groupName)) : ulong.MaxValue;
+
+        foreach (var pair in _currentContacts)
+        {
+            if (pair.Key.Item1 == myId || pair.Key.Item2 == myId)
+            {
+                bool isA = pair.Key.Item1 == myId;
+                var other = isA ? pair.Value[0].B : pair.Value[0].A;
+
+                if (groupName != null && (other.GroupMask & groupMask) == 0) continue;
+
+                foreach (var contact in pair.Value)
+                {
+                    Vector2 contactNormal = isA ? contact.Normal : -contact.Normal;
+                    // For local direction, we use the raw (but rotated) direction vector instead of snapping to world cardinal
+                    if (Vector2.Dot(contactNormal, Vector2.Normalize(worldDir)) > 0.7f)
+                    {
+                        yield return other.Owner;
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
+    private static Vector2 RotateVector(Vector2 v, float rad)
+    {
+        float cos = MathF.Cos(rad);
+        float sin = MathF.Sin(rad);
+        return new Vector2(v.X * cos - v.Y * sin, v.X * sin + v.Y * cos);
+    }
+
+    private static Vector2 SnapToCardinal(Vector2 dir)
+    {
+        if (dir == Vector2.Zero) return Vector2.Zero;
+        if (MathF.Abs(dir.X) > MathF.Abs(dir.Y))
+            return new Vector2(MathF.Sign(dir.X), 0);
+        else
+            return new Vector2(0, MathF.Sign(dir.Y));
+    }
+
     private static void AddSubStepContacts(List<Contact> subStepContacts, Physical a, Physical b, PhysicsMath.CollisionResult result) { foreach (var p in result.Contacts) subStepContacts.Add(new Contact { A = a, B = b, Normal = result.Normal, Depth = result.Depth, Point = p }); }
 
     public static bool IsGrounded(Physical p, string groupName)

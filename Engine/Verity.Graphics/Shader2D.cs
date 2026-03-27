@@ -14,12 +14,14 @@ layout(location = 1) in vec2 aTexCoord;
 uniform mat4 uProjection;
 uniform mat4 uView;
 uniform mat4 uModel;
+uniform vec2 uUvMin;
+uniform vec2 uUvMax;
 
 out vec2 vTexCoord;
 
 void main()
 {
-    vTexCoord = aTexCoord;
+    vTexCoord = mix(uUvMin, uUvMax, aTexCoord);
     gl_Position = uProjection * uView * uModel * vec4(aPosition, 0.0, 1.0);
 }
 ";
@@ -113,11 +115,27 @@ void main()
         _program.SetTexture(name, texture);
     }
 
+    public void SetUvRect(Vector2 min, Vector2 max)
+    {
+        try
+        {
+            _program.SetVec2("uUvMin", min);
+            _program.SetVec2("uUvMax", max);
+        }
+        catch
+        {
+        }
+    }
+
     public void SetColor(Verity.Core.Color color)
     {
         _program.SetVec4("uColor", color);
     }
 
+    public void SetColor(string name, Verity.Core.Color value)
+    {
+        _program.SetVec4(name, value);
+    }
     public void SetFloat(string name, float value) => _program.SetFloat(name, value);
     public void SetVec2(string name, Vector2 value) => _program.SetVec2(name, value);
     public void SetVec3(string name, Vector3 value) => _program.SetVec3(name, value);

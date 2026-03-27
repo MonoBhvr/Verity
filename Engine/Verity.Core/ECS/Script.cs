@@ -2,6 +2,7 @@ using System.Collections;
 using System.Reflection;
 using Verity.Core.Physics;
 using Verity.Core.Engine;
+using Verity.Core.UI;
 
 namespace Verity.Core.ECS;
 
@@ -246,5 +247,10 @@ public abstract class Script : Component
     public static Entity Instantiate(string name = "New Entity") => Entity.Instantiate(name);
     public static Entity? Instantiate(Entity original) => Entity.Instantiate(original);
     public static T? Instantiate<T>(T original) where T : Component => Entity.Instantiate(original);
+    public static Canvas? FindCanvas(string screenNameOrId) => UiSystem.FindCanvas(screenNameOrId);
+    public static UiNode? FindUi(string nameOrId) => UiSystem.Query(nameOrId);
+    public static T? FindUi<T>(string nameOrId) where T : UiNode => UiSystem.Query<T>(nameOrId);
+    public static Canvas ShowUiScreen(UIScreenAsset screen) => UiSystem.ShowScreen(screen);
+    public static Canvas ShowUiScreen(string path, string? guid = null) => UiSystem.ShowScreen(UiSystem.LoadAsset(path, guid));
     #endregion
 }

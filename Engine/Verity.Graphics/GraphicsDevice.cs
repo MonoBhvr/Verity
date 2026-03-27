@@ -59,11 +59,11 @@ public class GraphicsDevice : IDisposable
         return new GraphicsDevice(gfx, backend);
     }
 
-    public void Clear(Color color, FramebufferObject.Uploaded? framebuffer = null)
+    public void Clear(System.Drawing.Color color, FramebufferObject.Uploaded? framebuffer = null)
     {
         _gfx.Clear(color, framebuffer).Unwrap();
     }
-
+    
     public void Clear(Verity.Core.Color color, FramebufferObject.Uploaded? framebuffer = null)
     {
         _gfx.Clear(color, framebuffer).Unwrap();

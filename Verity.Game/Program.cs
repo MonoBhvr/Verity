@@ -4,10 +4,12 @@ using System.Text.Json;
 using Verity.Core;
 using Verity.Core.ECS;
 using Verity.Core.Engine;
+using Verity.Core.UI;
 using Verity.Core.Serialization;
 using Verity.Core.World;
 using Verity.Graphics;
 using Verity.Input;
+using Verity.Core.Audio;
 using System.Diagnostics;
 using System.Drawing;
 using System.IO;
@@ -31,7 +33,8 @@ internal class Program
         var shader = Shader2D.Create(device);
         var textureManager = new TextureManager(device);
         var renderPipeline = new RenderPipeline(device, shader, textureManager);
-        renderPipeline.BaseAssetsPath = baseDir;
+        RenderPipeline.BaseAssetsPath = baseDir;
+        UiSystem.AssetsRoot = baseDir;
         renderPipeline.SetWhitePixel(textureManager.CreateWhitePixel());
         DefaultSprites.Initialize(textureManager);
         
@@ -116,7 +119,7 @@ internal class Program
         if (WorldManager.ActiveWorld != null)
         {
             foreach (var root in WorldManager.ActiveWorld.RootEntities)
-                FixTexturePathsRecursive(root, textureManager, assembly, assemblyName);
+                BindAssetsRecursive(root, textureManager, assembly, assemblyName);
         }
 
         Time.Reset();
@@ -126,6 +129,9 @@ internal class Program
         long lastTicks = stopwatch.ElapsedTicks;
 
         device.Window.OnSdlEvent += Verity.Input.Input.ProcessEvent;
+
+        // Initialize Audio System
+        AudioSystem.Initialize();
 
         while (!device.ShouldClose)
         {
@@ -145,7 +151,7 @@ internal class Program
                     }
                     if (WorldManager.ActiveWorld != null) {
                         foreach (var root in WorldManager.ActiveWorld.RootEntities)
-                            FixTexturePathsRecursive(root, textureManager, assembly, assemblyName);
+                            BindAssetsRecursive(root, textureManager, assembly, assemblyName);
                     }
                 }
             }
@@ -157,6 +163,7 @@ internal class Program
             Verity.Input.Input.NewLogicTick();
             device.PollEvents();
             gameLoop.TickLogic(deltaTime);
+            UiSystem.Update(device.Window.GetWidth(), device.Window.GetHeight());
 
             var world = WorldManager.ActiveWorld;
             Camera? mainCam = world != null ? FindCameraRecursiveInWorld(world) : null;
@@ -170,11 +177,17 @@ internal class Program
                 device.Gl.Viewport(0, 0, device.Window.GetWidth(), device.Window.GetHeight());
                 device.Clear(new Verity.Core.Color(0.2f, 0.2f, 0.2f, 1.0f));
             }
+
+            foreach (var canvas in UiSystem.ActiveCanvases)
+            {
+                UiRenderer.Render(renderPipeline, canvas.Screen, (int)device.Window.GetWidth(), (int)device.Window.GetHeight());
+            }
             
             device.SwapBuffers();
             Verity.Core.Debug.ClearDrawCommands();
         }
         
+        AudioSystem.Shutdown();
         renderPipeline.Dispose();
         shader.Dispose();
         textureManager.Dispose();
@@ -188,14 +201,18 @@ internal class Program
         using var reader = new StreamReader(stream);
         return reader.ReadToEnd();
     }
-    private static void FixTexturePathsRecursive(Entity entity, TextureManager tm, Assembly asm, string asmName)
+    private static void BindAssetsRecursive(Entity entity, TextureManager tm, Assembly asm, string asmName)
     {
         var sr = entity.GetComponent<SpriteRenderer>();
         if (sr != null && !string.IsNullOrWhiteSpace(sr.Sprite.Path))
         {
             string relPath = sr.Sprite.Path;
-            string fullPath = Path.IsPathRooted(relPath) ? relPath : Path.Combine(baseDir_Static ?? AppContext.BaseDirectory, relPath);
-            if (File.Exists(fullPath)) sr.Texture = tm.Load(fullPath);
+            string fullPath = AssetPathUtility.ResolvePath(baseDir_Static ?? AppContext.BaseDirectory, relPath, sr.Sprite.Guid);
+            if (File.Exists(fullPath))
+            {
+                var settings = AssetPathUtility.TryGetSpriteImportSettings(fullPath);
+                sr.Texture = tm.Load(fullPath, settings?.Filter ?? SpriteTextureFilter.Point);
+            }
             else {
                 var resName = $"{asmName}.{sr.Sprite.Path.Replace("/", ".").Replace("\\", ".")}";
                 using var stream = asm.GetManifestResourceStream(resName);
@@ -206,7 +223,45 @@ internal class Program
                 }
             }
         }
-        foreach (var child in entity.Transform.Children) FixTexturePathsRecursive(child.Owner, tm, asm, asmName);
+
+        var animator = entity.GetComponent<Animator>();
+        if (animator != null && !string.IsNullOrWhiteSpace(animator.ControllerPath))
+        {
+            string relPath = animator.ControllerPath;
+            string fullPath = AssetPathUtility.ResolvePath(baseDir_Static ?? AppContext.BaseDirectory, relPath, animator.ControllerGuid);
+            if (File.Exists(fullPath))
+            {
+                animator.ControllerPath = AssetPathUtility.Normalize(fullPath);
+                if (string.IsNullOrWhiteSpace(animator.ControllerGuid))
+                    animator.ControllerGuid = AssetPathUtility.TryGetGuid(fullPath);
+                animator.Controller = Verity.Core.Animation.AnimatorControllerAsset.LoadFromFile(fullPath);
+            }
+            else
+            {
+                var resName = $"{asmName}.{animator.ControllerPath.Replace("/", ".").Replace("\\", ".")}";
+                var controllerJson = ReadResourceString(asm, resName);
+                if (!string.IsNullOrWhiteSpace(controllerJson))
+                    animator.Controller = Verity.Core.Animation.AnimatorControllerAsset.FromJson(controllerJson);
+            }
+        }
+
+        var audioSource = entity.GetComponent<Verity.Core.Audio.AudioSource>();
+        if (audioSource?.Clip != null && !string.IsNullOrWhiteSpace(audioSource.Clip.Path))
+        {
+            string relPath = audioSource.Clip.Path;
+            string fullPath = AssetPathUtility.ResolvePath(baseDir_Static ?? AppContext.BaseDirectory, relPath, audioSource.Clip.Guid);
+            if (File.Exists(fullPath))
+            {
+                audioSource.Clip.Path = AssetPathUtility.Normalize(fullPath);
+                if (string.IsNullOrWhiteSpace(audioSource.Clip.Guid))
+                    audioSource.Clip.Guid = AssetPathUtility.TryGetGuid(fullPath);
+                audioSource.Clip.PostLoad(fullPath);
+            }
+        }
+
+        entity.GetComponent<Verity.Core.Audio.AudioManager>()?.SyncGroupMap();
+
+        foreach (var child in entity.Transform.Children) BindAssetsRecursive(child.Owner, tm, asm, asmName);
     }
     private static Camera? FindCameraRecursiveInWorld(World world)
     {
@@ -228,3 +283,5 @@ internal class Program
         return null;
     }
 }
+
+

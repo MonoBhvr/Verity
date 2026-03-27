@@ -140,7 +140,18 @@ internal sealed class WorldSnapshot
                     continue;
                 }
 
-                var component = entity.AddComponent(type);
+                var component = entity.GetComponent(type);
+                if (component == null)
+                {
+                    if (!entity.CanAddComponent(type, out var reason))
+                    {
+                        Verity.Core.Debug.LogWarning($"[WorldSnapshot] Skipping component '{type.Name}' on '{entity.Name}': {reason}");
+                        continue;
+                    }
+
+                    component = entity.AddComponent(type);
+                }
+
                 component.Enabled = componentSnapshot.Enabled;
 
                 foreach (var kvp in componentSnapshot.Data)

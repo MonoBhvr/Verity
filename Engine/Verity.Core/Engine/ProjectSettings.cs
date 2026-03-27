@@ -1,4 +1,5 @@
 using System.Numerics;
+using Verity.Core.World;
 
 namespace Verity.Core.Engine;
 
@@ -20,6 +21,11 @@ public class ProjectSettings
     public float DefaultAngularDamping { get; set; } = 0.1f;
     public float DefaultPhysicsThreshold { get; set; } = 0.01f;
     public float DefaultSleepThreshold { get; set; } = 0.01f;
+
+    // Sprite Import Defaults
+    public int DefaultSpritePixelsPerUnit { get; set; } = 32;
+    public int DefaultPointFilterMaxDimension { get; set; } = 256;
+    public SpriteSizingMode DefaultSpriteSizeMode { get; set; } = SpriteSizingMode.FitInsideUnit;
 
     // Project Definitions
     public List<string> Tags { get; set; } = new() { "Untagged", "MainCamera", "Player", "GameController" };

@@ -1,6 +1,7 @@
 using System.Numerics;
-using Verity.Core.ECS;
 using Verity.Core;
+using Verity.Core.ECS;
+using SystemNumericsVector3 = System.Numerics.Vector3;
 
 namespace Verity.Graphics;
 
@@ -43,7 +44,7 @@ public class PolygonRenderer : Component
         Vector2[] result = new Vector2[Vertices.Count];
         for (int i = 0; i < Vertices.Count; i++)
         {
-            var v3 = Vector3.Transform(new Vector3(Vertices[i], 0), worldMatrix);
+            var v3 = SystemNumericsVector3.Transform(new SystemNumericsVector3(Vertices[i], 0), worldMatrix);
             result[i] = new Vector2(v3.X, v3.Y);
         }
         return result;
@@ -86,41 +87,46 @@ public class PolygonRenderer : Component
     public int[] Triangulate()
     {
         if (Vertices.Count < 3 || IsSelfIntersecting()) return Array.Empty<int>();
-        
+
         List<int> indices = new List<int>();
         List<int> V = new List<int>();
         for (int i = 0; i < Vertices.Count; i++) V.Add(i);
 
         // 점들이 시계방향인지 반시계방향인지 확인 (Shoelace formula)
         float area = 0;
-        for (int i = 0; i < Vertices.Count; i++) {
+        for (int i = 0; i < Vertices.Count; i++)
+        {
             Vector2 p1 = Vertices[i];
             Vector2 p2 = Vertices[(i + 1) % Vertices.Count];
             area += (p1.X * p2.Y) - (p2.X * p1.Y);
         }
-        
+
         // 알고리즘이 시계방향 기준이므로 시계방향으로 정렬 (Shoelace formula 결과가 양수면 반시계, 음수면 시계)
-        if (area > 0) V.Reverse(); 
+        if (area > 0) V.Reverse();
 
         int iterations = 0;
-        while (V.Count > 3 && iterations < 1000) {
+        while (V.Count > 3 && iterations < 1000)
+        {
             iterations++;
             bool earFound = false;
-            for (int i = 0; i < V.Count; i++) {
+            for (int i = 0; i < V.Count; i++)
+            {
                 int prev = V[(i + V.Count - 1) % V.Count];
                 int curr = V[i];
                 int next = V[(i + 1) % V.Count];
 
-                if (IsEar(prev, curr, next, V)) {
+                if (IsEar(prev, curr, next, V))
+                {
                     indices.Add(prev); indices.Add(curr); indices.Add(next);
                     V.RemoveAt(i);
                     earFound = true;
                     break;
                 }
             }
-            if (!earFound) break; 
+            if (!earFound) break;
         }
-        if (V.Count == 3) {
+        if (V.Count == 3)
+        {
             indices.Add(V[0]); indices.Add(V[1]); indices.Add(V[2]);
         }
 
@@ -130,13 +136,14 @@ public class PolygonRenderer : Component
     private bool IsEar(int p, int c, int n, List<int> V)
     {
         Vector2 a = Vertices[p]; Vector2 b = Vertices[c]; Vector2 d = Vertices[n];
-        
+
         // 1. 볼록한 꼭짓점인지 확인 (Cross product)
         float cross = (b.X - a.X) * (d.Y - a.Y) - (b.Y - a.Y) * (d.X - a.X);
         if (cross >= 0) return false; // 시계방향 정렬 시 음수여야 볼록함
 
         // 2. 삼각형 안에 다른 점이 있는지 확인
-        for (int i = 0; i < V.Count; i++) {
+        for (int i = 0; i < V.Count; i++)
+        {
             int idx = V[i];
             if (idx == p || idx == c || idx == n) continue;
             if (PointInTriangle(Vertices[idx], a, b, d)) return false;

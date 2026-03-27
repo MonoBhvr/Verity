@@ -17,7 +17,32 @@ public class SpatialHashGrid
 
     public void Add(Physical physical, List<PhysicalShape> shapes)
     {
-        var aabb = GetCombinedAABB(shapes);
+        foreach (var shape in shapes)
+        {
+            if (shape is TilemapShape ts)
+            {
+                foreach (var poly in ts.GetWorldPolygons())
+                {
+                    AddBox(physical, GetAABB(poly));
+                }
+            }
+            else
+            {
+                AddBox(physical, shape.GetAABB());
+            }
+        }
+    }
+
+    private AABB GetAABB(Vector2[] vertices)
+    {
+        if (vertices == null || vertices.Length == 0) return new AABB();
+        Vector2 min = vertices[0], max = vertices[0];
+        for (int i = 1; i < vertices.Length; i++) { min = Vector2.Min(min, vertices[i]); max = Vector2.Max(max, vertices[i]); }
+        return new AABB(min, max);
+    }
+
+    private void AddBox(Physical physical, AABB aabb)
+    {
         if (aabb.IsDefault()) return;
 
         int minX = (int)Math.Floor(aabb.Min.X / _cellSize);
@@ -35,22 +60,42 @@ public class SpatialHashGrid
                     list = new List<Physical>();
                     _grid[key] = list;
                 }
-                list.Add(physical);
+                
+                // For small lists, IndexOf is usually faster than HashSet overhead
+                if (list.IndexOf(physical) == -1) list.Add(physical);
             }
         }
     }
 
     public IEnumerable<Physical> GetPotentialCollisions(Physical physical, List<PhysicalShape> shapes)
     {
-        var aabb = GetCombinedAABB(shapes);
-        if (aabb.IsDefault()) return Enumerable.Empty<Physical>();
+        var potentials = new HashSet<Physical>();
+        foreach (var shape in shapes)
+        {
+            if (shape is TilemapShape ts)
+            {
+                foreach (var poly in ts.GetWorldPolygons())
+                {
+                    GetPotentialFromAABB(potentials, GetAABB(poly), physical);
+                }
+            }
+            else
+            {
+                GetPotentialFromAABB(potentials, shape.GetAABB(), physical);
+            }
+        }
+        return potentials;
+    }
+
+    private void GetPotentialFromAABB(HashSet<Physical> potentials, AABB aabb, Physical physical)
+    {
+        if (aabb.IsDefault()) return;
 
         int minX = (int)Math.Floor(aabb.Min.X / _cellSize);
         int minY = (int)Math.Floor(aabb.Min.Y / _cellSize);
         int maxX = (int)Math.Floor(aabb.Max.X / _cellSize);
         int maxY = (int)Math.Floor(aabb.Max.Y / _cellSize);
 
-        var potentials = new HashSet<Physical>();
         for (int x = minX; x <= maxX; x++)
         {
             for (int y = minY; y <= maxY; y++)
@@ -65,7 +110,6 @@ public class SpatialHashGrid
                 }
             }
         }
-        return potentials;
     }
 
     private AABB GetCombinedAABB(List<PhysicalShape> shapes)

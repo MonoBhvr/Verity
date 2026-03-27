@@ -2,6 +2,13 @@ using System;
 
 namespace Verity.Core;
 
+[AttributeUsage(AttributeTargets.Class, AllowMultiple = true)]
+public class RequireComponentAttribute : Attribute
+{
+    public Type RequiredType { get; }
+    public RequireComponentAttribute(Type requiredType) => RequiredType = requiredType;
+}
+
 [AttributeUsage(AttributeTargets.Field | AttributeTargets.Property)]
 public class SerializeFieldAttribute : Attribute { }
 
@@ -14,6 +21,9 @@ public class AssetReferenceAttribute : Attribute
     public string Extension { get; }
     public AssetReferenceAttribute(string extension = "") { Extension = extension; }
 }
+
+[AttributeUsage(AttributeTargets.Class)]
+public class SingleInstancePerWorldAttribute : Attribute { }
 
 [AttributeUsage(AttributeTargets.Method)]
 public class ButtonAttribute : Attribute

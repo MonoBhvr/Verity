@@ -2,6 +2,7 @@ using System.Numerics;
 using System.Reflection;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using Verity.Core.Audio;
 using Verity.Core.ECS;
 using Verity.Core.World;
 
@@ -11,7 +12,7 @@ public static class SceneSerializer
 {
     private static readonly JsonSerializerOptions _options = new() { 
         WriteIndented = true,
-        Converters = { new Vector2Converter(), new ColorConverter() }
+        Converters = { new Vector2Converter(), new Vector3Converter(), new Vector4Converter(), new SpriteConverter(), new StyleAssetConverter(), new ShaderAssetConverter(), new AudioClipConverter(), new ColorConverter(), new TileBaseConverter(), new TilemapTilesConverter() }
     };
 
     public static string Serialize(World.World world)
@@ -81,7 +82,7 @@ public static class SceneSerializer
             {
                 if (ShouldSerializeMember(f))
                 {
-                    var node = ValueToJsonNode(f.GetValue(component));
+                    var node = ValueToJsonNode(f.GetValue(component), f, component);
                     if (node != null) fieldsJson[f.Name] = node;
                 }
             }
@@ -93,7 +94,7 @@ public static class SceneSerializer
                 if (ShouldSerializeMember(p))
                 {
                     try {
-                        var node = ValueToJsonNode(p.GetValue(component));
+                        var node = ValueToJsonNode(p.GetValue(component), p, component);
                         if (node != null) fieldsJson[p.Name] = node;
                     } catch { }
                 }
@@ -130,7 +131,7 @@ public static class SceneSerializer
         return false;
     }
 
-    private static JsonNode? ValueToJsonNode(object? value)
+    private static JsonNode? ValueToJsonNode(object? value, MemberInfo? member = null, object? owner = null)
     {
         if (value == null) return null;
         var type = value.GetType();
@@ -140,7 +141,17 @@ public static class SceneSerializer
         if (value is double d) return JsonValue.Create(d);
         if (value is int i) return JsonValue.Create(i);
         if (value is bool b) return JsonValue.Create(b);
-        if (value is string s) return JsonValue.Create(s);
+        if (value is string s)
+        {
+            if (member != null && member.GetCustomAttribute<AssetReferenceAttribute>() != null)
+            {
+                string guidMemberName = member.Name.Replace("Path", "Guid", StringComparison.Ordinal);
+                string guidValue = ResolveSiblingStringMember(owner, guidMemberName);
+                return AssetPathUtility.ToJsonNode(s, guidValue);
+            }
+
+            return JsonValue.Create(s);
+        }
         if (type.IsEnum) return JsonValue.Create(value.ToString());
 
         // Complex types via Reflection (Cross-Assembly Safe)
@@ -149,7 +160,34 @@ public static class SceneSerializer
         if (typeName.Contains("Vector3")) return new JsonObject { ["X"] = GetReflectedValue(value, "X"), ["Y"] = GetReflectedValue(value, "Y"), ["Z"] = GetReflectedValue(value, "Z") };
         if (typeName.Contains("Vector4")) return new JsonObject { ["X"] = GetReflectedValue(value, "X"), ["Y"] = GetReflectedValue(value, "Y"), ["Z"] = GetReflectedValue(value, "Z"), ["W"] = GetReflectedValue(value, "W") };
         if (typeName.Contains("Color")) return new JsonObject { ["R"] = GetReflectedValue(value, "R"), ["G"] = GetReflectedValue(value, "G"), ["B"] = GetReflectedValue(value, "B"), ["A"] = GetReflectedValue(value, "A") };
-        if (typeName.Contains("Sprite")) return new JsonObject { ["Path"] = NormalizePath((string?)GetReflectedValue(value, "Path")) };
+        if (value is AudioClip audioClip)
+        {
+            return new JsonObject
+            {
+                ["Name"] = audioClip.Name,
+                ["Path"] = AssetPathUtility.Normalize(audioClip.Path),
+                ["Guid"] = string.IsNullOrWhiteSpace(audioClip.Guid) ? AssetPathUtility.TryGetGuid(audioClip.Path) : audioClip.Guid,
+                ["Type"] = audioClip.Type.ToString(),
+                ["DefaultVolume"] = audioClip.DefaultVolume,
+                ["DefaultPitch"] = audioClip.DefaultPitch,
+                ["IsLooping"] = audioClip.IsLooping
+            };
+        }
+
+        if (value is Sprite sprite)
+            return AssetPathUtility.ToSpriteJsonNode(sprite);
+
+        if (value is IPathAsset asset)
+            return AssetPathUtility.ToJsonNode(asset.Path, asset.Guid);
+
+        if (value is Component component)
+        {
+            return new JsonObject
+            {
+                ["EntityId"] = component.Owner.Id.ToString(),
+                ["ComponentType"] = component.GetType().FullName ?? component.GetType().Name
+            };
+        }
 
         // Fallback for custom nested objects
         try { return JsonNode.Parse(JsonSerializer.Serialize(value, _options)); } catch { return null; }
@@ -171,6 +209,30 @@ public static class SceneSerializer
         if (val is string s) return JsonValue.Create(s);
         if (val is bool b) return JsonValue.Create(b);
         return null;
+    }
+
+    private static string ResolveSiblingStringMember(object? owner, string memberName)
+    {
+        if (owner == null || string.IsNullOrWhiteSpace(memberName))
+            return string.Empty;
+
+        var flags = BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance;
+        var member = (MemberInfo?)owner.GetType().GetProperty(memberName, flags) ?? owner.GetType().GetField(memberName, flags);
+        if (member is PropertyInfo property && property.PropertyType == typeof(string))
+            return property.GetValue(owner) as string ?? string.Empty;
+        if (member is FieldInfo field && field.FieldType == typeof(string))
+            return field.GetValue(owner) as string ?? string.Empty;
+        return string.Empty;
+    }
+
+    private static void SetSiblingStringMember(object owner, string memberName, string value)
+    {
+        var flags = BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance;
+        var member = (MemberInfo?)owner.GetType().GetProperty(memberName, flags) ?? owner.GetType().GetField(memberName, flags);
+        if (member is PropertyInfo property && property.CanWrite && property.PropertyType == typeof(string))
+            property.SetValue(owner, value);
+        else if (member is FieldInfo field && field.FieldType == typeof(string))
+            field.SetValue(owner, value);
     }
 
     public static void Deserialize(World.World world, string json, Assembly? userAssembly = null)
@@ -252,7 +314,8 @@ public static class SceneSerializer
             entities[i].Transform.Scale = DeserializeVector2(node["Scale"]);
         }
 
-        // 4. Restore components
+        // 4. Create components first so reference fields can resolve across entities
+        var pendingFields = new List<(Component Component, JsonObject Fields)>();
         for (int i = 0; i < array.Count; i++)
         {
             var comps = array[i]?["Components"]?.AsArray();
@@ -267,14 +330,29 @@ public static class SceneSerializer
                 Type? type = ResolveType(typeName, userAssembly);
                 if (type == null) continue;
 
-                var component = entities[i].AddComponent(type);
+                var component = entities[i].GetComponent(type);
+                if (component == null)
+                {
+                    if (!entities[i].CanAddComponent(type, out var reason))
+                    {
+                        Debug.LogWarning($"[SceneSerializer] Skipping component '{type.Name}' on '{entities[i].Name}': {reason}");
+                        continue;
+                    }
+
+                    component = entities[i].AddComponent(type);
+                }
+
                 var fields = compNode["Fields"]?.AsObject();
                 if (fields != null)
-                {
-                    foreach (var kvp in fields)
-                        ApplyJsonToMember(component, kvp.Key, kvp.Value);
-                }
+                    pendingFields.Add((component, fields));
             }
+        }
+
+        // 5. Apply serialized values after all components exist
+        foreach (var (component, fields) in pendingFields)
+        {
+            foreach (var kvp in fields)
+                ApplyJsonToMember(component, kvp.Key, kvp.Value, world, userAssembly);
         }
         
         return entities;
@@ -328,7 +406,7 @@ public static class SceneSerializer
         return null;
     }
 
-    private static void ApplyJsonToMember(object target, string name, JsonNode? node)
+    private static void ApplyJsonToMember(object target, string name, JsonNode? node, World.World world, Assembly? userAssembly)
     {
         if (node == null) return;
         var type = target.GetType();
@@ -345,12 +423,50 @@ public static class SceneSerializer
             else if (t == typeof(double)) val = (double?)node;
             else if (t == typeof(int)) val = (int?)node;
             else if (t == typeof(bool)) val = (bool?)node;
-            else if (t == typeof(string)) val = (string?)node;
+            else if (t == typeof(string))
+            {
+                if (member.GetCustomAttribute<AssetReferenceAttribute>() != null)
+                {
+                    var reference = AssetPathUtility.FromJsonNode(node);
+                    val = reference.Path;
+                    SetSiblingStringMember(target, name.Replace("Path", "Guid", StringComparison.Ordinal), reference.Guid);
+                }
+                else
+                {
+                    val = node is JsonValue ? (string?)node : node.ToString();
+                }
+            }
             else if (tName.Contains("Vector2")) val = DeserializeVector2(node);
             else if (tName.Contains("Vector3")) val = new Vector3((float?)node["X"] ?? 0, (float?)node["Y"] ?? 0, (float?)node["Z"] ?? 0);
             else if (tName.Contains("Vector4")) val = new Vector4((float?)node["X"] ?? 0, (float?)node["Y"] ?? 0, (float?)node["Z"] ?? 0, (float?)node["W"] ?? 0);
             else if (tName.Contains("Color")) val = new Verity.Core.Color((float?)node["R"] ?? 1, (float?)node["G"] ?? 1, (float?)node["B"] ?? 1, (float?)node["A"] ?? 1);
-            else if (tName.Contains("Sprite")) val = new Sprite((string?)node["Path"] ?? "");
+            else if (t == typeof(AudioClip))
+            {
+                var reference = AssetPathUtility.FromJsonNode(node);
+                string path = reference.Path;
+                if (!string.IsNullOrWhiteSpace(path))
+                {
+                    AudioType? clipType = Enum.TryParse<AudioType>((string?)node["Type"], true, out var parsedType) ? parsedType : null;
+                    var clip = new AudioClip { Path = path, Guid = reference.Guid, Type = clipType ?? AudioClip.GuessType(path) };
+                    clip.Name = (string?)node["Name"] ?? clip.Name;
+                    clip.DefaultVolume = (float?)node["DefaultVolume"] ?? clip.DefaultVolume;
+                    clip.DefaultPitch = (float?)node["DefaultPitch"] ?? clip.DefaultPitch;
+                    clip.IsLooping = (bool?)node["IsLooping"] ?? clip.IsLooping;
+                    val = clip;
+                }
+            }
+            else if (t == typeof(Sprite)) { val = AssetPathUtility.FromSpriteJsonNode(node); }
+            else if (t == typeof(StyleAsset)) { var reference = AssetPathUtility.FromJsonNode(node); val = new StyleAsset(reference.Path, reference.Guid); }
+            else if (t == typeof(ShaderAsset)) { var reference = AssetPathUtility.FromJsonNode(node); val = new ShaderAsset(reference.Path, reference.Guid); }
+            else if (typeof(Component).IsAssignableFrom(t))
+            {
+                if (Guid.TryParse((string?)node["EntityId"], out var entityId))
+                {
+                    Entity? entity = world.GetAllEntities().FirstOrDefault(e => e.Id == entityId);
+                    Type? componentType = ResolveType((string?)node["ComponentType"] ?? t.FullName ?? t.Name, userAssembly) ?? t;
+                    val = entity?.GetComponent(componentType);
+                }
+            }
             else if (t.IsEnum) val = Enum.Parse(t, node.ToString());
             else val = JsonSerializer.Deserialize(node.ToJsonString(), t, _options);
         } catch { }
@@ -360,13 +476,6 @@ public static class SceneSerializer
             if (member is PropertyInfo pi && pi.CanWrite) pi.SetValue(target, val);
             else if (member is FieldInfo fi) fi.SetValue(target, val);
         }
-    }
-
-    private static string NormalizePath(string? fullPath)
-    {
-        if (string.IsNullOrEmpty(fullPath)) return "";
-        int idx = fullPath.IndexOf("Assets", StringComparison.OrdinalIgnoreCase);
-        return (idx >= 0) ? fullPath.Substring(idx).Replace("\\", "/") : fullPath.Replace("\\", "/");
     }
 
     private static JsonObject SerializeVector2(Vector2 v) => new JsonObject { ["X"] = v.X, ["Y"] = v.Y };

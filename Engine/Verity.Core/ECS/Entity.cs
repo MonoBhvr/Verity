@@ -110,8 +110,17 @@ public class Entity
         if (typeof(T) == typeof(Transform))
             throw new InvalidOperationException("Cannot add a second Transform component.");
 
+        // Prevent duplicate components (except for specific cases if ever needed, but standard is one per entity)
+        var existing = GetComponent<T>();
+        if (existing != null) return (T)(object)existing;
+
+        if (!CanAddComponent(typeof(T), out var reason))
+            throw new InvalidOperationException(reason);
+
         var component = new T { Owner = this };
         _components.Add(component);
+
+        CheckRequiredComponents(typeof(T));
 
         // [SYNC] PolygonShape가 추가될 때 PolygonRenderer가 이미 있으면 동기화
         if (component is Verity.Core.Physics.PolygonShape poly)
@@ -130,9 +139,17 @@ public class Entity
         if (!typeof(Component).IsAssignableFrom(componentType))
             throw new ArgumentException($"Type {componentType.Name} is not a Component.");
 
+        var existing = GetComponent(componentType);
+        if (existing != null) return existing;
+
+        if (!CanAddComponent(componentType, out var reason))
+            throw new InvalidOperationException(reason);
+
         var component = (Component)Activator.CreateInstance(componentType)!;
         component.Owner = this;
         _components.Add(component);
+
+        CheckRequiredComponents(componentType);
 
         // [SYNC] PolygonShape가 추가될 때 PolygonRenderer가 이미 있으면 동기화
         if (component is Verity.Core.Physics.PolygonShape poly)
@@ -141,6 +158,58 @@ public class Entity
         }
 
         return component;
+    }
+
+    public bool CanAddComponent(Type componentType, out string? reason)
+    {
+        reason = null;
+
+        if (componentType == typeof(Transform))
+        {
+            reason = "Cannot add a second Transform component.";
+            return false;
+        }
+
+        if (!typeof(Component).IsAssignableFrom(componentType))
+        {
+            reason = $"Type {componentType.Name} is not a Component.";
+            return false;
+        }
+
+        if (GetComponent(componentType) != null)
+        {
+            reason = $"{componentType.Name} already exists on this entity.";
+            return false;
+        }
+
+        if (componentType.GetCustomAttributes(typeof(Verity.Core.SingleInstancePerWorldAttribute), true).Length > 0 && World != null)
+        {
+            foreach (var entity in World.GetAllEntities())
+            {
+                if (entity == this) continue;
+
+                var conflict = entity.GetComponent(componentType);
+                if (conflict != null)
+                {
+                    reason = $"{componentType.Name} can only exist once per world.";
+                    return false;
+                }
+            }
+        }
+
+        return true;
+    }
+
+    private void CheckRequiredComponents(Type type)
+    {
+        var attrs = type.GetCustomAttributes(typeof(Verity.Core.RequireComponentAttribute), true);
+        foreach (Verity.Core.RequireComponentAttribute attr in attrs)
+        {
+            if (GetComponent(attr.RequiredType) == null)
+            {
+                AddComponent(attr.RequiredType);
+            }
+        }
     }
 
     public T? GetComponent<T>() where T : class

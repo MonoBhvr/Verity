@@ -1,4 +1,6 @@
-using System.Numerics;
+using SystemVector2 = System.Numerics.Vector2;
+using SystemVector3 = System.Numerics.Vector3;
+using SystemVector4 = System.Numerics.Vector4;
 using Irodori.Texture;
 using Verity.Core;
 
@@ -9,9 +11,9 @@ public class StyleRuntime
     public Shader2D? Shader { get; set; }
 
     public Dictionary<string, float> Floats { get; } = new();
-    public Dictionary<string, Vector2> Vector2s { get; } = new();
-    public Dictionary<string, Vector3> Vector3s { get; } = new();
-    public Dictionary<string, Vector4> Vector4s { get; } = new();
+    public Dictionary<string, SystemVector2> Vector2s { get; } = new();
+    public Dictionary<string, SystemVector3> Vector3s { get; } = new();
+    public Dictionary<string, SystemVector4> Vector4s { get; } = new();
     public Dictionary<string, Color> Colors { get; } = new();
     public Dictionary<string, TextureObjectUploaded> Textures { get; } = new();
 

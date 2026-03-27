@@ -7,8 +7,21 @@ namespace Verity.Graphics;
 
 public class SpriteRenderer : Component, IHasSize
 {
+    private Sprite _sprite;
+
     [SerializeField]
-    public Sprite Sprite { get; set; }
+    public Sprite Sprite
+    {
+        get => _sprite;
+        set
+        {
+            if (_sprite.Path == value.Path)
+                return;
+
+            _sprite = value;
+            Texture = null;
+        }
+    }
 
     [SerializeField]
     public StyleAsset Style { get; set; }
@@ -30,6 +43,9 @@ public class SpriteRenderer : Component, IHasSize
 
     [SerializeField]
     public Vector2 Pivot { get; set; } = new(0.5f, 0.5f);
+
+    [SerializeField]
+    public bool UseSpritePivot { get; set; } = true;
 
     [SerializeField]
     public Vector2 Size { get; set; } = Vector2.One;

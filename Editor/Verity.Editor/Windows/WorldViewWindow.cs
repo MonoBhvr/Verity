@@ -20,6 +20,13 @@ public unsafe class WorldViewWindow : EditorWindow
     private bool _isDragging;
     private bool _isBoxSelecting;
     private Vector2 _boxSelectionStart;
+    
+    // Tilemap Editing State
+    private bool _isTileBoxFilling;
+    private (int x, int y) _tileBoxStart;
+    private bool _isTileStrokeActive;
+    private readonly HashSet<(int x, int y)> _tileStrokeTouched = new();
+
     private bool _gridSnap;
     private float _snapSize = 1.0f;
     private GizmoTool _activeTool = GizmoTool.Move;
@@ -98,11 +105,15 @@ public unsafe class WorldViewWindow : EditorWindow
 
     public override void RefreshTitle() { Title = L10n.Tr("window_worldview"); }
 
-    private void UpdatePreviewEntity(World world, bool hovered, Vector2 imgMin)
+    private void UpdatePreviewEntity(World world, bool hovered, System.Numerics.Vector2 imgMin)
     {
         string? draggedPath = EditorSelection.DraggedAssetPath;
+        Sprite? draggedSprite = EditorSelection.DraggedSpriteAsset;
         bool isDraggingBlueprint = draggedPath != null && draggedPath.EndsWith(".blueprint");
         bool isDraggingImage = draggedPath != null && (draggedPath.EndsWith(".png") || draggedPath.EndsWith(".jpg") || draggedPath.EndsWith(".jpeg"));
+        string? previewKey = isDraggingImage
+            ? $"{draggedPath}::{draggedSprite?.SpriteId ?? string.Empty}"
+            : draggedPath;
 
         if ((isDraggingBlueprint || isDraggingImage) && hovered)
         {
@@ -110,7 +121,7 @@ public unsafe class WorldViewWindow : EditorWindow
             var worldMouse = _app.WorldCamera.ScreenToWorld(io.MousePos - imgMin);
             var pos = _gridSnap ? SnapToGrid(worldMouse) : worldMouse;
 
-            if (_previewEntity == null || _previewPath != draggedPath)
+            if (_previewEntity == null || _previewPath != previewKey)
             {
                 if (_previewEntity != null) world.DestroyEntity(_previewEntity);
                 
@@ -120,22 +131,10 @@ public unsafe class WorldViewWindow : EditorWindow
                 }
                 else if (isDraggingImage && draggedPath != null)
                 {
-                    _previewEntity = world.CreateEntity(Path.GetFileNameWithoutExtension(draggedPath) ?? "New Entity");
-                    var sr = _previewEntity.AddComponent<SpriteRenderer>();
-                    sr.Sprite = (Sprite)draggedPath!;
-                    
-                    // Set texture and adjust size for aspect ratio
-                    var tex = _app.TextureManager.Load(draggedPath!);
-                    sr.Texture = tex;
-                    if (tex != null)
-                    {
-                        float aspect = (float)tex.Width / tex.Height;
-                        if (aspect >= 1.0f) sr.Size = new Vector2(1.0f, 1.0f / aspect);
-                        else sr.Size = new Vector2(aspect, 1.0f);
-                    }
+                    _previewEntity = CreateSpriteEntityFromDrag(world, draggedPath, draggedSprite);
                 }
 
-                _previewPath = draggedPath;
+                _previewPath = previewKey;
                 if (_previewEntity != null) SetAlphaRecursive(_previewEntity, 0.5f);
             }
 
@@ -423,13 +422,130 @@ public unsafe class WorldViewWindow : EditorWindow
     private void HandleWorldInteraction(World? world, Vector2 imgMin, Vector2 imgSize, bool hovered)
     {
         var io = ImGui.GetIO();
-        if (ImGui.IsMouseReleased(0)) { 
+        if (ImGui.IsMouseReleased(ImGuiMouseButton.Left) || ImGui.IsMouseReleased(ImGuiMouseButton.Right)) { 
             if (_isDragging || _activeHandle >= 0) _app.EndUndoAction(); 
+            if (_isTileStrokeActive) EndTileStroke();
             if (_isBoxSelecting) FinalizeBoxSelection(world);
             _isDragging = false; _isBoxSelecting = false; _activeHandle = -1; 
         }
         if (world == null) return;
         var worldMouse = ToWorldMousePosition(imgMin, imgSize, io.MousePos);
+
+        // --- Tilemap Editing ---
+        var selectedTileEntity = EditorSelection.SelectedEntity;
+        bool tileEditActive =
+            selectedTileEntity != null &&
+            (EditorSelection.SelectedTile != null ||
+             EditorSelection.SelectedTool == TilemapEditor.Tool.Eraser ||
+             _isTileBoxFilling ||
+             _isTileStrokeActive ||
+             io.MouseDown[(int)ImGuiMouseButton.Right]);
+
+        if (tileEditActive)
+        {
+            var tilemap = selectedTileEntity!.GetComponent<Tilemap>();
+            if (tilemap != null)
+            {
+                // Fix: Check if mouse is actually over this window and not captured by other UI
+                bool isHovered = ImGui.IsWindowHovered();
+                if (!isHovered && !_isTileBoxFilling) return;
+
+                var (tx, ty) = tilemap.WorldToCell(worldMouse);
+                bool isEraser = io.MouseDown[(int)ImGuiMouseButton.Right];
+                var tool = isEraser ? TilemapEditor.Tool.Eraser : EditorSelection.SelectedTool;
+
+                if (isHovered && (tool == TilemapEditor.Tool.Brush || tool == TilemapEditor.Tool.Eraser))
+                {
+                    DrawTileBrushPreview(tilemap, tx, ty, imgMin, tool == TilemapEditor.Tool.Eraser);
+                }
+                
+                // Box Fill Logic
+                if (tool == TilemapEditor.Tool.BoxFill && !isEraser)
+                {
+                    if (ImGui.IsMouseClicked(0) && isHovered)
+                    {
+                        _isTileBoxFilling = true;
+                        _tileBoxStart = (tx, ty);
+                        _app.BeginUndoAction();
+                    }
+                    
+                    if (_isTileBoxFilling)
+                    {
+                        // Draw Preview
+                        var cam = _app.WorldCamera;
+                        var startWorld = tilemap.CellToWorld(_tileBoxStart.x, _tileBoxStart.y);
+                        var endWorld = tilemap.CellToWorld(tx + 1, ty + 1);
+                        
+                        // Fix bounds
+                        var minW = Vector2.Min(startWorld, tilemap.CellToWorld(tx, ty));
+                        var maxW = Vector2.Max(tilemap.CellToWorld(_tileBoxStart.x + 1, _tileBoxStart.y + 1), endWorld);
+                        
+                        var p1 = imgMin + cam.WorldToScreen(minW);
+                        var p2 = imgMin + cam.WorldToScreen(maxW);
+                        
+                        var dl = ImGui.GetWindowDrawList();
+                        dl.AddRect(p1, p2, ImGui.GetColorU32(new Vector4(1, 1, 0, 0.8f)), 0, 0, 2f);
+                        dl.AddRectFilled(p1, p2, ImGui.GetColorU32(new Vector4(1, 1, 0, 0.2f)));
+
+                        if (ImGui.IsMouseReleased(0))
+                        {
+                            TilemapEditor.BoxFill(tilemap, _tileBoxStart.x, _tileBoxStart.y, tx, ty, EditorSelection.SelectedTile);
+                            _isTileBoxFilling = false;
+                            _app.EndUndoAction();
+                        }
+                        
+                        // Prevent other interactions
+                        if (!io.KeyCtrl) return;
+                    }
+                }
+                else
+                {
+                    _isTileBoxFilling = false;
+                    bool mouseDown = io.MouseDown[(int)ImGuiMouseButton.Left] || io.MouseDown[(int)ImGuiMouseButton.Right];
+                    if (mouseDown && isHovered)
+                    {
+                        if (!_isTileStrokeActive &&
+                            (ImGui.IsMouseClicked(ImGuiMouseButton.Left) || ImGui.IsMouseClicked(ImGuiMouseButton.Right)) &&
+                            (tool == TilemapEditor.Tool.Brush || tool == TilemapEditor.Tool.Eraser))
+                        {
+                            _app.BeginUndoAction();
+                            _isTileStrokeActive = true;
+                            _tileStrokeTouched.Clear();
+                        }
+
+                        switch (tool)
+                        {
+                            case TilemapEditor.Tool.Brush:
+                            case TilemapEditor.Tool.Eraser:
+                                if (_isTileStrokeActive)
+                                {
+                                    ApplyTileStroke(tilemap, tx, ty, tool);
+                                }
+                                break;
+                            case TilemapEditor.Tool.Picker: 
+                                if (ImGui.IsMouseClicked(0)) {
+                                    var picked = TilemapEditor.Picker(tilemap, tx, ty);
+                                    if (picked != null)
+                                    {
+                                        var tilePalette = _app.GetWindow<TilePaletteWindow>();
+                                        if (tilePalette == null || !tilePalette.TrySelectTileAsset(picked))
+                                            EditorSelection.SelectedTile = picked;
+                                    }
+                                }
+                                break;
+                            case TilemapEditor.Tool.FloodFill: 
+                                if (ImGui.IsMouseClicked(0))
+                                {
+                                    _app.RecordUndo();
+                                    TilemapEditor.FloodFill(tilemap, tx, ty, EditorSelection.SelectedTile);
+                                }
+                                break;
+                        }
+                    }
+                }
+                if (!io.KeyCtrl) return; // Prevent entity selection if editing tilemap unless Ctrl is held
+            }
+        }
 
         if (EditorSelection.IsEditingPolygon && EditorSelection.SelectedEntity != null) {
             var targetComp = EditorSelection.EditingPolygonComponent;
@@ -451,7 +567,27 @@ public unsafe class WorldViewWindow : EditorWindow
                     _app.RecordUndo();
                     if (_previewEntity != null) { SetAlphaRecursive(_previewEntity, 1.0f); _previewEntity = null; _previewPath = null; }
                     else _app.InstantiateBlueprint(EditorSelection.DraggedAssetPath, _gridSnap ? SnapToGrid(worldMouse) : worldMouse);
-                    EditorSelection.DraggedAssetPath = null;
+                    EditorSelection.ClearAssetDrag();
+                }
+            }
+            else if (EditorSelection.DraggedAssetPath != null && IsImageAsset(EditorSelection.DraggedAssetPath))
+            {
+                if (ImGui.AcceptDragDropPayload("ASSET_PATH").Handle != null)
+                {
+                    _app.RecordUndo();
+                    if (_previewEntity != null)
+                    {
+                        SetAlphaRecursive(_previewEntity, 1.0f);
+                        _previewEntity = null;
+                        _previewPath = null;
+                    }
+                    else
+                    {
+                        var created = CreateSpriteEntityFromDrag(world, EditorSelection.DraggedAssetPath, EditorSelection.DraggedSpriteAsset);
+                        created.Transform.Position = _gridSnap ? SnapToGrid(worldMouse) : worldMouse;
+                    }
+
+                    EditorSelection.ClearAssetDrag();
                 }
             }
             ImGui.EndDragDropTarget();
@@ -520,7 +656,7 @@ public unsafe class WorldViewWindow : EditorWindow
     private void FinalizeBoxSelection(World? world) {
         if (world == null) return;
         var io = ImGui.GetIO(); var min = Vector2.Min(_boxSelectionStart, io.MousePos); var max = Vector2.Max(_boxSelectionStart, io.MousePos);
-        var imgMin = ImGui.GetItemRectMin(); var cam = _app.WorldCamera;
+        Vector2 imgMin = ImGui.GetItemRectMin(); var cam = _app.WorldCamera;
         if (!io.KeyCtrl) EditorSelection.ClearSelection();
         foreach (var ent in world.GetAllEntities()) {
             var bounds = GetEntityBounds(ent);
@@ -645,7 +781,9 @@ public unsafe class WorldViewWindow : EditorWindow
         drawList.AddLine(new Vector2(imgMin.X, screenPos.Y), new Vector2(imgMin.X + ImGui.GetItemRectSize().X, screenPos.Y), guidelineColor);
         float halfSize = (1.0f / GetWorldPixelSize()) * 0.5f;
         drawList.AddRect(screenPos - new Vector2(halfSize), screenPos + new Vector2(halfSize), boxColor, 0, 0, 2.0f);
-        var label = $"{L10n.Tr("btn_add")}: {name}"; var labelSize = ImGui.CalcTextSize(label); var labelPos = screenPos + new Vector2(-labelSize.X * 0.5f, -labelSize.Y - 15);
+        var label = $"{L10n.Tr("btn_add")}: {name}"; 
+        Vector2 labelSize = ImGui.CalcTextSize(label); 
+        Vector2 labelPos = screenPos + new Vector2(-labelSize.X * 0.5f, -labelSize.Y - 15);
         drawList.AddRectFilled(labelPos - new Vector2(5, 2), labelPos + labelSize + new Vector2(5, 2), ImGui.GetColorU32(new Vector4(0, 0, 0, 0.6f)), 4f);
         drawList.AddText(labelPos, ImGui.GetColorU32(new Vector4(1, 1, 1, 1)), label);
     }
@@ -675,8 +813,8 @@ public unsafe class WorldViewWindow : EditorWindow
     private Entity? PickEntity(World world, Vector2 mouse) { var renderers = CollectRenderers(world); SortRenderers(renderers); for (int i = renderers.Count - 1; i >= 0; i--) if (IsPointInsideSpriteAabb(renderers[i], mouse)) return renderers[i].Owner; return PickEmptyEntity(world, mouse); }
     private Entity? PickEmptyEntity(World world, Vector2 mouse) { Entity? res = null; foreach (var e in world.RootEntities) PickEmptyEntityRecursive(e, mouse, ref res); return res; }
     private static void PickEmptyEntityRecursive(Entity e, Vector2 m, ref Entity? r) { if (!e.Active) return; if (e.GetComponent<SpriteRenderer>() == null) { var p = e.Transform.WorldPosition; var s = e.Transform.Scale * DefaultEntitySize * 0.5f; if (m.X >= p.X - MathF.Abs(s.X) && m.X <= p.X + MathF.Abs(s.X) && m.Y >= p.Y - MathF.Abs(s.Y) && m.Y <= p.Y + MathF.Abs(s.Y)) r = e; } foreach (var c in e.Transform.Children) PickEmptyEntityRecursive(c.Owner, m, ref r); }
-    private static bool IsPointInsideSpriteAabb(SpriteRenderer sr, Vector2 p) { var t = sr.Owner.Transform; var wp = t.WorldPosition; var s = t.WorldScale * sr.Size; var min = wp - sr.Pivot * s; var max = wp + (Vector2.One - sr.Pivot) * s; return p.X >= MathF.Min(min.X, max.X) && p.X <= MathF.Max(min.X, max.X) && p.Y >= MathF.Min(min.Y, max.Y) && p.Y <= MathF.Max(min.Y, max.Y); }
-    private static (Vector2 center, Vector2 size, float rotation) GetEntityBounds(Entity e) 
+    private bool IsPointInsideSpriteAabb(SpriteRenderer sr, Vector2 p) { var t = sr.Owner.Transform; var wp = t.WorldPosition; var s = t.WorldScale * sr.Size; var pivot = GetResolvedPivot(sr); var min = wp - pivot * s; var max = wp + (Vector2.One - pivot) * s; return p.X >= MathF.Min(min.X, max.X) && p.X <= MathF.Max(min.X, max.X) && p.Y >= MathF.Min(min.Y, max.Y) && p.Y <= MathF.Max(min.Y, max.Y); }
+    private (Vector2 center, Vector2 size, float rotation) GetEntityBounds(Entity e) 
     { 
         var sr = e.GetComponent<SpriteRenderer>(); 
         var t = e.Transform; 
@@ -690,7 +828,8 @@ public unsafe class WorldViewWindow : EditorWindow
             if (effS.X < 0.0001f) effS.X = 0.0001f;
             if (effS.Y < 0.0001f) effS.Y = 0.0001f;
 
-            var off = (Vector2.One * 0.5f - sr.Pivot) * (s * sr.Size); 
+            var pivot = GetResolvedPivot(sr);
+            var off = (Vector2.One * 0.5f - pivot) * (s * sr.Size); 
             float rad = r * MathF.PI / 180f; 
             var roff = new Vector2(off.X * MathF.Cos(rad) - off.Y * MathF.Sin(rad), off.X * MathF.Sin(rad) + off.Y * MathF.Cos(rad)); 
             return (wp + roff, effS, r); 
@@ -698,11 +837,67 @@ public unsafe class WorldViewWindow : EditorWindow
         var absS = new Vector2(MathF.Max(0.0001f, MathF.Abs(s.X)), MathF.Max(0.0001f, MathF.Abs(s.Y))); 
         return (wp, absS * DefaultEntitySize, r); 
     }
+
+    private Entity CreateSpriteEntityFromDrag(World world, string draggedPath, Sprite? draggedSprite)
+    {
+        var entity = world.CreateEntity(Path.GetFileNameWithoutExtension(draggedPath) ?? "New Entity");
+        var sr = entity.AddComponent<SpriteRenderer>();
+        sr.Sprite = draggedSprite ?? _app.CreateSpriteReference(draggedPath);
+        sr.Texture = _app.LoadSpriteTexture(sr.Sprite);
+        sr.Size = _app.GetDefaultSpriteWorldSize(sr.Sprite);
+        sr.Pivot = _app.GetDefaultSpritePivot(sr.Sprite);
+        return entity;
+    }
+
+    private static bool IsImageAsset(string path)
+    {
+        string ext = Path.GetExtension(path).ToLowerInvariant();
+        return ext is ".png" or ".jpg" or ".jpeg";
+    }
+    private Vector2 GetResolvedPivot(SpriteRenderer sr) => sr.UseSpritePivot ? _app.GetDefaultSpritePivot(sr.Sprite) : sr.Pivot;
     private float GetWorldPixelSize() { float h = _app.WorldCamera.VisibleHalfHeight * 2f; return _app.WorldCamera.ViewportHeight > 0 ? h / _app.WorldCamera.ViewportHeight : 0.01f; }
     private Vector2 ToWorldMousePosition(Vector2 min, Vector2 sz, Vector2 abs) { var l = abs - min; l.X = Math.Clamp(l.X, 0f, sz.X); l.Y = Math.Clamp(l.Y, 0f, sz.Y); return _app.WorldCamera.ScreenToWorld(l); }
     private static List<SpriteRenderer> CollectRenderers(World w) { var r = new List<SpriteRenderer>(); foreach (var e in w.RootEntities) CollectRenderersRecursive(e, r); return r; }
     private static void CollectRenderersRecursive(Entity e, List<SpriteRenderer> r) { if (!e.Active) return; var sr = e.GetComponent<SpriteRenderer>(); if (sr != null) r.Add(sr); foreach (var c in e.Transform.Children) CollectRenderersRecursive(c.Owner, r); }
     private void SortRenderers(List<SpriteRenderer> r) { r.Sort((a, b) => { int lc = Verity.Graphics.SortingLayer.GetLayerIndex(a.SortingLayerName).CompareTo(Verity.Graphics.SortingLayer.GetLayerIndex(b.SortingLayerName)); if (lc != 0) return lc; return a.OrderInLayer.CompareTo(b.OrderInLayer); }); }
+    private void ApplyTileStroke(Tilemap tilemap, int tx, int ty, TilemapEditor.Tool tool)
+    {
+        var cells = TilemapEditor.GetBrushCells(tx, ty, EditorSelection.TileBrushSize, EditorSelection.TileBrushShape);
+        foreach (var cell in cells)
+        {
+            if (!_tileStrokeTouched.Add(cell)) continue;
+            tilemap.SetTile(cell.x, cell.y, tool == TilemapEditor.Tool.Eraser ? null : EditorSelection.SelectedTile);
+        }
+    }
+
+    private void EndTileStroke()
+    {
+        _app.EndUndoAction();
+        _isTileStrokeActive = false;
+        _tileStrokeTouched.Clear();
+    }
+
+    private void DrawTileBrushPreview(Tilemap tilemap, int tx, int ty, Vector2 imgMin, bool erasing)
+    {
+        var cam = _app.WorldCamera;
+        var dl = ImGui.GetWindowDrawList();
+        var lineColor = erasing ? new Vector4(1f, 0.4f, 0.4f, 0.95f) : new Vector4(0.4f, 0.8f, 1f, 0.95f);
+        var fillColor = erasing ? new Vector4(1f, 0.35f, 0.35f, 0.18f) : new Vector4(0.35f, 0.75f, 1f, 0.18f);
+
+        foreach (var cell in TilemapEditor.GetBrushCells(tx, ty, EditorSelection.TileBrushSize, EditorSelection.TileBrushShape))
+        {
+            var startWorld = tilemap.CellToWorld(cell.x, cell.y);
+            var endWorld = tilemap.CellToWorld(cell.x + 1, cell.y + 1);
+            var minW = Vector2.Min(startWorld, endWorld);
+            var maxW = Vector2.Max(startWorld, endWorld);
+
+            var p1 = imgMin + cam.WorldToScreen(minW);
+            var p2 = imgMin + cam.WorldToScreen(maxW);
+
+            dl.AddRectFilled(p1, p2, ImGui.GetColorU32(fillColor));
+            dl.AddRect(p1, p2, ImGui.GetColorU32(lineColor), 0f, 0, 1.5f);
+        }
+    }
     private Vector2 SnapToGrid(Vector2 p) => new(MathF.Round(p.X / _snapSize) * _snapSize, MathF.Round(p.Y / _snapSize) * _snapSize);
     private void HandleCameraControls() { 
         if (!ImGui.IsWindowHovered()) return; 
@@ -756,7 +951,7 @@ public unsafe class WorldViewWindow : EditorWindow
             var sr = entity.GetComponent<SpriteRenderer>(); 
             if (sr != null && !string.IsNullOrWhiteSpace(sr.Sprite.Path)) { 
                 var fullPath = System.IO.Path.Combine(_app.ProjectPath!, sr.Sprite.Path); 
-                if (System.IO.File.Exists(fullPath)) sr.Texture = _app.TextureManager.Load(fullPath); 
+                if (System.IO.File.Exists(fullPath)) sr.Texture = _app.LoadSpriteTexture(sr.Sprite); 
             } 
         } 
         WorldManager.SetActiveWorld(w); 

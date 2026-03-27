@@ -1,0 +1,33 @@
+{
+    "folders": [
+        {
+            "path": ".",
+            "name": "Verity [Root]"
+        }
+    ],
+    "settings": {
+        "dotnet.defaultSolution": "Verity.sln",
+        "omnisharp.useModernNet": true,
+        "omnisharp.enableImportCompletion": true,
+        "omnisharp.enableRoslynAnalyzers": true,
+        "omnisharp.analyzeOpenDocumentsOnly": false,
+        "csharp.suppressDotnetRestoreNotification": true,
+        "files.exclude": {
+            "**/.git": true,
+            "**/.svn": true,
+            "**/.hg": true,
+            "**/CVS": true,
+            "**/.DS_Store": true,
+            "**/Thumbs.db": true,
+            "**/bin": true,
+            "**/obj": true
+        }
+    },
+    "extensions": {
+        "recommendations": [
+            "ms-dotnettools.csdevkit",
+            "ms-dotnettools.csharp",
+            "ms-vscode.vscode-node-azure-pack"
+        ]
+    }
+}

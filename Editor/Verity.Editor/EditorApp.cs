@@ -6,6 +6,7 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using Hexa.NET.ImGui;
 using Irodori.Backend.OpenGL;
+using Irodori.Texture;
 using Verity.Core;
 using CoreDebug = Verity.Core.Debug;
 using Verity.Core.ECS;
@@ -15,8 +16,9 @@ using Verity.Editor.Windows;
 using Verity.Core.Serialization;
 using Verity.Graphics;
 using Verity.Input;
-using Color = System.Drawing.Color;
+using Verity.Core.UI;
 using SortingLayer = Verity.Graphics.SortingLayer;
+using Verity.Core.Audio;
 
 namespace Verity.Editor;
 
@@ -41,6 +43,9 @@ public class EditorApp : IDisposable
     private ScriptCompiler? _scriptCompiler;
     private readonly UndoSystem _undoSystem = new();
     private FileSystemWatcher? _assetWatcher;
+    private readonly object _assetInvalidationLock = new();
+    private readonly HashSet<string> _pendingTextureRefreshes = new(StringComparer.OrdinalIgnoreCase);
+    private readonly HashSet<string> _pendingTileRefreshes = new(StringComparer.OrdinalIgnoreCase);
 
     private readonly List<(string text, float duration)> _overlayMessages = new();
     private Filter? _filterToDelete;
@@ -177,6 +182,9 @@ public class EditorApp : IDisposable
         _worldCamera.SetViewportSize(width, height);
         _device.Window.OnSdlEvent += Verity.Input.Input.ProcessEvent;
 
+        // Initialize Audio System
+        AudioSystem.Initialize();
+
         ApplyEditorIcon();
     }
 
@@ -303,7 +311,8 @@ public class EditorApp : IDisposable
         Verity.Input.FilterManager.Load();
         LoadProjectSettings();
         LoadBuildSettings();
-        _renderPipeline.BaseAssetsPath = ProjectPath;
+        RenderPipeline.BaseAssetsPath = ProjectPath;
+        UiSystem.AssetsRoot = ProjectPath;
         
         InitializeAssetWatcher(AssetsPath!);
 
@@ -459,13 +468,7 @@ public class EditorApp : IDisposable
             var bs = JsonSerializer.Deserialize<BuildSettings>(state.BuildSettingsJson);
             if (bs != null) this.BuildSettings = bs;
         } catch { }
-        foreach (var entity in world.GetAllEntities()) {
-            var sr = entity.GetComponent<SpriteRenderer>();
-            if (sr != null && !string.IsNullOrWhiteSpace(sr.Sprite.Path)) {
-                var fullPath = Path.Combine(ProjectPath!, sr.Sprite.Path);
-                if (File.Exists(fullPath)) sr.Texture = TextureManager.Load(fullPath);
-            }
-        }
+        BindWorldAssets(world);
         if (selectedId.HasValue)
             EditorSelection.SelectedEntity = world.GetAllEntities().FirstOrDefault(e => e.Id == selectedId.Value);
         UpdateWindowTitle();
@@ -555,7 +558,7 @@ public class EditorApp : IDisposable
             GetWindow<Windows.ProjectWindow>()?.SaveActiveWorldAsAsset();
             ResetDirty();
             
-            ShowOverlayMessage(L10n.Tr("msg_scripts_reloaded") ?? "Scripts reloaded and world updated.");
+            ShowOverlayMessage(L10n.Tr("msg_scripts_reloaded") ?? "Scripts   and world updated.");
             CoreDebug.Log("[Editor] Hot-reload successful.");
         } catch (Exception e) {
             CoreDebug.LogError($"[Editor] Critical error during script hot-reload: {e.Message}");
@@ -581,6 +584,7 @@ public class EditorApp : IDisposable
         EditorSelection.SelectedEntity = null; 
         
         _snapshot?.Restore(WorldManager.ActiveWorld, _scriptCompiler?.CompiledAssembly); 
+        BindWorldAssets(WorldManager.ActiveWorld);
         _snapshot = null; 
         _gameLoop = null; 
         IsPlaying = false; 
@@ -603,6 +607,7 @@ public class EditorApp : IDisposable
             if (!IsPlaying) { Time.DeltaTime = deltaTime; Time.TotalTime += deltaTime; }
             Verity.Input.Input.Enabled = _isScreenFocused;
             _device.PollEvents();
+            ProcessPendingAssetInvalidations();
 
             // Handle window close button
             if (_device.Window.ShouldClose && _hasUnsavedChanges && !_showExitConfirmPopup)
@@ -612,6 +617,7 @@ public class EditorApp : IDisposable
             }
 
             if (IsPlaying && _gameLoop != null) _gameLoop.TickLogic(deltaTime);
+
             HandleGlobalShortcuts();
             if (_isFocusInterpolating) {
                 float t = Math.Min(1.0f, deltaTime * 8.0f);
@@ -622,7 +628,7 @@ public class EditorApp : IDisposable
                 }
             }
             _device.Gl.Viewport(0, 0, _device.Window.GetWidth(), _device.Window.GetHeight());
-            _device.Clear(Color.FromArgb(255, 30, 30, 30));
+            _device.Clear(System.Drawing.Color.FromArgb(255, 30, 30, 30));
             _imgui.BeginFrame();
             if (CurrentProjectName == null) DrawLauncher();
             else {
@@ -721,8 +727,8 @@ public class EditorApp : IDisposable
             string t1 = L10n.Tr("msg_building_project"); string t2 = BuildStatus;
             var s1 = ImGui.CalcTextSize(t1); var s2 = ImGui.CalcTextSize(t2);
             
-            dl.AddText(center - new Vector2(s1.X * 0.5f, 20), ImGui.GetColorU32(new Vector4(1, 1, 0, 1)), t1);
-            dl.AddText(center - new Vector2(s2.X * 0.5f, -10), ImGui.GetColorU32(new Vector4(1, 1, 1, 1)), t2);
+            dl.AddText(center - new System.Numerics.Vector2(s1.X * 0.5f, 20), ImGui.GetColorU32(new Vector4(1, 1, 0, 1)), t1);
+            dl.AddText(center - new System.Numerics.Vector2(s2.X * 0.5f, -10), ImGui.GetColorU32(new Vector4(1, 1, 1, 1)), t2);
         }
 
         if (_overlayMessages.Count > 0) {
@@ -731,10 +737,10 @@ public class EditorApp : IDisposable
                 var msg = _overlayMessages[i];
                 string text = $"[Verity] {msg.text}";
                 var textSize = ImGui.CalcTextSize(text);
-                var pos = viewport.Pos + new Vector2(20, yOffset - textSize.Y);
+                var pos = viewport.Pos + new System.Numerics.Vector2(20, yOffset - textSize.Y);
                 
                 // Draw background box for readability
-                dl.AddRectFilled(pos - new Vector2(5, 2), pos + textSize + new Vector2(5, 2), ImGui.GetColorU32(new Vector4(0, 0, 0, 0.8f)), 4f);
+                dl.AddRectFilled(pos - new System.Numerics.Vector2(5, 2), pos + textSize + new System.Numerics.Vector2(5, 2), ImGui.GetColorU32(new Vector4(0, 0, 0, 0.8f)), 4f);
                 dl.AddText(pos, ImGui.GetColorU32(new Vector4(1, 0.8f, 0.2f, 1)), text);
                 
                 yOffset -= (textSize.Y + 10);
@@ -906,6 +912,7 @@ public class EditorApp : IDisposable
             ImGuiP.DockBuilderDockWindow(L10n.Tr("window_inspector"), rightId);
             ImGuiP.DockBuilderDockWindow(L10n.Tr("window_project"), bottomId);
             ImGuiP.DockBuilderDockWindow(L10n.Tr("window_console"), bottomId);
+            ImGuiP.DockBuilderDockWindow(L10n.Tr("window_animation"), bottomId);
             ImGuiP.DockBuilderDockWindow(L10n.Tr("window_worldview"), centerId);
             ImGuiP.DockBuilderDockWindow(L10n.Tr("window_screen"), centerId);
             
@@ -920,17 +927,187 @@ public class EditorApp : IDisposable
         string dir = targetPath ?? AssetsPath ?? ""; if (string.IsNullOrEmpty(dir)) return;
         string safeName = string.Join("_", entity.Name.Split(Path.GetInvalidFileNameChars())); if (string.IsNullOrWhiteSpace(safeName)) safeName = "Entity";
         string path = Path.Combine(dir, $"{safeName}.blueprint"); int count = 1; while (File.Exists(path)) path = Path.Combine(dir, $"{safeName}_{count++}.blueprint");
-        try { string json = Verity.Core.Serialization.SceneSerializer.SerializeEntity(entity); File.WriteAllText(path, json); } catch { }
+        try { string json = Verity.Core.Serialization.SceneSerializer.SerializeEntity(entity); File.WriteAllText(path, json); AssetPathUtility.EnsureMetaAndGetGuid(path); } catch { }
     }
 
     public Entity? InstantiateBlueprint(string path, Vector2? position = null, Entity? parent = null) {
         var world = WorldManager.ActiveWorld; if (world == null || !File.Exists(path) || AssetsPath == null) return null;
-        try { string json = File.ReadAllText(path); var entity = Verity.Core.Serialization.SceneSerializer.DeserializeEntity(world, json, ScriptCompiler?.CompiledAssembly); if (entity != null) { if (position.HasValue) entity.Transform.Position = position.Value; if (parent != null) entity.Transform.SetParent(parent.Transform, false); BindAssetsRecursive(entity); return entity; } } catch { } return null;
+        try { string json = File.ReadAllText(path); var entity = Verity.Core.Serialization.SceneSerializer.DeserializeEntity(world, json, ScriptCompiler?.CompiledAssembly); if (entity != null) { if (position.HasValue) entity.Transform.Position = position.Value; if (parent != null) entity.Transform.SetParent(parent.Transform, false); BindEntityAssetsRecursive(entity); return entity; } } catch { } return null;
     }
 
-    private void BindAssetsRecursive(Entity entity) {
-        var sr = entity.GetComponent<SpriteRenderer>(); if (sr != null && !string.IsNullOrWhiteSpace(sr.Sprite.Path)) { var fullPath = Path.Combine(ProjectPath!, sr.Sprite.Path); if (File.Exists(fullPath)) sr.Texture = TextureManager.Load(fullPath); }
-        foreach (var child in entity.Transform.Children) BindAssetsRecursive(child.Owner);
+    public void BindWorldAssets(World world)
+    {
+        foreach (var root in world.RootEntities)
+            BindEntityAssetsRecursive(root);
+    }
+
+    public Sprite CreateSpriteReference(string path, string? spriteId = null)
+    {
+        string normalized = AssetPathUtility.Normalize(path);
+        string guid = Path.IsPathRooted(path) ? AssetPathUtility.EnsureMetaAndGetGuid(path) : string.Empty;
+        return new Sprite(normalized, guid, spriteId ?? string.Empty);
+    }
+
+    public SpriteImportSettings GetOrCreateSpriteImportSettings(string assetPath)
+    {
+        string fullPath = Path.GetFullPath(assetPath);
+        var existing = AssetPathUtility.TryGetSpriteImportSettings(fullPath);
+        if (existing != null)
+        {
+            var raw = TextureManager.GetRawPixels(fullPath);
+            existing.Normalize(raw.Width, raw.Height);
+            AssetPathUtility.SaveSpriteImportSettings(fullPath, existing);
+            return existing;
+        }
+
+        var image = TextureManager.GetRawPixels(fullPath);
+        var created = SpriteImportUtility.CreateDefaults(ProjectSettings, image.Width, image.Height);
+        AssetPathUtility.SaveSpriteImportSettings(fullPath, created);
+        return created;
+    }
+
+    public SpriteImportSettings? TryGetSpriteImportSettings(string assetPath, bool initializeIfMissing = true)
+    {
+        string fullPath = Path.GetFullPath(assetPath);
+        var settings = AssetPathUtility.TryGetSpriteImportSettings(fullPath);
+        if (settings != null || !initializeIfMissing)
+            return settings;
+
+        return GetOrCreateSpriteImportSettings(fullPath);
+    }
+
+    public SpriteSlice ResolveSpriteSlice(Sprite sprite, bool initializeIfMissing = true)
+    {
+        if (string.IsNullOrWhiteSpace(sprite.Path))
+            return SpriteImportUtility.CreateDefaultSlice(1, 1, new Vector2(0.5f, 0.5f));
+
+        string fullPath = ResolveAssetPath(sprite.Path, sprite.Guid);
+        if (!File.Exists(fullPath))
+            return SpriteImportUtility.CreateDefaultSlice(1, 1, new Vector2(0.5f, 0.5f));
+
+        var raw = TextureManager.GetRawPixels(fullPath);
+        if (initializeIfMissing)
+            GetOrCreateSpriteImportSettings(fullPath);
+
+        return AssetPathUtility.ResolveSpriteSlice(fullPath, sprite, raw.Width, raw.Height);
+    }
+
+    public Vector2 GetDefaultSpriteWorldSize(Sprite sprite)
+    {
+        if (string.IsNullOrWhiteSpace(sprite.Path))
+            return Vector2.One;
+
+        string fullPath = ResolveAssetPath(sprite.Path, sprite.Guid);
+        if (!File.Exists(fullPath))
+            return Vector2.One;
+
+        var raw = TextureManager.GetRawPixels(fullPath);
+        var settings = GetOrCreateSpriteImportSettings(fullPath);
+        var slice = AssetPathUtility.ResolveSpriteSlice(fullPath, sprite, raw.Width, raw.Height);
+        return SpriteImportUtility.ComputeWorldSize(settings, slice);
+    }
+
+    public Vector2 GetDefaultSpritePivot(Sprite sprite)
+    {
+        if (string.IsNullOrWhiteSpace(sprite.Path))
+            return new Vector2(0.5f, 0.5f);
+
+        string fullPath = ResolveAssetPath(sprite.Path, sprite.Guid);
+        if (!File.Exists(fullPath))
+            return new Vector2(0.5f, 0.5f);
+
+        var raw = TextureManager.GetRawPixels(fullPath);
+        if (AssetPathUtility.TryGetSpriteImportSettings(fullPath) == null)
+            GetOrCreateSpriteImportSettings(fullPath);
+
+        return AssetPathUtility.ResolveSpriteSlice(fullPath, sprite, raw.Width, raw.Height).Pivot;
+    }
+
+    public TextureObjectUploaded? LoadSpriteTexture(Sprite sprite)
+    {
+        if (string.IsNullOrWhiteSpace(sprite.Path))
+            return null;
+
+        string fullPath = ResolveAssetPath(sprite.Path, sprite.Guid);
+        if (!File.Exists(fullPath))
+            return null;
+
+        var settings = GetOrCreateSpriteImportSettings(fullPath);
+        return TextureManager.Load(fullPath, settings.Filter);
+    }
+
+    public void BindEntityAssetsRecursive(Entity entity) {
+        var sr = entity.GetComponent<SpriteRenderer>(); if (sr != null && !string.IsNullOrWhiteSpace(sr.Sprite.Path)) { var fullPath = ResolveAssetPath(sr.Sprite.Path, sr.Sprite.Guid); if (File.Exists(fullPath)) { sr.Sprite = new Sprite(AssetPathUtility.Normalize(fullPath), string.IsNullOrWhiteSpace(sr.Sprite.Guid) ? AssetPathUtility.TryGetGuid(fullPath) : sr.Sprite.Guid, sr.Sprite.SpriteId); sr.Texture = LoadSpriteTexture(sr.Sprite); } }
+        var animator = entity.GetComponent<Animator>(); if (animator != null && !string.IsNullOrWhiteSpace(animator.ControllerPath)) { string controllerFullPath = ResolveAssetPath(animator.ControllerPath, animator.ControllerGuid); if (File.Exists(controllerFullPath)) { animator.ControllerPath = AssetPathUtility.Normalize(controllerFullPath); animator.ControllerGuid = string.IsNullOrWhiteSpace(animator.ControllerGuid) ? AssetPathUtility.TryGetGuid(controllerFullPath) : animator.ControllerGuid; animator.Controller = Verity.Core.Animation.AnimatorControllerAsset.LoadFromFile(controllerFullPath); } }
+        var audioSource = entity.GetComponent<AudioSource>(); if (audioSource?.Clip != null && !string.IsNullOrWhiteSpace(audioSource.Clip.Path)) { string clipFullPath = ResolveAssetPath(audioSource.Clip.Path, audioSource.Clip.Guid); if (File.Exists(clipFullPath)) { audioSource.Clip.Path = AssetPathUtility.Normalize(clipFullPath); audioSource.Clip.Guid = string.IsNullOrWhiteSpace(audioSource.Clip.Guid) ? AssetPathUtility.TryGetGuid(clipFullPath) : audioSource.Clip.Guid; audioSource.Clip.PostLoad(clipFullPath); } }
+        entity.GetComponent<AudioManager>()?.SyncGroupMap();
+        foreach (var child in entity.Transform.Children) BindEntityAssetsRecursive(child.Owner);
+    }
+
+    private void ProcessPendingAssetInvalidations()
+    {
+        List<string> textures;
+        List<string> tiles;
+
+        lock (_assetInvalidationLock)
+        {
+            if (_pendingTextureRefreshes.Count == 0 && _pendingTileRefreshes.Count == 0) return;
+
+            textures = _pendingTextureRefreshes.ToList();
+            tiles = _pendingTileRefreshes.ToList();
+            _pendingTextureRefreshes.Clear();
+            _pendingTileRefreshes.Clear();
+        }
+
+        foreach (var path in textures)
+        {
+            RefreshTextureAsset(path);
+        }
+
+        var tilePalette = GetWindow<TilePaletteWindow>();
+        foreach (var path in tiles)
+        {
+            tilePalette?.InvalidateTileAsset(path);
+        }
+    }
+
+    private void RefreshTextureAsset(string fullPath)
+    {
+        string normalized = Path.GetFullPath(fullPath);
+        _textureManager.Unload(normalized);
+
+        var world = WorldManager.ActiveWorld;
+        if (world == null || ProjectPath == null) return;
+
+        foreach (var entity in world.GetAllEntities())
+        {
+            var sr = entity.GetComponent<SpriteRenderer>();
+            if (sr != null && !string.IsNullOrWhiteSpace(sr.Sprite.Path))
+            {
+                string spritePath = ResolveAssetPath(sr.Sprite.Path, sr.Sprite.Guid);
+                if (string.Equals(spritePath, normalized, StringComparison.OrdinalIgnoreCase))
+                {
+                    sr.Texture = File.Exists(normalized) ? LoadSpriteTexture(sr.Sprite) : null;
+                }
+            }
+
+            var tilemapRenderer = entity.GetComponent<TilemapRenderer>();
+            if (tilemapRenderer != null)
+            {
+                tilemapRenderer.ClearTextureCache();
+            }
+
+            var tilemap = entity.GetComponent<Tilemap>();
+            if (tilemap != null)
+            {
+                tilemap.RenderDirty = true;
+            }
+        }
+    }
+
+    private string ResolveAssetPath(string relativeOrAbsolutePath, string? guid = null)
+    {
+        return AssetPathUtility.ResolvePath(ProjectPath, relativeOrAbsolutePath, guid);
     }
 
     private void InitializeAssetWatcher(string path)
@@ -945,14 +1122,29 @@ public class EditorApp : IDisposable
         };
 
         FileSystemEventHandler onChange = (s, e) => {
-            string ext = Path.GetExtension(e.FullPath).ToLower();
+            AssetPathUtility.InvalidateCache(ProjectPath);
+            string changedPath = e.FullPath;
+            if (AssetPathUtility.IsMetaFile(changedPath))
+                changedPath = changedPath[..^5];
+
+            string ext = Path.GetExtension(changedPath).ToLower();
             if (ext == ".style") {
                 if (ProjectPath != null) {
-                    string relPath = Path.GetRelativePath(ProjectPath, e.FullPath).Replace("\\", "/");
+                    string relPath = Path.GetRelativePath(ProjectPath, changedPath).Replace("\\", "/");
                     _renderPipeline.ClearStyleCache(relPath);
                 }
             } else if (ext == ".shader") {
-                _renderPipeline.ClearShaderCache(e.FullPath);
+                _renderPipeline.ClearShaderCache(changedPath);
+            } else if (ext is ".png" or ".jpg" or ".jpeg") {
+                lock (_assetInvalidationLock)
+                {
+                    _pendingTextureRefreshes.Add(Path.GetFullPath(changedPath));
+                }
+            } else if (ext is ".tile" or ".animtile" or ".ruletile") {
+                lock (_assetInvalidationLock)
+                {
+                    _pendingTileRefreshes.Add(Path.GetFullPath(changedPath));
+                }
             }
         };
 
@@ -991,6 +1183,7 @@ public class EditorApp : IDisposable
         _shader.Dispose(); 
         _textureManager.Dispose(); 
         _imgui.Dispose(); 
+        AudioSystem.Shutdown();
         _device.Dispose(); 
     }
 

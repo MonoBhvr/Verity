@@ -57,6 +57,33 @@ public static class PhysicsMath
         return TestCircleVsPolygon(circle, polygonVertices);
     }
 
+    public static CollisionResult TestSAT(AABB box, CircleShape circle)
+    {
+        Vector2 center = circle.GetWorldCenter();
+        Vector2 scale = circle.GetBaseScale();
+        float radius = circle.Radius * Math.Max(MathF.Abs(scale.X), MathF.Abs(scale.Y));
+
+        Vector2 closest = System.Numerics.Vector2.Clamp(center, box.Min, box.Max);
+        float distance = Vector2.Distance(center, closest);
+
+        if (distance >= radius) return new CollisionResult { IsColliding = false };
+
+        Vector2 normal = distance > 0.0001f ? Vector2.Normalize(center - closest) : new Vector2(0, 1);
+        return new CollisionResult { IsColliding = true, Normal = normal, Depth = radius - distance, Contacts = new List<Vector2> { closest } };
+    }
+
+    public static CollisionResult TestSAT(AABB box, Vector2[] vertices)
+    {
+        // Convert AABB to vertices and use Polygon vs Polygon
+        Vector2[] boxVertices = new[] {
+            box.Min,
+            new Vector2(box.Max.X, box.Min.Y),
+            box.Max,
+            new Vector2(box.Min.X, box.Max.Y)
+        };
+        return TestPolygonVsPolygon(boxVertices, vertices);
+    }
+
     public static RaycastHit TestRay(Vector2 origin, Vector2 direction, float distance, PhysicalShape shape)
     {
         if (shape is CircleShape circle) return TestRayVsCircle(origin, direction, distance, circle);

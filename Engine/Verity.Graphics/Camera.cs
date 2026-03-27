@@ -1,7 +1,7 @@
 using System.Numerics;
+using Verity.Core;
 using Verity.Core.ECS;
 using Verity.Core.World;
-using Verity.Core;
 
 namespace Verity.Graphics;
 
@@ -28,10 +28,10 @@ public class Camera : Component
 
     private float _rotation;
     [HideInInspector]
-    public float Rotation 
-    { 
-        get => _rotation; 
-        set => _rotation = value % 360f; 
+    public float Rotation
+    {
+        get => _rotation;
+        set => _rotation = value % 360f;
     }
 
     [SerializeField]
@@ -42,6 +42,9 @@ public class Camera : Component
 
     [SerializeField]
     public float AspectHeight { get; set; } = 9f;
+
+    [SerializeField]
+    public PostProcessSettings PostProcess { get; set; } = new();
 
     private int _viewportX, _viewportY, _viewportW, _viewportH;
 
@@ -74,14 +77,14 @@ public class Camera : Component
         if (viewportAspect < 0.0001f) viewportAspect = 1.0f;
         float hH = VisibleHalfHeight;
         float hW = hH * viewportAspect;
-        
+
         // 만약 고정 비율 모드라면, 촬영 범위(ShotAspect)가 왜곡되지 않도록 범위를 계산함
         if (FixedAspectRatio)
         {
             float shotAspect = TargetAspectRatio;
             hH = VisibleHalfHeight;
             hW = VisibleHalfWidth;
-            
+
             if (viewportAspect > shotAspect) hW = hH * viewportAspect;
             else hH = hW / viewportAspect;
         }

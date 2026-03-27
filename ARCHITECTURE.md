@@ -456,3 +456,93 @@ Blueprint는 엔티티 구성을 파일(`.blueprint`)로 저장하여 재사용�
 ### 13.3. Script Compilation (`Verity.Editor.ScriptCompiler`)
 에디터 내에서 C# 스크립트를 실시간으로 컴파일하여 DLL(`UserScripts.dll`)로 생성합니다.
 *   **Roslyn API**: `Microsoft.CodeAnalysis`를 사용하여 에디터 실행 중에 사용자의 코드를 빌드하고 반영합니다.
+
+## 14. Audio System (`Verity.Core.Audio`)
+
+Verity 엔진의 오디오 시스템은 SDL_mixer 2.0을 기반으로 하며, ECS 아키텍처에 완전히 통합되어 씬별 독립적인 음향 환경과 실시간 공간 음향을 지원합니다.
+
+### 14.1. Architecture & Lifecycle
+오디오 시스템은 하드웨어 제어를 담당하는 로우레벨 시스템과 게임 로직을 담당하는 컴포넌트 계층으로 분리되어 있습니다.
+
+*   **AudioSystem (Internal Static)**: SDL_mixer 장치 초기화 및 코덱 관리를 담당합니다. 엔진 시작 시 1회 호출되며, **WAV, OGG, MP3, FLAC, MOD** 등 주요 오디오 포맷의 디코딩을 활성화합니다.
+*   **AudioManager (Script Component)**: 각 씬(World)에 하나씩 존재할 수 있는 오디오 제어 센터입니다. `Script`를 상속받아 엔진의 논리 틱(`Update`) 주기에 맞춰 공간 음향 수치를 갱신합니다.
+    *   **Per-Scene Configuration**: 씬마다 독립적인 마스터 볼륨과 오디오 그룹 설정을 가질 수 있습니다.
+    *   **Group Management**: `Master`, `BGM`, `SFX`, `UI` 등 논리적 그룹을 통해 여러 소스의 볼륨과 피치를 한꺼번에 제어합니다.
+    *   **Voice Limiting (FIFO)**: 그룹별 `MaxVoices`를 설정하여 하드웨어 채널 낭비를 방지합니다. 제한 초과 시 가장 오래된 소리를 자동으로 정지시킵니다.
+
+### 14.2. Audio Components
+*   **AudioClip**: 로드된 사운드 에셋을 나타냅니다.
+    *   `DefaultVolume / Pitch`: 에셋 자체에 기본값을 지정하여 여러 소스에서 재사용할 때 일관성을 유지합니다.
+    *   `Preview()`: 게임 실행 없이 에디터에서 즉시 소리를 확인하는 기능을 제공합니다.
+*   **AudioSource**: 월드 내의 특정 위치에서 소리를 출력하는 스피커 역할을 합니다.
+    *   **PlayOnStart**: 컴포넌트가 활성화(Enable)되는 순간 자동으로 재생을 시작합니다.
+    *   **Randomization**: 재생 시마다 `Min/Max Pitch` 및 `Volume` 범위 내에서 무작위 변조를 가해 반복적인 사운드의 단조로움을 해소합니다.
+    *   **Mute**: 개별 소스 단위로 즉시 음소거가 가능합니다.
+*   **AudioListener**: 소리를 수집하는 "귀"의 위치를 정의합니다. 보통 메인 카메라 엔티티에 부착하며, 월드에 활성화된 리스너가 없을 경우 공간 음향 효과가 중단됩니다.
+
+### 14.3. Spatial Audio (공간 음향)
+`AudioSource`의 `IsSpatial` 속성이 활성화되면, `AudioListener`와의 상대적 위치를 기반으로 실시간 음향 효과가 적용됩니다.
+*   **Distance Attenuation (거리 감쇄)**: `MinDistance`와 `MaxDistance` 사이의 거리에 따라 볼륨이 0~255 단계로 감쇄됩니다.
+*   **Stereo Panning (좌우 팬닝)**: 리스너를 기준으로 소스 엔티티의 X축 상대 위치를 계산하여 좌/우 스피커의 밸런스를 자동으로 조절합니다.
+
+### 14.4. Serialization & Data Persistence
+오디오 관련 모든 설정은 `.verity` 씬 파일 및 `.blueprint` 파일에 저장됩니다.
+*   **Config Persistence**: 그룹별 볼륨, 피치, 뮤트 상태 및 오디오 소스의 모든 파라미터가 직렬화됩니다.
+*   **Runtime Exclusion**: 현재 재생 중인 SDL 채널 ID나 활성 채널 큐(`ActiveChannels`)와 같은 런타임 데이터는 `[JsonIgnore]`를 통해 저장 대상에서 제외되어 데이터 무결성을 유지합니다.
+
+### 14.5. Scripting API
+| Method | Description |
+| :--- | :--- |
+| `AudioManager.Instance.Play(source)` | 오디오 소스의 설정값으로 재생을 시작합니다. |
+| `AudioManager.Instance.StopGroup(name)` | 특정 그룹(예: "BGM")에 속한 모든 소리를 즉시 정지합니다. |
+| `AudioManager.Instance.RemoveGroup(name)` | 동적으로 생성된 오디오 그룹을 제거하고 관련 채널을 정리합니다. |
+| `audioSource.PlayOneShot(clip, scale)` | 현재 위치에서 클립을 중첩하여 1회 재생합니다. |
+
+---
+
+## 15. Animation System (`Verity.Core.Animation`)
+
+Verity 엔진의 애니메이션 시스템은 키프레임 기반의 시퀀싱과 상태 머신(State Machine)을 결합하여 복잡한 객체 동작을 제어합니다. 리플렉션(Reflection)을 통해 엔진 내 모든 컴포넌트의 프로퍼티를 실시간으로 조작할 수 있도록 설계되었습니다.
+
+### 15.1. Core Data Structures
+애니메이션 데이터를 구성하는 핵심 클래스들입니다.
+
+*   **AnimationClip**: 하나의 독립된 애니메이션 파일(`.anim`)을 나타냅니다.
+    *   `Tracks`: 애니메이션되는 개별 프로퍼티 경로(예: `Transform.Position`)와 키프레임 리스트를 담고 있는 트랙 모음입니다.
+    *   `Duration / Loop`: 애니메이션의 총 길이와 반복 여부를 설정합니다.
+    *   `FrameRate`: 초당 프레임 수(FPS)를 정의하며, 에디터 타임라인의 눈금 기준이 됩니다.
+*   **AnimationTrack**: 특정 컴포넌트의 특정 필드/프로퍼티를 시간에 따라 변화시키는 단위입니다.
+    *   **Interpolation (보간)**: `float`, `int`, `Vector2`, `Color` 등 숫자 타입은 시간에 따라 부드럽게 선형 보간(Lerp)됩니다. `Sprite`, `bool`, `string` 등은 값이 즉시 변하는 Stepped 보간 방식을 사용합니다.
+*   **Keyframe**: 특정 시점(`Time`)의 값(`Value`)을 저장하는 최소 단위입니다.
+*   **AnimatorController**: 여러 애니메이션 상태와 전이(Transition) 조건을 관리하는 상태 머신 에셋입니다.
+    *   `States`: `AnimatorState`들의 집합이며, 각 상태는 하나의 `AnimationClip`을 가집니다.
+    *   `Parameters`: 스크립트에서 애니메이션 상태 변화를 제어하기 위한 변수(Float, Int, Bool)들을 정의합니다.
+
+### 15.2. ECS Integration
+애니메이션이 런타임에 실행되는 방식입니다.
+
+*   **Animator Component**: 엔티티에 부착되어 실제 애니메이션 재생을 담당합니다.
+    *   `Controller`: 재생할 애니메이션 상태 머신을 연결합니다.
+    *   **Binding Cache**: 성능 최적화를 위해 애니메이션 트랙의 경로(Path)와 해당 컴포넌트/프로퍼티 정보를 캐싱하여 매 프레임 리플렉션 비용을 최소화합니다.
+*   **AnimationSystem (Static)**: 전역 시스템으로, 매 논리 틱(`PerformLogicTick`)의 시작 부분에서 활성화된 모든 `Animator`를 업데이트합니다. 이는 게임 로직(`Update`)이 실행되기 전에 객체의 트랜스폼이나 시각적 상태를 최신 애니메이션 프레임으로 갱신하기 위함입니다.
+
+### 15.3. Animation Editor Window
+**Window > Animation** 메뉴를 통해 직관적인 애니메이션 제작 환경을 제공합니다.
+
+*   **Timeline View**: 시간축에 따른 키프레임 배치를 시각적으로 확인하고 드래그하여 편집할 수 있습니다.
+*   **Property Binding**: "Add Property" 버튼을 통해 엔티티에 부착된 모든 컴포넌트의 유효한 프로퍼티를 즉시 애니메이션 트랙으로 추가할 수 있습니다.
+*   **Record Mode (REC)**: 녹화 버튼을 활성화한 상태에서 인스펙터 창의 값을 수정하면, 현재 타임라인 위치에 자동으로 키프레임이 생성됩니다.
+*   **Real-time Preview**: 타임라인을 스크러빙(Scrubbing)하거나 재생 버튼을 눌러 에디터 뷰에서 즉시 결과를 확인할 수 있습니다.
+*   **Sprite Animation Workflow**: 프로젝트 창의 이미지 에셋들을 타임라인으로 드래그 앤 드롭하면 자동으로 `SpriteRenderer.Sprite` 트랙이 생성되어 스프라이트 시트 애니메이션을 빠르게 제작할 수 있습니다.
+
+### 15.4. Scripting API
+스크립트에서 애니메이션을 제어하기 위한 주요 메서드입니다.
+
+| Method | Description |
+| :--- | :--- |
+| `animator.Play(stateName)` | 지정된 이름의 애니메이션 상태를 즉시 실행합니다. |
+| `animator.SetBool(name, val)` | 상태 머신의 불리언 파라미터 값을 설정합니다. |
+| `animator.SetInt(name, val)` | 상태 머신의 정수형 파라미터 값을 설정합니다. |
+| `animator.SetFloat(name, val)` | 상태 머신의 실수형 파라미터 값을 설정합니다. |
+
+

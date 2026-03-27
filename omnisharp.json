@@ -1,0 +1,14 @@
+{
+    "RoslynExtensionsOptions": {
+        "enableDecompilationSupport": true,
+        "enableImportCompletion": true,
+        "enableAnalyzersSupport": true
+    },
+    "FormattingOptions": {
+        "enableEditorConfigSupport": true,
+        "OrganizeImports": true
+    },
+    "MsBuild": {
+        "LoadProjectsOnDemand": false
+    }
+}

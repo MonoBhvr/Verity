@@ -61,7 +61,11 @@ public class Physical : Component
 
     public void PushTorque(float torque)
     {
-        if (IsStatic || IsRotationLocked) return;
+        if (IsStatic || IsRotationLocked)
+        {
+            AngularVelocity = 0.0f; // 즉시 회전 멈춤
+            return;
+        }
         if (MathF.Abs(torque) < 0.005f) return;
         TorqueAccumulator += torque;
         WakeUp();
@@ -79,6 +83,13 @@ public class Physical : Component
     public bool IsTouching(Entity entity) => PhysicsManager.IsTouching(this, entity);
     public bool IsGrounded(string groupName) => PhysicsManager.IsGrounded(this, groupName);
     public IEnumerable<Entity> GetTouchingEntities() => PhysicsManager.GetTouchingEntities(this);
+
+    public bool IsTouchingDirection(Vector2 direction, string? groupName = null) => PhysicsManager.IsTouchingDirection(this, direction, groupName);
+    public bool IsTouchingLocalDirection(Vector2 direction, string? groupName = null) => PhysicsManager.IsTouchingLocalDirection(this, direction, groupName);
+    public int GetTouchingCountDirection(Vector2 direction, string? groupName = null) => PhysicsManager.GetTouchingCountDirection(this, direction, groupName);
+    public int GetTouchingCountLocalDirection(Vector2 direction, string? groupName = null) => PhysicsManager.GetTouchingCountLocalDirection(this, direction, groupName);
+    public IEnumerable<Entity> GetTouchingEntitiesDirection(Vector2 direction, string? groupName = null) => PhysicsManager.GetTouchingEntitiesDirection(this, direction, groupName);
+    public IEnumerable<Entity> GetTouchingEntitiesLocalDirection(Vector2 direction, string? groupName = null) => PhysicsManager.GetTouchingEntitiesLocalDirection(this, direction, groupName);
 
     internal void UpdateSleepStatus(float deltaTime, float physicsThreshold)
     {

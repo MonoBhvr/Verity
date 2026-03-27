@@ -7,6 +7,17 @@ namespace Verity.Editor;
 
 public class ScriptCompiler : IDisposable
 {
+    private const string GeneratedScriptGlobals = """
+global using Verity.Core;
+global using Verity.Core.ECS;
+global using Verity.Core.UI;
+global using Verity.Graphics;
+global using Verity.Input;
+global using Vector2 = Verity.Core.Vector2;
+global using Vector3 = Verity.Core.Vector3;
+global using Color = Verity.Core.Color;
+""";
+
     private readonly string _assetsPath;
     private Assembly? _compiledAssembly;
     private readonly List<Type> _componentTypes = [];
@@ -101,6 +112,7 @@ public class ScriptCompiler : IDisposable
 
         var fileContents = csFiles.ToDictionary(f => f, f => File.ReadAllText(f));
         var syntaxTrees = fileContents.Select(kvp => CSharpSyntaxTree.ParseText(kvp.Value, path: kvp.Key)).ToList();
+        syntaxTrees.Insert(0, CSharpSyntaxTree.ParseText(GeneratedScriptGlobals, path: "__Verity.ScriptGlobals.g.cs"));
         var references = GetMetadataReferences();
 
         var compilation = CreateCompilation(syntaxTrees, references);
@@ -153,6 +165,7 @@ public class ScriptCompiler : IDisposable
 
         var fileContents = csFiles.ToDictionary(f => f, f => File.ReadAllText(f));
         var syntaxTrees = fileContents.Select(kvp => CSharpSyntaxTree.ParseText(kvp.Value, path: kvp.Key)).ToList();
+        syntaxTrees.Insert(0, CSharpSyntaxTree.ParseText(GeneratedScriptGlobals, path: "__Verity.ScriptGlobals.g.cs"));
         var references = GetMetadataReferences();
 
         var compilation = CreateCompilation(syntaxTrees, references);

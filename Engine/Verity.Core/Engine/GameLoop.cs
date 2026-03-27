@@ -59,6 +59,8 @@ public class GameLoop
         Time.TotalTime += fixedDelta;
         Time.LogicTickCount++;
 
+        Verity.Core.Animation.AnimationSystem.Update(fixedDelta);
+
         var scripts = world.GetAllScripts().ToList();
 
         // Start Phase

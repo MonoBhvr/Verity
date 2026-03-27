@@ -4,6 +4,7 @@ using Irodori.Backend.OpenGL;
 using Verity.Core.ECS;
 using Verity.Core.World;
 using Verity.Graphics;
+using Verity.Core.UI;
 
 namespace Verity.Editor.Windows;
 
@@ -22,7 +23,8 @@ public class ScreenWindow : EditorWindow
         int width = (int)contentSize.X;
         int height = (int)contentSize.Y;
 
-        if (width <= 0 || height <= 0) return;
+        if (width <= 0 || height <= 0)
+            return;
 
         _app.RenderPipeline.EnsureScreenFbo(width, height);
 
@@ -32,11 +34,18 @@ public class ScreenWindow : EditorWindow
         {
             camera = FindWorldCamera(world);
             if (camera != null)
-            {
-                // We pass the full window size, the pipeline handles the sub-viewport
                 _app.RenderPipeline.RenderWorld(world, camera, _app.RenderPipeline.ScreenFbo);
-            }
+            else
+                _app.Device.Clear(new Verity.Core.Color(0.12f, 0.12f, 0.14f, 1f), _app.RenderPipeline.ScreenFbo);
         }
+        else
+        {
+            _app.Device.Clear(new Verity.Core.Color(0.12f, 0.12f, 0.14f, 1f), _app.RenderPipeline.ScreenFbo);
+        }
+
+        var uiEditor = _app.GetWindow<UIEditorWindow>();
+        if (uiEditor is { IsOpen: true, OverlayEnabled: true } && uiEditor.PreviewScreen != null)
+            UiRenderer.Render(_app.RenderPipeline, uiEditor.PreviewScreen, width, height, _app.RenderPipeline.ScreenFbo);
 
         var colorTex = _app.RenderPipeline.ScreenColorTexture;
         if (colorTex is OpenGlTexture glTex)
@@ -48,9 +57,7 @@ public class ScreenWindow : EditorWindow
             }
 
             if (camera != null)
-            {
                 HandleInteraction(camera, ImGui.GetItemRectMin(), ImGui.GetItemRectSize());
-            }
         }
     }
 
@@ -60,12 +67,11 @@ public class ScreenWindow : EditorWindow
     {
         if (ImGui.IsItemHovered())
         {
-            // SDL 전체 윈도우 마우스 좌표를 ImGui 이미지 내의 상대 픽셀 좌표로 변환
             var mouseAbs = new Vector2(Verity.Input.Input.MousePosition.X, Verity.Input.Input.MousePosition.Y);
             var localMouse = mouseAbs - imgMin;
-            
-            // localMouse는 이제 이미지 좌상단(0,0) 기준 픽셀 좌표입니다.
-            // camera.ScreenToWorld는 이 좌표와 내부의 _viewportX/Y를 사용하여 정확한 월드 좌표를 계산합니다.
+            _ = localMouse;
+            _ = imgSize;
+            _ = camera;
         }
     }
 

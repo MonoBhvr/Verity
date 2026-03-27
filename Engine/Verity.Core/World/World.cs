@@ -102,6 +102,17 @@ public class World
         }
     }
 
+    public IEnumerable<T> GetAllComponents<T>() where T : class
+    {
+        foreach (var entity in GetAllEntities())
+        {
+            foreach (var component in entity.GetComponents<T>())
+            {
+                yield return component;
+            }
+        }
+    }
+
     internal IEnumerable<Script> GetAllScripts()
     {
         foreach (var entity in _entities)

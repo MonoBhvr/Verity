@@ -1,5 +1,7 @@
 using Irodori.Texture;
 using StbImageSharp;
+using System.Linq;
+using Verity.Core.World;
 
 namespace Verity.Graphics;
 
@@ -13,54 +15,58 @@ public class TextureManager : IDisposable
         _device = device;
     }
 
-    public TextureObjectUploaded Load(string path)
+    public TextureObjectUploaded Load(string path, SpriteTextureFilter filter = SpriteTextureFilter.Point)
     {
         var fullPath = Path.GetFullPath(path);
-        if (_cache.TryGetValue(fullPath, out var cached))
+        string cacheKey = BuildCacheKey(fullPath, filter);
+        if (_cache.TryGetValue(cacheKey, out var cached))
             return cached;
 
         using var stream = File.OpenRead(fullPath);
         var imageResult = ImageResult.FromStream(stream, ColorComponents.RedGreenBlueAlpha);
         var pixels = FlipImageY(imageResult.Data, imageResult.Width, imageResult.Height);
-        var uploaded = UploadPixels(pixels, imageResult.Width, imageResult.Height);
-        _cache[fullPath] = uploaded;
-        return uploaded;
-    }
-
-    public TextureObjectUploaded LoadFromMemory(byte[] imageBytes, string cacheKey)
-    {
-        if (_cache.TryGetValue(cacheKey, out var cached))
-            return cached;
-
-        var imageResult = ImageResult.FromMemory(imageBytes, ColorComponents.RedGreenBlueAlpha);
-        var pixels = FlipImageY(imageResult.Data, imageResult.Width, imageResult.Height);
-        var uploaded = UploadPixels(pixels, imageResult.Width, imageResult.Height);
+        var uploaded = UploadPixels(pixels, imageResult.Width, imageResult.Height, filter);
         _cache[cacheKey] = uploaded;
         return uploaded;
     }
 
-    public unsafe TextureObjectUploaded CreateFromRgba(byte[] pixels, int width, int height, string? cacheKey = null)
+    public TextureObjectUploaded LoadFromMemory(byte[] imageBytes, string cacheKey, SpriteTextureFilter filter = SpriteTextureFilter.Point)
     {
-        if (cacheKey != null && _cache.TryGetValue(cacheKey, out var cached))
+        string actualCacheKey = BuildCacheKey(cacheKey, filter);
+        if (_cache.TryGetValue(actualCacheKey, out var cached))
             return cached;
 
-        var uploaded = UploadPixels(pixels, width, height);
+        var imageResult = ImageResult.FromMemory(imageBytes, ColorComponents.RedGreenBlueAlpha);
+        var pixels = FlipImageY(imageResult.Data, imageResult.Width, imageResult.Height);
+        var uploaded = UploadPixels(pixels, imageResult.Width, imageResult.Height, filter);
+        _cache[actualCacheKey] = uploaded;
+        return uploaded;
+    }
 
-        if (cacheKey != null)
-            _cache[cacheKey] = uploaded;
+    public unsafe TextureObjectUploaded CreateFromRgba(byte[] pixels, int width, int height, string? cacheKey = null, SpriteTextureFilter filter = SpriteTextureFilter.Point)
+    {
+        string? actualCacheKey = cacheKey != null ? BuildCacheKey(cacheKey, filter) : null;
+        if (actualCacheKey != null && _cache.TryGetValue(actualCacheKey, out var cached))
+            return cached;
+
+        var uploaded = UploadPixels(pixels, width, height, filter);
+
+        if (actualCacheKey != null)
+            _cache[actualCacheKey] = uploaded;
 
         return uploaded;
     }
 
-    private unsafe TextureObjectUploaded UploadPixels(byte[] pixels, int width, int height)
+    private unsafe TextureObjectUploaded UploadPixels(byte[] pixels, int width, int height, SpriteTextureFilter filter)
     {
         fixed (byte* ptr = pixels)
         {
             var textureData = TextureData.Create(ptr);
+            var textureFilter = filter == SpriteTextureFilter.Linear ? ETextureFilter.Linear : ETextureFilter.Nearest;
             return _device.CreateTexture()
                 .WithSize(width, height)
                 .WithTextureType(ETextureInternalType.Rgba8)
-                .WithFilter(ETextureFilter.Nearest, ETextureFilter.Nearest)
+                .WithFilter(textureFilter, textureFilter)
                 .Upload(textureData)
                 .Unwrap();
         }
@@ -93,8 +99,12 @@ public class TextureManager : IDisposable
     public void Unload(string path)
     {
         var fullPath = Path.GetFullPath(path);
-        if (_cache.Remove(fullPath, out var tex))
-            tex.Dispose();
+        var keys = _cache.Keys.Where(key => key.StartsWith(fullPath + "|", StringComparison.OrdinalIgnoreCase)).ToList();
+        foreach (var key in keys)
+        {
+            if (_cache.Remove(key, out var tex))
+                tex.Dispose();
+        }
     }
 
     public void Dispose()
@@ -103,4 +113,6 @@ public class TextureManager : IDisposable
             tex.Dispose();
         _cache.Clear();
     }
+
+    private static string BuildCacheKey(string baseKey, SpriteTextureFilter filter) => $"{baseKey}|{filter}";
 }
