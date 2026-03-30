@@ -45,6 +45,11 @@ public class AudioSource : Component
         }
     }
 
+    protected override void OnDisable()
+    {
+        Stop();
+    }
+
     public void Play()
     {
         if (Clip == null) return;
@@ -67,6 +72,7 @@ public class AudioSource : Component
 
     public override void OnDestroy()
     {
+        Stop();
         base.OnDestroy();
         Clip?.Dispose();
     }

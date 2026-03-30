@@ -105,7 +105,7 @@ public class AnimationWindow : EditorWindow
     {
         // Record Button
         if (IsRecording) ImGui.PushStyleColor(ImGuiCol.Button, new Vector4(1, 0, 0, 1));
-        if (ImGui.Button("REC", new Vector2(40, 25))) IsRecording = !IsRecording;
+        if (ImGui.Button(L10n.Tr("anim_record_short"), new Vector2(40, 25))) IsRecording = !IsRecording;
         if (IsRecording) ImGui.PopStyleColor();
 
         ImGui.SameLine();
@@ -143,7 +143,7 @@ public class AnimationWindow : EditorWindow
         ImGui.SameLine();
         ImGui.SetNextItemWidth(140);
         string defaultStateName = _currentAnimator.Controller.DefaultState?.Name ?? L10n.Tr("msg_none");
-        if (ImGui.BeginCombo("Default##AnimState", defaultStateName))
+        if (ImGui.BeginCombo(L10n.Tr("anim_default_state"), defaultStateName))
         {
             foreach (var state in _currentAnimator.Controller.States)
             {

@@ -1,8 +1,7 @@
 using System.Numerics;
-using Verity.Core;
-
 namespace Verity.Core.ECS;
 
+[Verity.Core.NonDisableable]
 public sealed class Transform : Component
 {
     private float _rotation;
@@ -29,9 +28,24 @@ public sealed class Transform : Component
         SetParentInternal(newParent, preserveWorldPosition);
     }
 
+    public void SetParent(Transform? newParent, bool preserveWorldPosition, int siblingIndex)
+    {
+        SetParentInternal(newParent, preserveWorldPosition, siblingIndex);
+    }
+
     private void SetParentInternal(Transform? newParent, bool preserveWorldPosition)
     {
-        if (_parent == newParent) return;
+        SetParentInternal(newParent, preserveWorldPosition, null);
+    }
+
+    private void SetParentInternal(Transform? newParent, bool preserveWorldPosition, int? siblingIndex)
+    {
+        if (_parent == newParent)
+        {
+            if (siblingIndex.HasValue)
+                SetSiblingIndex(siblingIndex.Value);
+            return;
+        }
 
         // Cycle detection
         if (newParent != null)
@@ -66,7 +80,13 @@ public sealed class Transform : Component
         }
 
         _parent = newParent;
-        _parent?._children.Add(this);
+        if (_parent != null)
+        {
+            int insertIndex = siblingIndex.HasValue
+                ? Math.Clamp(siblingIndex.Value, 0, _parent._children.Count)
+                : _parent._children.Count;
+            _parent._children.Insert(insertIndex, this);
+        }
 
         if (worldPos.HasValue)
         {
@@ -74,6 +94,34 @@ public sealed class Transform : Component
             WorldRotation = worldRot!.Value;
             WorldScale = worldScale!.Value;
         }
+    }
+
+    public int GetSiblingIndex()
+    {
+        if (_parent == null)
+            return Owner.World?.IndexOfRoot(Owner) ?? -1;
+
+        return _parent._children.IndexOf(this);
+    }
+
+    public void SetSiblingIndex(int siblingIndex)
+    {
+        if (_parent == null)
+        {
+            Owner.World?.SetRootIndex(Owner, siblingIndex);
+            return;
+        }
+
+        int currentIndex = _parent._children.IndexOf(this);
+        if (currentIndex < 0)
+            return;
+
+        int clampedIndex = Math.Clamp(siblingIndex, 0, _parent._children.Count - 1);
+        if (currentIndex == clampedIndex)
+            return;
+
+        _parent._children.RemoveAt(currentIndex);
+        _parent._children.Insert(clampedIndex, this);
     }
 
     public IReadOnlyList<Transform> Children => _children;

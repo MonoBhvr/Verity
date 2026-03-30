@@ -28,6 +28,20 @@ public static class PhysicsManager
     public static Vector2 Gravity { get; set; } = Vector2.Zero;
     public static ulong[] CollisionMatrix { get => _collisionMatrix; set => _collisionMatrix = value; }
 
+    private static void EnsureQueryCache()
+    {
+        var world = WorldManager.ActiveWorld;
+        if (world == null)
+            return;
+
+        // Queries may be called before the first physics tick in the frame,
+        // so keep the shape cache available independently from Step().
+        if (_activePhysicals.Count == 0 && _staticShapes.Count == 0 && _physicalShapes.Count == 0)
+        {
+            CollectObjects(world);
+        }
+    }
+
     public static bool CanCollide(ulong maskA, ulong maskB)
     {
         for (int i = 0; i < 64; i++)
@@ -331,6 +345,7 @@ public static class PhysicsManager
         var scripts = entity.GetComponents<Script>();
         foreach (var script in scripts)
         {
+            if (!script.Enabled) continue;
             if (isSensor) { if (isFirst) script._onDetectedDelegate?.Invoke(otherEntity); else script._onDetectingDelegate?.Invoke(otherEntity); }
             else { if (isFirst) script._onTouchedDelegate?.Invoke(otherPhysical); else script._onTouchingDelegate?.Invoke(otherPhysical); }
         }
@@ -341,11 +356,16 @@ public static class PhysicsManager
         var shape = entity.GetComponent<PhysicalShape>();
         bool isSensor = shape?.IsSensor ?? false;
         var scripts = entity.GetComponents<Script>();
-        foreach (var script in scripts) if (isSensor) script._onDetectEndDelegate?.Invoke(otherEntity); else script._onTouchEndDelegate?.Invoke(otherEntity);
+        foreach (var script in scripts)
+        {
+            if (!script.Enabled) continue;
+            if (isSensor) script._onDetectEndDelegate?.Invoke(otherEntity); else script._onTouchEndDelegate?.Invoke(otherEntity);
+        }
     }
 
     public static PhysicsMath.RaycastHit Raycast(Vector2 origin, Vector2 direction, float distance, ulong mask = ulong.MaxValue, Entity? ignoreEntity = null)
     {
+        EnsureQueryCache();
         PhysicsMath.RaycastHit closestHit = new() { IsHit = false, Distance = float.MaxValue };
         foreach (var physical in _activePhysicals.Concat(_staticShapes))
         {
@@ -373,6 +393,7 @@ public static class PhysicsManager
 
     public static IEnumerable<Entity> OverlapCircle(Vector2 center, float radius, ulong mask = ulong.MaxValue)
     {
+        EnsureQueryCache();
         var result = new List<Entity>();
         var circleAABB = new AABB(center - new Vector2(radius), center + new Vector2(radius));
         foreach (var physical in _activePhysicals.Concat(_staticShapes))
@@ -394,6 +415,7 @@ public static class PhysicsManager
 
     public static IEnumerable<Entity> OverlapBox(Vector2 center, Vector2 size, ulong mask = ulong.MaxValue)
     {
+        EnsureQueryCache();
         var result = new List<Entity>();
         var halfSize = size / 2.0f; var boxAABB = new AABB(center - halfSize, center + halfSize);
         foreach (var physical in _activePhysicals.Concat(_staticShapes))

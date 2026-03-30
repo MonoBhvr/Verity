@@ -6,11 +6,14 @@ public abstract class Component
 
     public Transform Transform => Owner.Transform;
 
+    public bool CanBeDisabled => GetType().GetCustomAttributes(typeof(Verity.Core.NonDisableableAttribute), true).Length == 0;
+
     public bool Enabled
     {
         get => _enabled;
         set
         {
+            if (!value && !CanBeDisabled) return;
             if (_enabled == value) return;
             _enabled = value;
             if (_enabled)
@@ -27,6 +30,12 @@ public abstract class Component
     protected virtual void OnDisable() { }
 
     public virtual void OnDestroy() { }
+
+    internal void InitializeAfterDeserialization()
+    {
+        if (_enabled)
+            OnEnable();
+    }
 
     #region Convenience Methods
     public T? GetComponent<T>() where T : class => Owner.GetComponent<T>();

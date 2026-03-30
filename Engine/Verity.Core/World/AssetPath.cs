@@ -27,12 +27,17 @@ public readonly record struct AssetReferenceData(string Path, string Guid)
 
 public static class AssetPathUtility
 {
+    private readonly record struct CachedMeta(AssetMeta Meta, long LastWriteTicks);
+    private readonly record struct CachedSpriteSlice(SpriteSlice Slice, long LastWriteTicks);
+
     private static readonly JsonSerializerOptions MetaOptions = new()
     {
         WriteIndented = true,
         Converters = { new Vector2Converter() }
     };
     private static readonly ConcurrentDictionary<string, Dictionary<string, string>> GuidCache = new(StringComparer.OrdinalIgnoreCase);
+    private static readonly ConcurrentDictionary<string, CachedMeta> MetaCache = new(StringComparer.OrdinalIgnoreCase);
+    private static readonly ConcurrentDictionary<string, CachedSpriteSlice> SpriteSliceCache = new(StringComparer.OrdinalIgnoreCase);
 
     public static string Normalize(string? fullPath)
     {
@@ -177,12 +182,30 @@ public static class AssetPathUtility
         if (string.IsNullOrWhiteSpace(projectRootOrAssetsPath))
         {
             GuidCache.Clear();
+            MetaCache.Clear();
+            SpriteSliceCache.Clear();
             return;
         }
 
         string? assetsRoot = GetAssetsRoot(projectRootOrAssetsPath);
         if (!string.IsNullOrWhiteSpace(assetsRoot))
+        {
             GuidCache.TryRemove(Path.GetFullPath(assetsRoot), out _);
+            InvalidateAssetCachesUnderRoot(assetsRoot);
+        }
+    }
+
+    public static void InvalidateAssetCache(string? assetPath)
+    {
+        if (string.IsNullOrWhiteSpace(assetPath))
+            return;
+
+        string normalizedPath = IsMetaFile(assetPath)
+            ? assetPath[..^5]
+            : assetPath;
+        string fullPath = Path.GetFullPath(normalizedPath);
+        MetaCache.TryRemove(fullPath, out _);
+        InvalidateSpriteSliceCacheForAsset(fullPath);
     }
 
     public static AssetMeta LoadMeta(string? assetPath)
@@ -196,13 +219,22 @@ public static class AssetPathUtility
         try
         {
             if (!File.Exists(metaPath))
+            {
+                MetaCache.TryRemove(fullPath, out _);
                 return new AssetMeta();
+            }
 
-            var meta = JsonSerializer.Deserialize<AssetMeta>(File.ReadAllText(metaPath), MetaOptions);
-            return meta ?? new AssetMeta();
+            long lastWriteTicks = File.GetLastWriteTimeUtc(metaPath).Ticks;
+            if (MetaCache.TryGetValue(fullPath, out var cached) && cached.LastWriteTicks == lastWriteTicks)
+                return CloneMeta(cached.Meta);
+
+            var meta = JsonSerializer.Deserialize<AssetMeta>(File.ReadAllText(metaPath), MetaOptions) ?? new AssetMeta();
+            MetaCache[fullPath] = new CachedMeta(CloneMeta(meta), lastWriteTicks);
+            return CloneMeta(meta);
         }
         catch
         {
+            MetaCache.TryRemove(fullPath, out _);
             return new AssetMeta();
         }
     }
@@ -218,6 +250,9 @@ public static class AssetPathUtility
 
         string metaPath = GetMetaPath(fullPath);
         File.WriteAllText(metaPath, JsonSerializer.Serialize(meta, MetaOptions));
+        long lastWriteTicks = File.Exists(metaPath) ? File.GetLastWriteTimeUtc(metaPath).Ticks : 0;
+        MetaCache[fullPath] = new CachedMeta(CloneMeta(meta), lastWriteTicks);
+        InvalidateSpriteSliceCacheForAsset(fullPath);
         if (!string.IsNullOrWhiteSpace(meta.Guid))
             UpdateGuidCacheForAsset(fullPath, meta.Guid);
     }
@@ -245,9 +280,24 @@ public static class AssetPathUtility
 
     public static SpriteSlice ResolveSpriteSlice(string? assetPath, Sprite sprite, int textureWidth, int textureHeight)
     {
-        SpriteImportSettings? import = TryGetSpriteImportSettings(assetPath);
-        if (import == null)
+        if (string.IsNullOrWhiteSpace(assetPath))
             return SpriteImportUtility.CreateDefaultSlice(textureWidth, textureHeight, new Vector2(0.5f, 0.5f));
+
+        string fullPath = Path.GetFullPath(assetPath);
+        string metaPath = GetMetaPath(fullPath);
+        long lastWriteTicks = File.Exists(metaPath) ? File.GetLastWriteTimeUtc(metaPath).Ticks : 0;
+        string cacheKey = $"{fullPath}|{sprite.SpriteId}|{textureWidth}|{textureHeight}";
+        if (SpriteSliceCache.TryGetValue(cacheKey, out var cached) && cached.LastWriteTicks == lastWriteTicks)
+            return cached.Slice.Clone();
+
+        SpriteImportSettings? import = TryGetSpriteImportSettings(assetPath);
+        SpriteSlice resolvedSlice;
+        if (import == null)
+        {
+            resolvedSlice = SpriteImportUtility.CreateDefaultSlice(textureWidth, textureHeight, new Vector2(0.5f, 0.5f));
+            SpriteSliceCache[cacheKey] = new CachedSpriteSlice(resolvedSlice.Clone(), lastWriteTicks);
+            return resolvedSlice;
+        }
 
         import.Normalize(textureWidth, textureHeight);
 
@@ -255,16 +305,22 @@ public static class AssetPathUtility
         {
             var matched = import.Slices.FirstOrDefault(slice => string.Equals(slice.Id, sprite.SpriteId, StringComparison.OrdinalIgnoreCase));
             if (matched != null)
-                return ClampSlice(matched.Clone(), textureWidth, textureHeight, import.DefaultPivot);
+            {
+                resolvedSlice = ClampSlice(matched.Clone(), textureWidth, textureHeight, import.DefaultPivot);
+                SpriteSliceCache[cacheKey] = new CachedSpriteSlice(resolvedSlice.Clone(), lastWriteTicks);
+                return resolvedSlice;
+            }
         }
 
         if (import.SpriteMode == SpriteImportMode.Single)
-            return ClampSlice(import.Slices.First(), textureWidth, textureHeight, import.DefaultPivot);
+            resolvedSlice = ClampSlice(import.Slices.First(), textureWidth, textureHeight, import.DefaultPivot);
+        else if (import.Slices.Count > 0)
+            resolvedSlice = ClampSlice(import.Slices[0], textureWidth, textureHeight, import.DefaultPivot);
+        else
+            resolvedSlice = SpriteImportUtility.CreateDefaultSlice(textureWidth, textureHeight, import.DefaultPivot);
 
-        if (import.Slices.Count > 0)
-            return ClampSlice(import.Slices[0], textureWidth, textureHeight, import.DefaultPivot);
-
-        return SpriteImportUtility.CreateDefaultSlice(textureWidth, textureHeight, import.DefaultPivot);
+        SpriteSliceCache[cacheKey] = new CachedSpriteSlice(resolvedSlice.Clone(), lastWriteTicks);
+        return resolvedSlice;
     }
 
     public static SpriteSlice ClampSlice(SpriteSlice slice, int textureWidth, int textureHeight, Vector2 defaultPivot)
@@ -355,5 +411,32 @@ public static class AssetPathUtility
         string normalizedRoot = Path.GetFullPath(assetsRoot);
         var cache = GuidCache.GetOrAdd(normalizedRoot, _ => new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase));
         cache[guid] = Path.GetFullPath(assetPath);
+    }
+
+    private static AssetMeta CloneMeta(AssetMeta meta)
+    {
+        return new AssetMeta
+        {
+            Guid = meta.Guid,
+            SpriteImport = meta.SpriteImport?.Clone()
+        };
+    }
+
+    private static void InvalidateAssetCachesUnderRoot(string assetsRoot)
+    {
+        string normalizedRoot = Path.GetFullPath(assetsRoot);
+
+        foreach (string key in MetaCache.Keys.Where(path => path.StartsWith(normalizedRoot, StringComparison.OrdinalIgnoreCase)))
+            MetaCache.TryRemove(key, out _);
+
+        foreach (string key in SpriteSliceCache.Keys.Where(path => path.StartsWith(normalizedRoot, StringComparison.OrdinalIgnoreCase)))
+            SpriteSliceCache.TryRemove(key, out _);
+    }
+
+    private static void InvalidateSpriteSliceCacheForAsset(string assetPath)
+    {
+        string prefix = $"{Path.GetFullPath(assetPath)}|";
+        foreach (string key in SpriteSliceCache.Keys.Where(key => key.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)))
+            SpriteSliceCache.TryRemove(key, out _);
     }
 }

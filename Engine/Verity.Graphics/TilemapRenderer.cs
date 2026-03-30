@@ -21,6 +21,15 @@ public class TilemapRenderer : Component
     [SerializeField]
     public int OrderInLayer { get; set; } = 0;
 
+    [SerializeField]
+    public bool CastShadows { get; set; } = true;
+
+    [SerializeField]
+    public ShadowCasterSourceMode ShadowSourceMode { get; set; } = ShadowCasterSourceMode.PreferRenderer;
+
+    [SerializeField]
+    public ShadowSelfMode ShadowSelfMode { get; set; } = ShadowSelfMode.ExcludeSelf;
+
     public int ResolvedLayerIndex => SortingLayer.GetLayerIndex(SortingLayerName);
 
     protected override void OnEnable()
@@ -140,7 +149,7 @@ public class TilemapRenderer : Component
                 }
             }
 
-            pipeline.DrawTile(tex, tileMatrix, tile.Color, projection, view, targetFbo, uvMin, uvMax);
+            pipeline.DrawTile(tex, tileMatrix, tile.Color, projection, view, targetFbo, Owner, SortingLayerName, uvMin, uvMax);
         }
 
         _tilemap.RenderDirty = false;

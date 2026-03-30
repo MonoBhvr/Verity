@@ -9,7 +9,7 @@ public static class L10n
 
     public static void Initialize(string initialLanguage = "ko")
     {
-        LoadLanguage(initialLanguage);
+        LoadLanguage(initialLanguage); 
     }
 
     public static void LoadLanguage(string langCode)

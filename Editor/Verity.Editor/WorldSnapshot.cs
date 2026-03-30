@@ -45,6 +45,10 @@ internal sealed class WorldSnapshot
                 entity.Id,
                 entity.Name,
                 entity.Active,
+                entity.BlueprintAssetPath,
+                entity.BlueprintAssetGuid,
+                entity.BlueprintSourceEntityId,
+                entity.BlueprintInstanceRootId,
                 entity.Transform.Position,
                 entity.Transform.Rotation,
                 entity.Transform.Scale,
@@ -101,6 +105,10 @@ internal sealed class WorldSnapshot
             var entity = world.CreateEntity(snapshot.Name);
             entity.Id = snapshot.Id;
             entity.Active = snapshot.Active;
+            entity.BlueprintAssetPath = snapshot.BlueprintAssetPath;
+            entity.BlueprintAssetGuid = snapshot.BlueprintAssetGuid;
+            entity.BlueprintSourceEntityId = snapshot.BlueprintSourceEntityId;
+            entity.BlueprintInstanceRootId = snapshot.BlueprintInstanceRootId;
             created.Add(entity);
         }
 
@@ -232,6 +240,10 @@ internal sealed class WorldSnapshot
         Guid Id,
         string Name,
         bool Active,
+        string BlueprintAssetPath,
+        string BlueprintAssetGuid,
+        Guid? BlueprintSourceEntityId,
+        Guid? BlueprintInstanceRootId,
         System.Numerics.Vector2 Position,
         float Rotation,
         System.Numerics.Vector2 Scale,

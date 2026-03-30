@@ -20,7 +20,7 @@ public class Vector2Converter : JsonConverter<Vector2>
             {
                 string propertyName = reader.GetString()?.ToUpperInvariant() ?? "";
                 reader.Read();
-                if (propertyName == "X") x = reader.GetSingle();
+                if (propertyName == "X") x = reader.GetSingle(); 
                 else if (propertyName == "Y") y = reader.GetSingle();
             }
         }
@@ -251,6 +251,13 @@ public class TileBaseConverter : JsonConverter<TileBase>
         using (JsonDocument doc = JsonDocument.ParseValue(ref reader))
         {
             var root = doc.RootElement;
+            if (root.TryGetProperty("Asset", out var assetProp))
+            {
+                string assetPath = assetProp.TryGetProperty("Path", out var pathProp) ? pathProp.GetString() ?? string.Empty : string.Empty;
+                string assetGuid = assetProp.TryGetProperty("Guid", out var guidProp) ? guidProp.GetString() ?? string.Empty : string.Empty;
+                return TileAssetCache.Load(assetPath, assetGuid);
+            }
+
             if (!root.TryGetProperty("$type", out var typeProp)) return null;
             
             string typeName = typeProp.GetString() ?? "";
@@ -307,6 +314,7 @@ public class TilemapTilesConverter : JsonConverter<Dictionary<(int x, int y), Ti
             
             int? x = null, y = null;
             TileBase? tile = null;
+            AssetReferenceData assetReference = default;
 
             while (reader.Read() && reader.TokenType != JsonTokenType.EndObject)
             {
@@ -317,7 +325,19 @@ public class TilemapTilesConverter : JsonConverter<Dictionary<(int x, int y), Ti
                     if (prop == "X") x = reader.GetInt32();
                     else if (prop == "Y") y = reader.GetInt32();
                     else if (prop == "Tile") tile = JsonSerializer.Deserialize<TileBase>(ref reader, options);
+                    else if (prop == "Asset")
+                    {
+                        using JsonDocument assetDoc = JsonDocument.ParseValue(ref reader);
+                        string path = assetDoc.RootElement.TryGetProperty("Path", out var pathProp) ? pathProp.GetString() ?? string.Empty : string.Empty;
+                        string guid = assetDoc.RootElement.TryGetProperty("Guid", out var guidProp) ? guidProp.GetString() ?? string.Empty : string.Empty;
+                        assetReference = new AssetReferenceData(path, guid);
+                    }
                 }
+            }
+
+            if (tile == null && !assetReference.IsEmpty)
+            {
+                tile = TileAssetCache.Load(assetReference);
             }
 
             if (x.HasValue && y.HasValue && tile != null)
@@ -336,11 +356,18 @@ public class TilemapTilesConverter : JsonConverter<Dictionary<(int x, int y), Ti
             writer.WriteStartObject();
             writer.WriteNumber("X", pair.Key.x);
             writer.WriteNumber("Y", pair.Key.y);
-            writer.WritePropertyName("Tile");
-            JsonSerializer.Serialize(writer, pair.Value, options);
+            if (!string.IsNullOrWhiteSpace(pair.Value.AssetPath))
+            {
+                writer.WritePropertyName("Asset");
+                AssetPathUtility.ToJsonNode(pair.Value.AssetPath, pair.Value.AssetGuid).WriteTo(writer);
+            }
+            else
+            {
+                writer.WritePropertyName("Tile");
+                JsonSerializer.Serialize(writer, pair.Value, options);
+            }
             writer.WriteEndObject();
         }
         writer.WriteEndArray();
     }
 }
-

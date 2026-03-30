@@ -120,6 +120,17 @@ public class VeritySdl2Window : Window
         SDL.SDL_SetWindowSize(_sdlWindow, w, h);
     }
 
+    public (int X, int Y) GetPosition()
+    {
+        SDL.SDL_GetWindowPosition(_sdlWindow, out int x, out int y);
+        return (x, y);
+    }
+
+    public void SetPosition(int x, int y)
+    {
+        SDL.SDL_SetWindowPosition(_sdlWindow, x, y);
+    }
+
     public void SetTitle(string title)
     {
         SDL.SDL_SetWindowTitle(_sdlWindow, title);

@@ -10,13 +10,33 @@ using Verity.Core.Physics;
 
 namespace Verity.Editor.Windows;
 
+public sealed class WorldViewUndoState
+{
+    public bool GridSnap { get; set; }
+    public bool ShowGrid { get; set; } = true;
+    public bool ShowGizmos { get; set; } = true;
+    public float SnapSize { get; set; } = 1.0f;
+    public WorldViewWindow.GizmoTool ActiveTool { get; set; } = WorldViewWindow.GizmoTool.Move;
+    public CameraRenderDetail RenderDetail { get; set; } = CameraRenderDetail.Basic;
+}
+
 public unsafe class WorldViewWindow : EditorWindow
 {
+    private sealed class TilemapSelectionCacheEntry
+    {
+        public int ContentVersion;
+        public Vector2 Position;
+        public Vector2 Scale;
+        public float Rotation;
+        public List<(Vector2 start, Vector2 end)> Edges = [];
+    }
+
     public enum GizmoTool { Move, Scale, Rotate, Rect }
     private enum ModalMode { None, Create, Rename }
     private enum CreationType { Script, World, Folder }
 
     private readonly EditorApp _app;
+    private readonly Dictionary<Tilemap, TilemapSelectionCacheEntry> _tilemapSelectionCache = new();
     private bool _isDragging;
     private bool _isBoxSelecting;
     private Vector2 _boxSelectionStart;
@@ -28,8 +48,11 @@ public unsafe class WorldViewWindow : EditorWindow
     private readonly HashSet<(int x, int y)> _tileStrokeTouched = new();
 
     private bool _gridSnap;
+    private bool _showGrid = true;
     private float _snapSize = 1.0f;
     private GizmoTool _activeTool = GizmoTool.Move;
+    private bool _showGizmos = true;
+    private CameraRenderDetail _renderDetail = CameraRenderDetail.Basic;
 
     private const float HandleScreenSize = 10f;
     private const float DefaultEntitySize = 1f;
@@ -54,6 +77,32 @@ public unsafe class WorldViewWindow : EditorWindow
 
     public WorldViewWindow(EditorApp app) : base(L10n.Tr("window_worldview")) { _app = app; }
 
+    public WorldViewUndoState CaptureUndoState()
+    {
+        return new WorldViewUndoState
+        {
+            GridSnap = _gridSnap,
+            ShowGrid = _showGrid,
+            ShowGizmos = _showGizmos,
+            SnapSize = _snapSize,
+            ActiveTool = _activeTool,
+            RenderDetail = _renderDetail
+        };
+    }
+
+    public void RestoreUndoState(WorldViewUndoState? state)
+    {
+        if (state == null)
+            return;
+
+        _gridSnap = state.GridSnap;
+        _showGrid = state.ShowGrid;
+        _showGizmos = state.ShowGizmos;
+        _snapSize = Math.Max(0.01f, state.SnapSize);
+        _activeTool = state.ActiveTool;
+        _renderDetail = state.RenderDetail;
+    }
+
     public override void OnGui()
     {
         HandleShortcuts();
@@ -76,18 +125,26 @@ public unsafe class WorldViewWindow : EditorWindow
             bool originalFixed = _app.WorldCamera.FixedAspectRatio;
             _app.WorldCamera.FixedAspectRatio = false;
             var originalColor = _app.WorldCamera.BackgroundColor;
+            var originalRenderDetail = _app.WorldCamera.RenderDetail;
+            bool originalShowGizmos = _app.WorldCamera.ShowGizmos;
             _app.WorldCamera.BackgroundColor = _app.ProjectSettings.EditorWorldBackgroundColor;
+            _app.WorldCamera.RenderDetail = _renderDetail;
+            _app.WorldCamera.ShowGizmos = _showGizmos;
 
             var imgMin = ImGui.GetCursorScreenPos();
             bool isHovered = ImGui.IsMouseHoveringRect(imgMin, imgMin + contentSize);
             UpdatePreviewEntity(world, isHovered, imgMin);
 
             _app.RenderPipeline.RenderWorld(world, _app.WorldCamera, _app.RenderPipeline.WorldFbo);
-            DrawGrid(_app.RenderPipeline.WorldFbo);
-            RenderEditorGizmos(world);
+            if (_showGrid)
+                DrawGrid(_app.RenderPipeline.WorldFbo);
+            if (_showGizmos)
+                RenderEditorGizmos(world);
             
             _app.WorldCamera.BackgroundColor = originalColor;
             _app.WorldCamera.FixedAspectRatio = originalFixed;
+            _app.WorldCamera.RenderDetail = originalRenderDetail;
+            _app.WorldCamera.ShowGizmos = originalShowGizmos;
         }
 
         var colorTex = _app.RenderPipeline.WorldColorTexture;
@@ -216,9 +273,9 @@ public unsafe class WorldViewWindow : EditorWindow
         void ToolButton(string label, GizmoTool tool, ImGuiKey key) {
             bool active = _activeTool == tool;
             if (active) ImGui.PushStyleColor(ImGuiCol.Button, new Vector4(0.3f, 0.6f, 1.0f, 0.6f));
-            if (ImGui.Button(label)) _activeTool = tool;
+            if (ImGui.Button(label)) SetActiveTool(tool);
             if (active) ImGui.PopStyleColor();
-            if (ImGui.IsWindowFocused() && ImGui.IsKeyPressed(key)) _activeTool = tool;
+            if (ImGui.IsWindowFocused() && ImGui.IsKeyPressed(key)) SetActiveTool(tool);
             ImGui.SameLine();
         }
         ToolButton($"{L10n.Tr("Gizmo_Move")} (W)", GizmoTool.Move, ImGuiKey.W);
@@ -226,11 +283,107 @@ public unsafe class WorldViewWindow : EditorWindow
         ToolButton($"{L10n.Tr("Gizmo_Rotate")} (R)", GizmoTool.Rotate, ImGuiKey.R);
         ToolButton($"{L10n.Tr("Gizmo_Rect")} (T)", GizmoTool.Rect, ImGuiKey.T);
         ImGui.Dummy(new Vector2(20, 0)); ImGui.SameLine();
-        ImGui.Checkbox(L10n.Tr("label_snap"), ref _gridSnap); ImGui.SameLine();
-        ImGui.SetNextItemWidth(60f); ImGui.DragFloat("##SnapSize", ref _snapSize, 0.1f, 0.01f, 100f, "S: %.2f");
-        if (_snapSize <= 0.01f) _snapSize = 0.01f;
+        bool showGrid = _showGrid;
+        if (ImGui.Checkbox(L10n.Tr("label_grid"), ref showGrid))
+            SetShowGrid(showGrid);
+        ImGui.SameLine();
+        bool showGizmos = _showGizmos;
+        if (ImGui.Checkbox(L10n.Tr("label_gizmos"), ref showGizmos))
+            SetShowGizmos(showGizmos);
+        ImGui.SameLine();
+        bool gridSnap = _gridSnap;
+        if (ImGui.Checkbox(L10n.Tr("label_snap"), ref gridSnap))
+            SetGridSnap(gridSnap);
+        ImGui.SameLine();
+        float snapSize = _snapSize;
+        ImGui.SetNextItemWidth(60f);
+        if (ImGui.DragFloat("##SnapSize", ref snapSize, 0.1f, 0.01f, 100f, "S: %.2f"))
+            _snapSize = Math.Max(0.01f, snapSize);
+        if (ImGui.IsItemActivated())
+            _app.BeginUndoAction();
+        if (ImGui.IsItemDeactivatedAfterEdit())
+        {
+            _snapSize = Math.Max(0.01f, _snapSize);
+            _app.EndUndoAction();
+        }
+        ImGui.SameLine();
+        ImGui.TextUnformatted($"{L10n.Tr("label_render_detail")}:"); ImGui.SameLine();
+        ImGui.SetNextItemWidth(180f);
+        if (ImGui.BeginCombo("##WorldRenderDetail", GetRenderDetailLabel(_renderDetail)))
+        {
+            RenderRenderDetailOption(CameraRenderDetail.Outline);
+            RenderRenderDetailOption(CameraRenderDetail.Basic);
+            RenderRenderDetailOption(CameraRenderDetail.Lighting);
+            RenderRenderDetailOption(CameraRenderDetail.PostProcess);
+            ImGui.EndCombo();
+        }
         ImGui.Separator();
     }
+
+    private void RenderRenderDetailOption(CameraRenderDetail detail)
+    {
+        bool selected = _renderDetail == detail;
+        if (ImGui.Selectable(GetRenderDetailLabel(detail), selected))
+            SetRenderDetail(detail);
+
+        if (selected)
+            ImGui.SetItemDefaultFocus();
+    }
+
+    private void SetActiveTool(GizmoTool tool)
+    {
+        if (_activeTool == tool)
+            return;
+
+        _app.RecordUndo();
+        _activeTool = tool;
+    }
+
+    private void SetShowGrid(bool value)
+    {
+        if (_showGrid == value)
+            return;
+
+        _app.RecordUndo();
+        _showGrid = value;
+    }
+
+    private void SetShowGizmos(bool value)
+    {
+        if (_showGizmos == value)
+            return;
+
+        _app.RecordUndo();
+        _showGizmos = value;
+    }
+
+    private void SetGridSnap(bool value)
+    {
+        if (_gridSnap == value)
+            return;
+
+        _app.RecordUndo();
+        _gridSnap = value;
+    }
+
+    private void SetRenderDetail(CameraRenderDetail detail)
+    {
+        if (_renderDetail == detail)
+            return;
+
+        _app.RecordUndo();
+        _renderDetail = detail;
+    }
+
+    private static string GetRenderDetailKey(CameraRenderDetail detail) => detail switch
+    {
+        CameraRenderDetail.Outline => "render_detail_outline",
+        CameraRenderDetail.Basic => "render_detail_basic",
+        CameraRenderDetail.Lighting => "render_detail_lighting",
+        _ => "render_detail_postfx"
+    };
+
+    private static string GetRenderDetailLabel(CameraRenderDetail detail) => L10n.Tr(GetRenderDetailKey(detail));
 
     private void RenderEditorGizmos(World world)
     {
@@ -251,10 +404,41 @@ public unsafe class WorldViewWindow : EditorWindow
                 if (script.Enabled) script._onDrawGizmosSelectedDelegate?.Invoke();
             }
 
+            foreach (var shape in selected.GetComponents<PhysicalShape>())
+            {
+                if (!shape.Enabled) continue;
+                if (shape is not TilemapShape tilemapShape) continue;
+                if (_app.IsPlaying) continue;
+
+                float gizmoPixel = GetWorldPixelSize();
+                var color = shape.IsSensor ? Verity.Core.Color.Blue : Verity.Core.Color.Green;
+                foreach (var polygon in tilemapShape.GetWorldPolygons())
+                {
+                    for (int i = 0; i < polygon.Length; i++)
+                    {
+                        _app.RenderPipeline.RenderGizmoLine(
+                            polygon[i],
+                            polygon[(i + 1) % polygon.Length],
+                            gizmoPixel * 2.0f,
+                            color,
+                            _app.WorldCamera,
+                            _app.RenderPipeline.WorldFbo);
+                    }
+                }
+            }
+
             var (center, size, rotation) = GetEntityBounds(selected);
             float pixel = GetWorldPixelSize();
-            _app.RenderPipeline.RenderGizmoRect(center, size + new Vector2(pixel * 6f), rotation, pixel * 2.5f, SelectionColor, _app.WorldCamera, _app.RenderPipeline.WorldFbo);
-            _app.RenderPipeline.RenderGizmoRect(center, size, rotation, pixel * 1.0f, Verity.Core.Color.White, _app.WorldCamera, _app.RenderPipeline.WorldFbo);
+            bool drewCustomSelection = false;
+            var tilemap = selected.GetComponent<Tilemap>();
+            if (tilemap != null)
+                drewCustomSelection = RenderTilemapSelection(tilemap, pixel);
+
+            if (!drewCustomSelection)
+            {
+                _app.RenderPipeline.RenderGizmoRect(center, size + new Vector2(pixel * 6f), rotation, pixel * 2.5f, SelectionColor, _app.WorldCamera, _app.RenderPipeline.WorldFbo);
+                _app.RenderPipeline.RenderGizmoRect(center, size, rotation, pixel * 1.0f, Verity.Core.Color.White, _app.WorldCamera, _app.RenderPipeline.WorldFbo);
+            }
             
             if (selected == EditorSelection.SelectedEntity)
             {
@@ -305,6 +489,94 @@ public unsafe class WorldViewWindow : EditorWindow
         _app.RenderPipeline.RenderGizmoLine(start, end, pixel * 2f, RotateHandleColor, cam, fbo);
         var color = (_activeHandle == 88) ? Verity.Core.Color.Yellow : RotateHandleColor;
         _app.RenderPipeline.RenderGizmoQuad(end, new Vector2(pixel * HandleScreenSize * 1.5f), color, cam, fbo);
+    }
+
+    private bool RenderTilemapSelection(Tilemap tilemap, float pixel)
+    {
+        var edges = GetTilemapSelectionEdges(tilemap);
+        if (edges.Count == 0)
+            return false;
+
+        foreach (var (start, end) in edges)
+        {
+            _app.RenderPipeline.RenderGizmoLine(start, end, pixel * 2.5f, SelectionColor, _app.WorldCamera, _app.RenderPipeline.WorldFbo);
+            _app.RenderPipeline.RenderGizmoLine(start, end, pixel, Verity.Core.Color.White, _app.WorldCamera, _app.RenderPipeline.WorldFbo);
+        }
+
+        return true;
+    }
+
+    private List<(Vector2 start, Vector2 end)> GetTilemapSelectionEdges(Tilemap tilemap)
+    {
+        if (!_tilemapSelectionCache.TryGetValue(tilemap, out var entry))
+        {
+            entry = new TilemapSelectionCacheEntry();
+            _tilemapSelectionCache[tilemap] = entry;
+        }
+
+        var transform = tilemap.Owner?.Transform;
+        Vector2 position = transform?.WorldPosition ?? Vector2.Zero;
+        Vector2 scale = transform?.WorldScale ?? Vector2.One;
+        float rotation = transform?.WorldRotation ?? 0f;
+
+        if (entry.ContentVersion != tilemap.ContentVersion ||
+            entry.Position != position ||
+            entry.Scale != scale ||
+            MathF.Abs(entry.Rotation - rotation) > 0.0001f)
+        {
+            entry.ContentVersion = tilemap.ContentVersion;
+            entry.Position = position;
+            entry.Scale = scale;
+            entry.Rotation = rotation;
+            entry.Edges = BuildTilemapSelectionEdges(tilemap);
+        }
+
+        return entry.Edges;
+    }
+
+    private List<(Vector2 start, Vector2 end)> BuildTilemapSelectionEdges(Tilemap tilemap)
+    {
+        var occupied = new HashSet<(int x, int y)>();
+
+        foreach (var pair in tilemap.GetAllTiles())
+            occupied.Add(pair.Key);
+
+        if (occupied.Count == 0)
+            return [];
+
+        var edges = new List<(Vector2 start, Vector2 end)>();
+        foreach (var (x, y) in occupied)
+        {
+            if (!occupied.Contains((x, y + 1)))
+            {
+                edges.Add((
+                    tilemap.CellToWorld(x, y + 1),
+                    tilemap.CellToWorld(x + 1, y + 1)));
+            }
+
+            if (!occupied.Contains((x, y - 1)))
+            {
+                edges.Add((
+                    tilemap.CellToWorld(x, y),
+                    tilemap.CellToWorld(x + 1, y)));
+            }
+
+            if (!occupied.Contains((x - 1, y)))
+            {
+                edges.Add((
+                    tilemap.CellToWorld(x, y),
+                    tilemap.CellToWorld(x, y + 1)));
+            }
+
+            if (!occupied.Contains((x + 1, y)))
+            {
+                edges.Add((
+                    tilemap.CellToWorld(x + 1, y),
+                    tilemap.CellToWorld(x + 1, y + 1)));
+            }
+        }
+
+        return edges;
     }
 
     private int _draggedVertexIndex = -1;
@@ -422,18 +694,20 @@ public unsafe class WorldViewWindow : EditorWindow
     private void HandleWorldInteraction(World? world, Vector2 imgMin, Vector2 imgSize, bool hovered)
     {
         var io = ImGui.GetIO();
-        if (ImGui.IsMouseReleased(ImGuiMouseButton.Left) || ImGui.IsMouseReleased(ImGuiMouseButton.Right)) { 
+        if (ImGui.IsMouseReleased(ImGuiMouseButton.Left) || ImGui.IsMouseReleased(ImGuiMouseButton.Right)) {
             if (_isDragging || _activeHandle >= 0) _app.EndUndoAction(); 
             if (_isTileStrokeActive) EndTileStroke();
             if (_isBoxSelecting) FinalizeBoxSelection(world);
-            _isDragging = false; _isBoxSelecting = false; _activeHandle = -1; 
+            _isDragging = false; _isBoxSelecting = false; _activeHandle = -1;
         }
         if (world == null) return;
         var worldMouse = ToWorldMousePosition(imgMin, imgSize, io.MousePos);
 
         // --- Tilemap Editing ---
         var selectedTileEntity = EditorSelection.SelectedEntity;
+        bool tilePaletteOpen = _app.GetWindow<TilePaletteWindow>()?.IsOpen == true;
         bool tileEditActive =
+            tilePaletteOpen &&
             selectedTileEntity != null &&
             (EditorSelection.SelectedTile != null ||
              EditorSelection.SelectedTool == TilemapEditor.Tool.Eraser ||
@@ -595,6 +869,14 @@ public unsafe class WorldViewWindow : EditorWindow
 
         if (!hovered && !_isDragging && !_isBoxSelecting) return;
 
+        if (ImGui.IsMouseDoubleClicked(0))
+        {
+            var doubleClickCandidates = GetPickCandidates(world, worldMouse);
+            var doubleClicked = GetDoubleClickCandidate(doubleClickCandidates, worldMouse);
+            ApplySingleSelection(doubleClicked);
+            return;
+        }
+
         if (ImGui.IsMouseClicked(0)) {
             var primary = EditorSelection.SelectedEntity;
             if (primary != null) {
@@ -611,7 +893,39 @@ public unsafe class WorldViewWindow : EditorWindow
                     return;
                 }
             }
-            var picked = PickEntity(world, worldMouse);
+            if (!io.KeyCtrl)
+            {
+                var selectedDragTarget = GetDirectDragTargetFromSelection(worldMouse);
+                if (selectedDragTarget != null)
+                {
+                    _isDragging = true;
+                    _app.BeginUndoAction();
+                    _dragStartWorld = worldMouse;
+                    _draggedEntities.Clear();
+                    foreach (var ent in EditorSelection.SelectedEntities)
+                        _draggedEntities.Add((ent, ent.Transform.WorldPosition, ent.Transform.WorldScale, ent.Transform.WorldRotation));
+                    return;
+                }
+            }
+
+            var candidates = GetPickCandidates(world, worldMouse);
+            var picked = GetDragTargetFromSelection(candidates);
+            if (picked != null && !io.KeyCtrl)
+            {
+                _isDragging = true;
+                _app.BeginUndoAction();
+                _dragStartWorld = worldMouse;
+                _draggedEntities.Clear();
+                foreach (var ent in EditorSelection.SelectedEntities)
+                    _draggedEntities.Add((ent, ent.Transform.WorldPosition, ent.Transform.WorldScale, ent.Transform.WorldRotation));
+                return;
+            }
+
+            if (picked == null)
+            {
+                picked = GetTopmostCandidate(candidates);
+            }
+
             if (picked != null) {
                 if (io.KeyCtrl) { if (EditorSelection.IsSelected(picked)) EditorSelection.Deselect(picked); else EditorSelection.Select(picked, true); }
                 else if (!EditorSelection.IsSelected(picked)) EditorSelection.SelectedEntity = picked;
@@ -810,10 +1124,142 @@ public unsafe class WorldViewWindow : EditorWindow
     private int HitTestScaleHandles(Entity e, Vector2 m) { var (c, s, r) = GetEntityBounds(e); var h = GetHandlePositions(c, s, r); float d = GetWorldPixelSize() * HandleScreenSize; for (int i = 0; i < h.Length; i++) if (Vector2.Distance(m, h[i]) < d) return i; return -1; }
     private bool HitTestRotateHandle(Entity e, Vector2 m) { var (c, s, r) = GetEntityBounds(e); float rad = r * MathF.PI / 180f; var p = c + new Vector2(-MathF.Sin(rad), MathF.Cos(rad)) * (s.Y * 0.5f + GetWorldPixelSize() * 30f); return Vector2.Distance(m, p) < GetWorldPixelSize() * HandleScreenSize * 1.5f; }
     private static Vector2[] GetHandlePositions(Vector2 c, Vector2 s, float r) { float rad = r * MathF.PI / 180f; float cos = MathF.Cos(rad), sin = MathF.Sin(rad); float hx = s.X * 0.5f, hy = s.Y * 0.5f; Vector2 Rot(float lx, float ly) => c + new Vector2(lx * cos - ly * sin, lx * sin + ly * cos); return [ Rot(-hx, hy), Rot(0, hy), Rot(hx, hy), Rot(hx, 0), Rot(hx, -hy), Rot(0, -hy), Rot(-hx, -hy), Rot(-hx, 0) ]; }
-    private Entity? PickEntity(World world, Vector2 mouse) { var renderers = CollectRenderers(world); SortRenderers(renderers); for (int i = renderers.Count - 1; i >= 0; i--) if (IsPointInsideSpriteAabb(renderers[i], mouse)) return renderers[i].Owner; return PickEmptyEntity(world, mouse); }
-    private Entity? PickEmptyEntity(World world, Vector2 mouse) { Entity? res = null; foreach (var e in world.RootEntities) PickEmptyEntityRecursive(e, mouse, ref res); return res; }
-    private static void PickEmptyEntityRecursive(Entity e, Vector2 m, ref Entity? r) { if (!e.Active) return; if (e.GetComponent<SpriteRenderer>() == null) { var p = e.Transform.WorldPosition; var s = e.Transform.Scale * DefaultEntitySize * 0.5f; if (m.X >= p.X - MathF.Abs(s.X) && m.X <= p.X + MathF.Abs(s.X) && m.Y >= p.Y - MathF.Abs(s.Y) && m.Y <= p.Y + MathF.Abs(s.Y)) r = e; } foreach (var c in e.Transform.Children) PickEmptyEntityRecursive(c.Owner, m, ref r); }
-    private bool IsPointInsideSpriteAabb(SpriteRenderer sr, Vector2 p) { var t = sr.Owner.Transform; var wp = t.WorldPosition; var s = t.WorldScale * sr.Size; var pivot = GetResolvedPivot(sr); var min = wp - pivot * s; var max = wp + (Vector2.One - pivot) * s; return p.X >= MathF.Min(min.X, max.X) && p.X <= MathF.Max(min.X, max.X) && p.Y >= MathF.Min(min.Y, max.Y) && p.Y <= MathF.Max(min.Y, max.Y); }
+    private static Entity? GetTopmostCandidate(List<Entity> candidates)
+        => candidates.Count > 0 ? candidates[0] : null;
+
+    private Entity? GetDoubleClickCandidate(List<Entity> candidates, Vector2 mouse)
+    {
+        if (candidates.Count == 0)
+            return null;
+
+        var selected = EditorSelection.SelectedEntity;
+        if (selected == null)
+            return GetTopmostCandidate(candidates);
+
+        int currentIndex = candidates.IndexOf(selected);
+        if (currentIndex < 0)
+            return GetTopmostCandidate(candidates);
+
+        return candidates[(currentIndex + 1) % candidates.Count];
+    }
+
+    private static Entity? GetDragTargetFromSelection(List<Entity> candidates)
+    {
+        var primary = EditorSelection.SelectedEntity;
+        if (primary != null && candidates.Contains(primary))
+            return primary;
+
+        foreach (var candidate in candidates)
+        {
+            if (EditorSelection.IsSelected(candidate))
+                return candidate;
+        }
+
+        return null;
+    }
+
+    private Entity? GetDirectDragTargetFromSelection(Vector2 mouse)
+    {
+        var primary = EditorSelection.SelectedEntity;
+        if (primary != null && IsPointInsideEntity(primary, mouse))
+            return primary;
+
+        foreach (var entity in EditorSelection.SelectedEntities)
+        {
+            if (entity != primary && IsPointInsideEntity(entity, mouse))
+                return entity;
+        }
+
+        return null;
+    }
+
+    private bool IsPointInsideEntity(Entity entity, Vector2 point)
+    {
+        if (!entity.Active)
+            return false;
+
+        if (TryIsPointInsideTilemap(entity, point, out bool tilemapHit))
+            return tilemapHit;
+
+        if (TryGetEntityWorldAabb(entity, out var min, out var max))
+            return IsPointInsideAabb(min, max, point);
+
+        var position = entity.Transform.WorldPosition;
+        var halfSize = entity.Transform.Scale * DefaultEntitySize * 0.5f;
+        return point.X >= position.X - MathF.Abs(halfSize.X) &&
+               point.X <= position.X + MathF.Abs(halfSize.X) &&
+               point.Y >= position.Y - MathF.Abs(halfSize.Y) &&
+               point.Y <= position.Y + MathF.Abs(halfSize.Y);
+    }
+
+    private static bool TryIsPointInsideTilemap(Entity entity, Vector2 point, out bool hit)
+    {
+        var tilemap = entity.GetComponent<Tilemap>();
+        if (tilemap == null)
+        {
+            hit = false;
+            return false;
+        }
+
+        var cell = tilemap.WorldToCell(point);
+        hit = tilemap.HasTile(cell.x, cell.y);
+        return true;
+    }
+
+    private static void ApplySingleSelection(Entity? entity)
+    {
+        if (entity == null)
+            EditorSelection.ClearSelection();
+        else
+            EditorSelection.SelectedEntity = entity;
+    }
+
+    private List<Entity> GetPickCandidates(World world, Vector2 mouse)
+    {
+        var candidates = new List<Entity>();
+        foreach (var entity in CollectRenderableEntitiesInRenderOrder(world).AsEnumerable().Reverse())
+        {
+            if (IsPointInsideEntity(entity, mouse) && !candidates.Contains(entity))
+                candidates.Add(entity);
+        }
+
+        var emptyEntities = new List<Entity>();
+        foreach (var entity in world.RootEntities)
+            CollectEmptyPickCandidates(entity, mouse, emptyEntities);
+
+        for (int i = emptyEntities.Count - 1; i >= 0; i--)
+            candidates.Add(emptyEntities[i]);
+
+        return candidates;
+    }
+
+    private void CollectEmptyPickCandidates(Entity e, Vector2 m, List<Entity> results)
+    {
+        if (!e.Active) return;
+
+        if (TryGetEntityWorldAabb(e, out var min, out var max))
+        {
+            if (IsPointInsideAabb(min, max, m))
+                results.Add(e);
+        }
+        else
+        {
+            var p = e.Transform.WorldPosition;
+            var s = e.Transform.Scale * DefaultEntitySize * 0.5f;
+            if (m.X >= p.X - MathF.Abs(s.X) && m.X <= p.X + MathF.Abs(s.X) && m.Y >= p.Y - MathF.Abs(s.Y) && m.Y <= p.Y + MathF.Abs(s.Y))
+                results.Add(e);
+        }
+
+        foreach (var c in e.Transform.Children)
+            CollectEmptyPickCandidates(c.Owner, m, results);
+    }
+
+    private static bool IsPointInsideAabb(Vector2 min, Vector2 max, Vector2 p)
+    {
+        return p.X >= MathF.Min(min.X, max.X) && p.X <= MathF.Max(min.X, max.X) &&
+               p.Y >= MathF.Min(min.Y, max.Y) && p.Y <= MathF.Max(min.Y, max.Y);
+    }
+
     private (Vector2 center, Vector2 size, float rotation) GetEntityBounds(Entity e) 
     { 
         var sr = e.GetComponent<SpriteRenderer>(); 
@@ -833,9 +1279,141 @@ public unsafe class WorldViewWindow : EditorWindow
             float rad = r * MathF.PI / 180f; 
             var roff = new Vector2(off.X * MathF.Cos(rad) - off.Y * MathF.Sin(rad), off.X * MathF.Sin(rad) + off.Y * MathF.Cos(rad)); 
             return (wp + roff, effS, r); 
-        } 
+        }
+
+        if (TryGetEntityWorldAabb(e, out var min, out var max))
+        {
+            var size = max - min;
+            if (MathF.Abs(size.X) < 0.0001f) size.X = 0.0001f;
+            if (MathF.Abs(size.Y) < 0.0001f) size.Y = 0.0001f;
+            return ((min + max) * 0.5f, new Vector2(MathF.Abs(size.X), MathF.Abs(size.Y)), 0f);
+        }
+
         var absS = new Vector2(MathF.Max(0.0001f, MathF.Abs(s.X)), MathF.Max(0.0001f, MathF.Abs(s.Y))); 
         return (wp, absS * DefaultEntitySize, r); 
+    }
+
+    private bool TryGetEntityWorldAabb(Entity entity, out Vector2 min, out Vector2 max)
+    {
+        if (TryGetSpriteWorldAabb(entity, out min, out max))
+            return true;
+
+        if (TryGetTilemapWorldAabb(entity, out min, out max))
+            return true;
+
+        if (TryGetPolygonWorldAabb(entity, out min, out max))
+            return true;
+
+        if (TryGetPhysicalShapeWorldAabb(entity, out min, out max))
+            return true;
+
+        min = max = Vector2.Zero;
+        return false;
+    }
+
+    private bool TryGetSpriteWorldAabb(Entity entity, out Vector2 min, out Vector2 max)
+    {
+        var spriteRenderer = entity.GetComponent<SpriteRenderer>();
+        if (spriteRenderer == null || !spriteRenderer.Enabled)
+        {
+            min = max = Vector2.Zero;
+            return false;
+        }
+
+        var transform = entity.Transform;
+        var scale = transform.WorldScale * spriteRenderer.Size;
+        var pivot = GetResolvedPivot(spriteRenderer);
+        Vector2[] corners =
+        [
+            new(-pivot.X * scale.X, -pivot.Y * scale.Y),
+            new((1f - pivot.X) * scale.X, -pivot.Y * scale.Y),
+            new((1f - pivot.X) * scale.X, (1f - pivot.Y) * scale.Y),
+            new(-pivot.X * scale.X, (1f - pivot.Y) * scale.Y)
+        ];
+
+        float radians = transform.WorldRotation * MathF.PI / 180f;
+        float cos = MathF.Cos(radians);
+        float sin = MathF.Sin(radians);
+        for (int i = 0; i < corners.Length; i++)
+        {
+            var local = corners[i];
+            corners[i] = transform.WorldPosition + new Vector2(
+                local.X * cos - local.Y * sin,
+                local.X * sin + local.Y * cos);
+        }
+
+        return TryCalculateAabb(corners, out min, out max);
+    }
+
+    private bool TryGetTilemapWorldAabb(Entity entity, out Vector2 min, out Vector2 max)
+    {
+        var tilemap = entity.GetComponent<Tilemap>();
+        if (tilemap == null || !tilemap.TryGetTileBounds(out int minX, out int minY, out int maxX, out int maxY))
+        {
+            min = max = Vector2.Zero;
+            return false;
+        }
+
+        Vector2[] corners =
+        [
+            tilemap.CellToWorld(minX, minY),
+            tilemap.CellToWorld(maxX + 1, minY),
+            tilemap.CellToWorld(maxX + 1, maxY + 1),
+            tilemap.CellToWorld(minX, maxY + 1)
+        ];
+
+        return TryCalculateAabb(corners, out min, out max);
+    }
+
+    private bool TryGetPolygonWorldAabb(Entity entity, out Vector2 min, out Vector2 max)
+    {
+        var polygonRenderer = entity.GetComponent<PolygonRenderer>();
+        if (polygonRenderer != null && TryCalculateAabb(polygonRenderer.GetWorldVertices(), out min, out max))
+            return true;
+
+        var polygonShape = entity.GetComponent<PolygonShape>();
+        if (polygonShape != null && TryCalculateAabb(polygonShape.GetVertices(), out min, out max))
+            return true;
+
+        min = max = Vector2.Zero;
+        return false;
+    }
+
+    private bool TryGetPhysicalShapeWorldAabb(Entity entity, out Vector2 min, out Vector2 max)
+    {
+        foreach (var shape in entity.GetComponents<PhysicalShape>())
+        {
+            if (!shape.Enabled) continue;
+
+            var aabb = shape.GetAABB();
+            if (aabb.IsDefault()) continue;
+
+            min = aabb.Min;
+            max = aabb.Max;
+            return true;
+        }
+
+        min = max = Vector2.Zero;
+        return false;
+    }
+
+    private static bool TryCalculateAabb(IReadOnlyList<Vector2> points, out Vector2 min, out Vector2 max)
+    {
+        if (points.Count == 0)
+        {
+            min = max = Vector2.Zero;
+            return false;
+        }
+
+        min = points[0];
+        max = points[0];
+        for (int i = 1; i < points.Count; i++)
+        {
+            min = Vector2.Min(min, points[i]);
+            max = Vector2.Max(max, points[i]);
+        }
+
+        return true;
     }
 
     private Entity CreateSpriteEntityFromDrag(World world, string draggedPath, Sprite? draggedSprite)
@@ -846,6 +1424,7 @@ public unsafe class WorldViewWindow : EditorWindow
         sr.Texture = _app.LoadSpriteTexture(sr.Sprite);
         sr.Size = _app.GetDefaultSpriteWorldSize(sr.Sprite);
         sr.Pivot = _app.GetDefaultSpritePivot(sr.Sprite);
+        _app.AttachToBlueprintDefaultParent(entity);
         return entity;
     }
 
@@ -857,9 +1436,63 @@ public unsafe class WorldViewWindow : EditorWindow
     private Vector2 GetResolvedPivot(SpriteRenderer sr) => sr.UseSpritePivot ? _app.GetDefaultSpritePivot(sr.Sprite) : sr.Pivot;
     private float GetWorldPixelSize() { float h = _app.WorldCamera.VisibleHalfHeight * 2f; return _app.WorldCamera.ViewportHeight > 0 ? h / _app.WorldCamera.ViewportHeight : 0.01f; }
     private Vector2 ToWorldMousePosition(Vector2 min, Vector2 sz, Vector2 abs) { var l = abs - min; l.X = Math.Clamp(l.X, 0f, sz.X); l.Y = Math.Clamp(l.Y, 0f, sz.Y); return _app.WorldCamera.ScreenToWorld(l); }
-    private static List<SpriteRenderer> CollectRenderers(World w) { var r = new List<SpriteRenderer>(); foreach (var e in w.RootEntities) CollectRenderersRecursive(e, r); return r; }
-    private static void CollectRenderersRecursive(Entity e, List<SpriteRenderer> r) { if (!e.Active) return; var sr = e.GetComponent<SpriteRenderer>(); if (sr != null) r.Add(sr); foreach (var c in e.Transform.Children) CollectRenderersRecursive(c.Owner, r); }
-    private void SortRenderers(List<SpriteRenderer> r) { r.Sort((a, b) => { int lc = Verity.Graphics.SortingLayer.GetLayerIndex(a.SortingLayerName).CompareTo(Verity.Graphics.SortingLayer.GetLayerIndex(b.SortingLayerName)); if (lc != 0) return lc; return a.OrderInLayer.CompareTo(b.OrderInLayer); }); }
+    private List<Entity> CollectRenderableEntitiesInRenderOrder(World world)
+    {
+        var hierarchyOrder = world.GetAllEntities()
+            .Select((entity, index) => (entity, index))
+            .ToDictionary(pair => pair.entity, pair => pair.index);
+
+        var renderables = new List<Component>();
+        foreach (var entity in world.GetAllEntities().Where(static entity => entity.Active))
+        {
+            if (entity.GetComponent<SpriteRenderer>() is SpriteRenderer sr && sr.Enabled)
+                renderables.Add(sr);
+            if (entity.GetComponent<TilemapRenderer>() is TilemapRenderer tr && tr.Enabled)
+                renderables.Add(tr);
+            if (entity.GetComponent<PolygonRenderer>() is PolygonRenderer pr && pr.Enabled)
+                renderables.Add(pr);
+        }
+
+        renderables.Sort((a, b) =>
+        {
+            int la = GetLayerIndexForPicking(a);
+            int lb = GetLayerIndexForPicking(b);
+            int lc = la.CompareTo(lb);
+            if (lc != 0) return lc;
+
+            int oa = a is SpriteRenderer srA2 ? srA2.OrderInLayer : (a is TilemapRenderer trA2 ? trA2.OrderInLayer : ((PolygonRenderer)a).OrderInLayer);
+            int ob = b is SpriteRenderer srB2 ? srB2.OrderInLayer : (b is TilemapRenderer trB2 ? trB2.OrderInLayer : ((PolygonRenderer)b).OrderInLayer);
+            int oc = oa.CompareTo(ob);
+            if (oc != 0) return oc;
+
+            int ha = hierarchyOrder.GetValueOrDefault(a.Owner, int.MaxValue);
+            int hb = hierarchyOrder.GetValueOrDefault(b.Owner, int.MaxValue);
+            int hc = ha.CompareTo(hb);
+            if (hc != 0) return hc;
+
+            float va = GetSortAxisValueForPicking(a.Owner.Transform);
+            float vb = GetSortAxisValueForPicking(b.Owner.Transform);
+            int vc = _app.RenderPipeline.SortAxisAscending ? va.CompareTo(vb) : vb.CompareTo(va);
+            return vc != 0 ? vc : a.Owner.Id.CompareTo(b.Owner.Id);
+        });
+
+        return renderables.Select(static component => component.Owner).ToList();
+    }
+
+    private float GetSortAxisValueForPicking(Transform transform) => _app.RenderPipeline.CustomSortAxis switch
+    {
+        SortAxis.X => transform.WorldPosition.X,
+        SortAxis.Y => transform.WorldPosition.Y,
+        _ => 0f
+    };
+
+    private static int GetLayerIndexForPicking(Component component) => component switch
+    {
+        SpriteRenderer sr => Verity.Graphics.SortingLayer.GetLayerIndex(sr.SortingLayerName),
+        TilemapRenderer tr => Verity.Graphics.SortingLayer.GetLayerIndex(tr.SortingLayerName),
+        PolygonRenderer pr => Verity.Graphics.SortingLayer.GetLayerIndex(pr.SortingLayerName),
+        _ => 0
+    };
     private void ApplyTileStroke(Tilemap tilemap, int tx, int ty, TilemapEditor.Tool tool)
     {
         var cells = TilemapEditor.GetBrushCells(tx, ty, EditorSelection.TileBrushSize, EditorSelection.TileBrushShape);

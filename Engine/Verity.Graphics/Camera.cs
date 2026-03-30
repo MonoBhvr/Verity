@@ -5,13 +5,22 @@ using Verity.Core.World;
 
 namespace Verity.Graphics;
 
+public enum CameraRenderDetail
+{
+    Outline = 0,
+    Basic = 1,
+    Lighting = 2,
+    PostProcess = 3
+}
+
+[NonDisableable]
 public class Camera : Component
 {
     public static Camera? Main => WorldManager.ActiveWorld?.GetAllEntities()
         .Select(e => e.GetComponent<Camera>())
         .FirstOrDefault(c => c != null && c.Enabled);
 
-    [SerializeField]
+    [SerializeField] 
     public float OrthographicSize { get; set; } = 5.0f;
 
     [SerializeField]
@@ -45,6 +54,12 @@ public class Camera : Component
 
     [SerializeField]
     public PostProcessSettings PostProcess { get; set; } = new();
+
+    [HideInInspector]
+    public CameraRenderDetail RenderDetail { get; set; } = CameraRenderDetail.PostProcess;
+
+    [HideInInspector]
+    public bool ShowGizmos { get; set; } = true;
 
     private int _viewportX, _viewportY, _viewportW, _viewportH;
 

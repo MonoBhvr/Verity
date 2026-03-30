@@ -6,6 +6,8 @@ namespace Verity.Editor.Windows;
 
 public class ConsoleWindow : EditorWindow
 {
+    private readonly EditorApp _app;
+
     private struct LogEntry
     {
         public string Message;
@@ -16,7 +18,10 @@ public class ConsoleWindow : EditorWindow
     private static readonly HashSet<int> _selectedIndices = [];
     private static int _dragStartIndex = -1;
 
-    public ConsoleWindow() : base(L10n.Tr("window_console")) { }
+    public ConsoleWindow(EditorApp app) : base(L10n.Tr("window_console"))
+    {
+        _app = app;
+    }
 
     public static void Log(string message, LogLevel level = LogLevel.Info)
     {
@@ -43,6 +48,7 @@ public class ConsoleWindow : EditorWindow
         {
             var all = string.Join("\n", _entries.Select(e => e.Message));
             ImGui.SetClipboardText(all);
+            NotifyCopyCompleted();
         }
         if (_selectedIndices.Count > 0)
         {
@@ -118,7 +124,10 @@ public class ConsoleWindow : EditorWindow
                 if (ImGui.BeginPopupContextItem($"context_{i}"))
                 {
                     if (ImGui.MenuItem(L10n.Tr("ctx_copy_message")))
+                    {
                         ImGui.SetClipboardText(entry.Message);
+                        NotifyCopyCompleted();
+                    }
                     
                     if (_selectedIndices.Count > 1 && ImGui.MenuItem(L10n.Tr("ctx_copy_all_selected")))
                     {
@@ -155,5 +164,11 @@ public class ConsoleWindow : EditorWindow
     {
         var selected = _entries.Where((e, idx) => _selectedIndices.Contains(idx)).Select(e => e.Message);
         ImGui.SetClipboardText(string.Join("\n", selected));
+        NotifyCopyCompleted();
+    }
+
+    private void NotifyCopyCompleted()
+    {
+        _app.ShowOverlayMessage(L10n.Tr("msg_console_copied"));
     }
 }

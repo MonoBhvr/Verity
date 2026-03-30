@@ -1,0 +1,14 @@
+D:\Verity\Engine\Verity.Input\obj_codex\Debug\net9.0\Verity.Input.csproj.AssemblyReference.cache
+D:\Verity\Engine\Verity.Input\obj_codex\Debug\net9.0\Verity.Input.GeneratedMSBuildEditorConfig.editorconfig
+D:\Verity\Engine\Verity.Input\obj_codex\Debug\net9.0\Verity.Input.AssemblyInfoInputs.cache
+D:\Verity\Engine\Verity.Input\obj_codex\Debug\net9.0\Verity.Input.AssemblyInfo.cs
+D:\Verity\Engine\Verity.Input\obj_codex\Debug\net9.0\Verity.Input.csproj.CoreCompileInputs.cache
+D:\Verity\Engine\Verity.Input\obj_codex\Debug\net9.0\Verity.Input.sourcelink.json
+D:\Verity\Engine\Verity.Input\bin_codex\Debug\net9.0\Verity.Input.dll.config
+D:\Verity\Engine\Verity.Input\bin_codex\Debug\net9.0\Verity.Input.deps.json
+D:\Verity\Engine\Verity.Input\bin_codex\Debug\net9.0\Verity.Input.dll
+D:\Verity\Engine\Verity.Input\bin_codex\Debug\net9.0\Verity.Input.pdb
+D:\Verity\Engine\Verity.Input\obj_codex\Debug\net9.0\Verity.Input.dll
+D:\Verity\Engine\Verity.Input\obj_codex\Debug\net9.0\refint\Verity.Input.dll
+D:\Verity\Engine\Verity.Input\obj_codex\Debug\net9.0\Verity.Input.pdb
+D:\Verity\Engine\Verity.Input\obj_codex\Debug\net9.0\ref\Verity.Input.dll

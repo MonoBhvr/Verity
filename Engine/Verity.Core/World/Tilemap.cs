@@ -15,6 +15,8 @@ public class Tilemap : Component
     private bool _hasTileBounds;
     private (int x, int y) _minTile;
     private (int x, int y) _maxTile;
+    private Vector2 _tileSize = Vector2.One;
+    private int _contentVersion;
 
     [SerializeField]
     public Dictionary<(int x, int y), TileBase> Tiles 
@@ -25,16 +27,32 @@ public class Tilemap : Component
             _tiles = value ?? new(); 
             _hasTileBounds = false;
             _boundsDirty = true;
-            _renderDirty = true; 
-            _physicsDirty = true; 
+            MarkChanged();
         }
     }
 
+    [HideInInspector]
     public bool RenderDirty { get => _renderDirty; set => _renderDirty = value; }
+
+    [HideInInspector]
     public bool PhysicsDirty { get => _physicsDirty; set => _physicsDirty = value; }
 
+    [HideInInspector]
+    public int ContentVersion => _contentVersion;
+
     [SerializeField]
-    public Vector2 TileSize { get; set; } = Vector2.One;
+    public Vector2 TileSize
+    {
+        get => _tileSize;
+        set
+        {
+            if (_tileSize == value)
+                return;
+
+            _tileSize = value;
+            MarkChanged();
+        }
+    }
 
     public void SetTile(int x, int y, TileBase? tile)
     {
@@ -52,8 +70,7 @@ public class Tilemap : Component
             IncludeInBounds(x, y);
         }
 
-        _renderDirty = true;
-        _physicsDirty = true;
+        MarkChanged();
     }
 
     public TileBase? GetTile(int x, int y)
@@ -69,8 +86,7 @@ public class Tilemap : Component
         _tiles.Clear(); 
         _hasTileBounds = false;
         _boundsDirty = false;
-        _renderDirty = true; 
-        _physicsDirty = true; 
+        MarkChanged();
     }
 
     public IEnumerable<KeyValuePair<(int x, int y), TileBase>> GetAllTiles() => _tiles;
@@ -237,5 +253,15 @@ public class Tilemap : Component
         _maxTile = (maxX, maxY);
         _hasTileBounds = true;
         _boundsDirty = false;
+    }
+
+    private void MarkChanged()
+    {
+        _renderDirty = true;
+        _physicsDirty = true;
+        unchecked
+        {
+            _contentVersion++;
+        }
     }
 }

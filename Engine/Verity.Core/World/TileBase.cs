@@ -10,6 +10,9 @@ public abstract class TileBase
 {
     [HideInInspector]
     public string? AssetPath { get; set; }
+
+    [HideInInspector]
+    public string? AssetGuid { get; set; }
     public string Name { get; set; } = "New Tile";
     public bool IsCollidable { get; set; } = true;
     public Color Color { get; set; } = Color.White;

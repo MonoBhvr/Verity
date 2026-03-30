@@ -86,8 +86,27 @@ public static class PhysicsMath
 
     public static RaycastHit TestRay(Vector2 origin, Vector2 direction, float distance, PhysicalShape shape)
     {
-        if (shape is CircleShape circle) return TestRayVsCircle(origin, direction, distance, circle);
-        else return TestRayVsPolygon(origin, direction, distance, shape.Owner, shape.GetVertices());
+        if (shape is CircleShape circle)
+        {
+            return TestRayVsCircle(origin, direction, distance, circle);
+        }
+
+        if (shape is TilemapShape tilemapShape)
+        {
+            RaycastHit closestHit = new() { IsHit = false, Distance = float.MaxValue };
+            foreach (var polygon in tilemapShape.GetWorldPolygons())
+            {
+                var hit = TestRayVsPolygon(origin, direction, distance, shape.Owner, polygon);
+                if (hit.IsHit && hit.Distance < closestHit.Distance)
+                {
+                    closestHit = hit;
+                }
+            }
+
+            return closestHit.IsHit ? closestHit : new RaycastHit { IsHit = false };
+        }
+
+        return TestRayVsPolygon(origin, direction, distance, shape.Owner, shape.GetVertices());
     }
 
     private static CollisionResult TestCircleVsCircle(CircleShape a, CircleShape b)

@@ -11,63 +11,82 @@ internal class UndoState
     public string WorldJson { get; set; } = "";
     public string ProjectSettingsJson { get; set; } = "";
     public string BuildSettingsJson { get; set; } = "";
+    public string EditorStateJson { get; set; } = "";
 }
 
 internal sealed class UndoSystem
 {
-    private readonly Stack<UndoState> _undoStack = new();
-    private readonly Stack<UndoState> _redoStack = new();
+    private sealed class UndoHistory
+    {
+        public Stack<UndoState> UndoStack { get; } = new();
+        public Stack<UndoState> RedoStack { get; } = new();
+        public UndoState? PendingSnapshot { get; set; }
+    }
+
+    private readonly Dictionary<string, UndoHistory> _histories = new(StringComparer.OrdinalIgnoreCase);
     private const int MaxHistory = 100;
 
-    private UndoState? _pendingSnapshot;
-
-    private UndoState CreateSnapshot(World world, ProjectSettings projectSettings, BuildSettings buildSettings)
+    private UndoState CreateSnapshot(World world, ProjectSettings projectSettings, BuildSettings buildSettings, string editorStateJson)
     {
         return new UndoState
         {
             WorldJson = SceneSerializer.Serialize(world),
             ProjectSettingsJson = JsonSerializer.Serialize(projectSettings),
-            BuildSettingsJson = JsonSerializer.Serialize(buildSettings)
+            BuildSettingsJson = JsonSerializer.Serialize(buildSettings),
+            EditorStateJson = editorStateJson
         };
     }
 
-    public void Record(World world, ProjectSettings projectSettings, BuildSettings buildSettings)
+    private UndoHistory GetHistory(string scopeKey)
     {
-        var current = CreateSnapshot(world, projectSettings, buildSettings);
-        if (_undoStack.Count > 0 && 
-            _undoStack.Peek().WorldJson == current.WorldJson && 
-            _undoStack.Peek().ProjectSettingsJson == current.ProjectSettingsJson &&
-            _undoStack.Peek().BuildSettingsJson == current.BuildSettingsJson) return;
-
-        _undoStack.Push(current);
-        _redoStack.Clear();
-        _pendingSnapshot = null;
-
-        LimitStack(_undoStack);
-    }
-
-    public void BeginContinuousAction(World world, ProjectSettings projectSettings, BuildSettings buildSettings)
-    {
-        if (_pendingSnapshot == null)
+        if (!_histories.TryGetValue(scopeKey, out UndoHistory? history))
         {
-            _pendingSnapshot = CreateSnapshot(world, projectSettings, buildSettings);
+            history = new UndoHistory();
+            _histories[scopeKey] = history;
         }
+
+        return history;
     }
 
-    public void EndContinuousAction(World world, ProjectSettings projectSettings, BuildSettings buildSettings)
+    public void Record(string scopeKey, World world, ProjectSettings projectSettings, BuildSettings buildSettings, string editorStateJson)
     {
-        if (_pendingSnapshot != null)
+        UndoHistory history = GetHistory(scopeKey);
+        var current = CreateSnapshot(world, projectSettings, buildSettings, editorStateJson);
+        if (history.UndoStack.Count > 0 &&
+            history.UndoStack.Peek().WorldJson == current.WorldJson &&
+            history.UndoStack.Peek().ProjectSettingsJson == current.ProjectSettingsJson &&
+            history.UndoStack.Peek().BuildSettingsJson == current.BuildSettingsJson &&
+            history.UndoStack.Peek().EditorStateJson == current.EditorStateJson) return;
+
+        history.UndoStack.Push(current);
+        history.RedoStack.Clear();
+        history.PendingSnapshot = null;
+
+        LimitStack(history.UndoStack);
+    }
+
+    public void BeginContinuousAction(string scopeKey, World world, ProjectSettings projectSettings, BuildSettings buildSettings, string editorStateJson)
+    {
+        UndoHistory history = GetHistory(scopeKey);
+        history.PendingSnapshot ??= CreateSnapshot(world, projectSettings, buildSettings, editorStateJson);
+    }
+
+    public void EndContinuousAction(string scopeKey, World world, ProjectSettings projectSettings, BuildSettings buildSettings, string editorStateJson)
+    {
+        UndoHistory history = GetHistory(scopeKey);
+        if (history.PendingSnapshot != null)
         {
-            var current = CreateSnapshot(world, projectSettings, buildSettings);
-            if (current.WorldJson != _pendingSnapshot.WorldJson || 
-                current.ProjectSettingsJson != _pendingSnapshot.ProjectSettingsJson ||
-                current.BuildSettingsJson != _pendingSnapshot.BuildSettingsJson)
+            var current = CreateSnapshot(world, projectSettings, buildSettings, editorStateJson);
+            if (current.WorldJson != history.PendingSnapshot.WorldJson ||
+                current.ProjectSettingsJson != history.PendingSnapshot.ProjectSettingsJson ||
+                current.BuildSettingsJson != history.PendingSnapshot.BuildSettingsJson ||
+                current.EditorStateJson != history.PendingSnapshot.EditorStateJson)
             {
-                _undoStack.Push(_pendingSnapshot);
-                _redoStack.Clear();
-                LimitStack(_undoStack);
+                history.UndoStack.Push(history.PendingSnapshot);
+                history.RedoStack.Clear();
+                LimitStack(history.UndoStack);
             }
-            _pendingSnapshot = null;
+            history.PendingSnapshot = null;
         }
     }
 
@@ -82,42 +101,43 @@ internal sealed class UndoSystem
         }
     }
 
-    public UndoState? Undo(World world, ProjectSettings projectSettings, BuildSettings buildSettings)
+    public UndoState? Undo(string scopeKey, World world, ProjectSettings projectSettings, BuildSettings buildSettings, string editorStateJson)
     {
-        if (_undoStack.Count == 0) return null;
+        UndoHistory history = GetHistory(scopeKey);
+        if (history.UndoStack.Count == 0) return null;
 
-        var current = CreateSnapshot(world, projectSettings, buildSettings);
-        _redoStack.Push(current);
-        LimitStack(_redoStack);
+        var current = CreateSnapshot(world, projectSettings, buildSettings, editorStateJson);
+        history.RedoStack.Push(current);
+        LimitStack(history.RedoStack);
 
-        var last = _undoStack.Pop();
+        var last = history.UndoStack.Pop();
         // Skip if same
-        if (last.WorldJson == current.WorldJson && 
-            last.ProjectSettingsJson == current.ProjectSettingsJson && 
-            last.BuildSettingsJson == current.BuildSettingsJson && 
-            _undoStack.Count > 0)
+        if (last.WorldJson == current.WorldJson &&
+            last.ProjectSettingsJson == current.ProjectSettingsJson &&
+            last.BuildSettingsJson == current.BuildSettingsJson &&
+            last.EditorStateJson == current.EditorStateJson &&
+            history.UndoStack.Count > 0)
         {
-            last = _undoStack.Pop();
+            last = history.UndoStack.Pop();
         }
 
         return last;
     }
 
-    public UndoState? Redo(World world, ProjectSettings projectSettings, BuildSettings buildSettings)
+    public UndoState? Redo(string scopeKey, World world, ProjectSettings projectSettings, BuildSettings buildSettings, string editorStateJson)
     {
-        if (_redoStack.Count == 0) return null;
+        UndoHistory history = GetHistory(scopeKey);
+        if (history.RedoStack.Count == 0) return null;
 
-        var current = CreateSnapshot(world, projectSettings, buildSettings);
-        _undoStack.Push(current);
-        LimitStack(_undoStack);
+        var current = CreateSnapshot(world, projectSettings, buildSettings, editorStateJson);
+        history.UndoStack.Push(current);
+        LimitStack(history.UndoStack);
 
-        return _redoStack.Pop();
+        return history.RedoStack.Pop();
     }
 
     public void Clear()
     {
-        _undoStack.Clear();
-        _redoStack.Clear();
-        _pendingSnapshot = null;
+        _histories.Clear();
     }
 }

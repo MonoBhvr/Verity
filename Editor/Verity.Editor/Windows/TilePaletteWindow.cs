@@ -97,7 +97,7 @@ public unsafe class TilePaletteWindow : EditorWindow
 
                     // Click area
                     ImGui.SetCursorScreenPos(pos);
-                    if (ImGui.InvisibleButton("##tilebtn", new Vector2(cellSize, cellSize + 20)))
+                    if (ImGui.InvisibleButton("##tilebtn", new Vector2(MathF.Max(1f, cellSize), MathF.Max(1f, cellSize + 20))))
                     {
                         SelectTileAsset(path, tile);
                     }
@@ -137,9 +137,7 @@ public unsafe class TilePaletteWindow : EditorWindow
             if (active) ImGui.PushStyleColor(ImGuiCol.Button, new System.Numerics.Vector4(0.2f, 0.4f, 0.6f, 1.0f));
             
             if (ImGui.Button(L10n.Tr($"tile_tool_{tool}")))
-            {
-                EditorSelection.SelectedTool = tool;
-            }
+                SetSelectedTool(tool);
             
             if (active) ImGui.PopStyleColor();
             ImGui.SameLine();
@@ -150,8 +148,13 @@ public unsafe class TilePaletteWindow : EditorWindow
         ImGui.SetNextItemWidth(controlWidth);
         int brushSize = EditorSelection.TileBrushSize;
         if (ImGui.DragInt(L10n.Tr("tile_brush_size"), ref brushSize, 0.1f, 1, 32))
-        {
             EditorSelection.TileBrushSize = Math.Max(1, brushSize);
+        if (ImGui.IsItemActivated())
+            _app.BeginUndoAction();
+        if (ImGui.IsItemDeactivatedAfterEdit())
+        {
+            EditorSelection.TileBrushSize = Math.Max(1, EditorSelection.TileBrushSize);
+            _app.EndUndoAction();
         }
 
         var shape = EditorSelection.TileBrushShape;
@@ -162,13 +165,42 @@ public unsafe class TilePaletteWindow : EditorWindow
             {
                 bool selected = brushShape == shape;
                 if (ImGui.Selectable(L10n.Tr($"tile_brush_shape_{brushShape}"), selected))
-                {
-                    EditorSelection.TileBrushShape = brushShape;
-                }
+                    SetBrushShape(brushShape);
                 if (selected) ImGui.SetItemDefaultFocus();
             }
             ImGui.EndCombo();
         }
+    }
+
+    public void RestoreUndoState(string? selectedAssetPath)
+    {
+        if (string.IsNullOrWhiteSpace(selectedAssetPath))
+        {
+            EditorSelection.SelectedAssetPath = null;
+            EditorSelection.SelectedTile = null;
+            return;
+        }
+
+        EditorSelection.SelectedAssetPath = selectedAssetPath;
+        EditorSelection.SelectedTile = GetLoadedTile(selectedAssetPath);
+    }
+
+    private void SetSelectedTool(TilemapEditor.Tool tool)
+    {
+        if (EditorSelection.SelectedTool == tool)
+            return;
+
+        _app.RecordUndo();
+        EditorSelection.SelectedTool = tool;
+    }
+
+    private void SetBrushShape(TilemapEditor.BrushShape brushShape)
+    {
+        if (EditorSelection.TileBrushShape == brushShape)
+            return;
+
+        _app.RecordUndo();
+        EditorSelection.TileBrushShape = brushShape;
     }
 
     private void RequestCreateTile(ProjectWindow.CreationType type)
@@ -183,8 +215,7 @@ public unsafe class TilePaletteWindow : EditorWindow
     private void LoadTile(string path)
     {
         try {
-            string json = File.ReadAllText(path);
-            EditorSelection.SelectedTile = JsonSerializer.Deserialize<TileBase>(json, _tileOptions);
+            EditorSelection.SelectedTile = TileAssetCache.Load(path);
         } catch (Exception e) { Verity.Core.Debug.LogError($"Failed to load tile: {e.Message}"); }
     }
 
@@ -194,6 +225,10 @@ public unsafe class TilePaletteWindow : EditorWindow
         try {
             string json = JsonSerializer.Serialize<TileBase>(EditorSelection.SelectedTile, _tileOptions);
             File.WriteAllText(EditorSelection.SelectedAssetPath, json);
+            EditorSelection.SelectedTile.AssetPath = AssetPathUtility.Normalize(EditorSelection.SelectedAssetPath);
+            EditorSelection.SelectedTile.AssetGuid = AssetPathUtility.TryGetGuid(EditorSelection.SelectedAssetPath);
+            TileAssetCache.Invalidate(EditorSelection.SelectedAssetPath, _app.ProjectPath);
+            TileAssetCache.Load(EditorSelection.SelectedAssetPath, assetRootPath: _app.ProjectPath);
         } catch (Exception e) { Verity.Core.Debug.LogError($"Failed to save tile: {e.Message}"); }
     }
 
@@ -398,8 +433,7 @@ public unsafe class TilePaletteWindow : EditorWindow
         if (_loadedTileCache.TryGetValue(path, out var tile)) return tile;
         try
         {
-            string json = File.ReadAllText(path);
-            var loaded = JsonSerializer.Deserialize<TileBase>(json, _tileOptions);
+            var loaded = TileAssetCache.Load(path, assetRootPath: _app.ProjectPath);
             if (loaded != null) _loadedTileCache[path] = loaded;
             return loaded;
         }
@@ -409,6 +443,7 @@ public unsafe class TilePaletteWindow : EditorWindow
     public void InvalidateTileAsset(string path)
     {
         _loadedTileCache.Remove(path);
+        TileAssetCache.Invalidate(path, _app.ProjectPath);
         _lastRefresh = DateTime.MinValue;
 
         if (string.Equals(EditorSelection.SelectedAssetPath, path, StringComparison.OrdinalIgnoreCase))

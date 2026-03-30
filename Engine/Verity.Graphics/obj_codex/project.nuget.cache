@@ -1,0 +1,27 @@
+{
+  "version": 2,
+  "dgSpecHash": "3hquLdg1xh4=",
+  "success": true,
+  "projectFilePath": "D:\\Verity\\Engine\\Verity.Graphics\\Verity.Graphics.csproj",
+  "expectedPackageFiles": [
+    "C:\\Users\\dlgus\\.nuget\\packages\\irodori\\0.0.8\\irodori.0.0.8.nupkg.sha512",
+    "C:\\Users\\dlgus\\.nuget\\packages\\irodori.backend.opengl\\0.0.8\\irodori.backend.opengl.0.0.8.nupkg.sha512",
+    "C:\\Users\\dlgus\\.nuget\\packages\\microsoft.csharp\\4.7.0\\microsoft.csharp.4.7.0.nupkg.sha512",
+    "C:\\Users\\dlgus\\.nuget\\packages\\microsoft.dotnet.platformabstractions\\3.1.6\\microsoft.dotnet.platformabstractions.3.1.6.nupkg.sha512",
+    "C:\\Users\\dlgus\\.nuget\\packages\\microsoft.extensions.dependencymodel\\8.0.0\\microsoft.extensions.dependencymodel.8.0.0.nupkg.sha512",
+    "C:\\Users\\dlgus\\.nuget\\packages\\microsoft.win32.systemevents\\9.0.3\\microsoft.win32.systemevents.9.0.3.nupkg.sha512",
+    "C:\\Users\\dlgus\\.nuget\\packages\\ppy.sdl2-cs\\1.0.82\\ppy.sdl2-cs.1.0.82.nupkg.sha512",
+    "C:\\Users\\dlgus\\.nuget\\packages\\sdl2-cs.netcore\\2.0.8\\sdl2-cs.netcore.2.0.8.nupkg.sha512",
+    "C:\\Users\\dlgus\\.nuget\\packages\\silk.net.core\\2.22.0\\silk.net.core.2.22.0.nupkg.sha512",
+    "C:\\Users\\dlgus\\.nuget\\packages\\silk.net.maths\\2.22.0\\silk.net.maths.2.22.0.nupkg.sha512",
+    "C:\\Users\\dlgus\\.nuget\\packages\\silk.net.opengl\\2.22.0\\silk.net.opengl.2.22.0.nupkg.sha512",
+    "C:\\Users\\dlgus\\.nuget\\packages\\stbimagesharp\\2.30.15\\stbimagesharp.2.30.15.nupkg.sha512",
+    "C:\\Users\\dlgus\\.nuget\\packages\\system.drawing.common\\9.0.3\\system.drawing.common.9.0.3.nupkg.sha512",
+    "C:\\Users\\dlgus\\.nuget\\packages\\system.memory\\4.5.5\\system.memory.4.5.5.nupkg.sha512",
+    "C:\\Users\\dlgus\\.nuget\\packages\\system.numerics.vectors\\4.5.0\\system.numerics.vectors.4.5.0.nupkg.sha512",
+    "C:\\Users\\dlgus\\.nuget\\packages\\system.runtime.compilerservices.unsafe\\6.0.0\\system.runtime.compilerservices.unsafe.6.0.0.nupkg.sha512",
+    "C:\\Users\\dlgus\\.nuget\\packages\\system.text.encodings.web\\8.0.0\\system.text.encodings.web.8.0.0.nupkg.sha512",
+    "C:\\Users\\dlgus\\.nuget\\packages\\system.text.json\\9.0.2\\system.text.json.9.0.2.nupkg.sha512"
+  ],
+  "logs": []
+}

@@ -1,3 +1,6 @@
+using System.IO;
+using System.Numerics;
+using System.Text.Json.Nodes;
 using Hexa.NET.ImGui;
 using Verity.Core.ECS;
 using Verity.Core.World;
@@ -9,6 +12,7 @@ namespace Verity.Editor.Windows;
 public unsafe class HierarchyWindow : EditorWindow
 {
     private readonly EditorApp _app;
+    private readonly Dictionary<Guid, HashSet<Guid>> _blueprintOverrideCache = new();
 
     public HierarchyWindow(EditorApp app) : base(L10n.Tr("window_hierarchy"))
     {
@@ -23,18 +27,62 @@ public unsafe class HierarchyWindow : EditorWindow
             return;
         }
 
+        if (_app.IsEditingBlueprint)
+            DrawBlueprintModeHeader();
+
         DrawInputModal();
         HandleShortcuts(world);
 
         DrawHierarchy(world);
     }
 
+    private void DrawBlueprintModeHeader()
+    {
+        string? lastWorldPath = _app.LastWorldAssetPath;
+        bool canReturnToWorld = !string.IsNullOrWhiteSpace(lastWorldPath) && File.Exists(lastWorldPath);
+
+        ImGui.TextDisabled(L10n.Tr("msg_blueprint_edit_mode"));
+        if (!canReturnToWorld)
+            ImGui.BeginDisabled();
+
+        string worldLabel = canReturnToWorld
+            ? Path.GetFileNameWithoutExtension(lastWorldPath!)
+            : L10n.Tr("label_world");
+
+        if (ImGui.Button(L10n.Tr("btn_back_to_world", worldLabel), new Vector2(-1, 0)) && canReturnToWorld)
+        {
+            if (_app.SaveActiveBlueprint())
+                _app.GetWindow<ProjectWindow>()?.LoadWorldByPath(lastWorldPath!);
+        }
+
+        if (!canReturnToWorld)
+        {
+            ImGui.EndDisabled();
+            ImGui.TextDisabled(L10n.Tr("msg_no_world_to_return"));
+        }
+
+        ImGui.Separator();
+    }
+
     private void DrawHierarchy(World world)
     {
-        ImGui.Separator();
+        _blueprintOverrideCache.Clear();
+        bool showInsertionSlots = EditorSelection.DraggedEntity != null;
 
-        foreach (var entity in world.RootEntities.ToArray())
+        if (!_app.IsEditingBlueprint)
+            ImGui.Separator();
+
+        var roots = world.RootEntities.ToArray();
+        for (int i = 0; i < roots.Length; i++)
+        {
+            if (showInsertionSlots)
+                DrawInsertionSlot(null, i, $"root-slot-{i}");
+            var entity = roots[i];
             DrawEntityNode(entity);
+        }
+
+        if (showInsertionSlots)
+            DrawInsertionSlot(null, roots.Length, "root-slot-end");
 
         DrawRootDropZone(world);
 
@@ -47,6 +95,7 @@ public unsafe class HierarchyWindow : EditorWindow
             {
                 _app.RecordUndo();
                 var ent = world.CreateEntity(L10n.Tr("CreationType_Entity"));
+                _app.AttachToBlueprintDefaultParent(ent);
                 EditorSelection.SelectedEntity = ent;
             }
 
@@ -57,23 +106,26 @@ public unsafe class HierarchyWindow : EditorWindow
                     _app.RecordUndo();
                     var sprite = world.CreateEntity(L10n.Tr("CreationType_Sprite"));
                     sprite.AddComponent<SpriteRenderer>();
+                    _app.AttachToBlueprintDefaultParent(sprite);
                     EditorSelection.SelectedEntity = sprite;
                 }
 
                 if (ImGui.MenuItem(L10n.Tr("btn_add_tilemap_with_shape")))
                 {
                     _app.RecordUndo();
-                    var tm = world.CreateEntity("Tilemap");
+                    var tm = world.CreateEntity(L10n.Tr("CreationType_Tilemap"));
                     tm.AddComponent<TilemapRenderer>();
                     tm.AddComponent<TilemapShape>();
+                    _app.AttachToBlueprintDefaultParent(tm);
                     EditorSelection.SelectedEntity = tm;
                 }
 
                 if (ImGui.MenuItem(L10n.Tr("btn_add_tilemap_no_shape")))
                 {
                     _app.RecordUndo();
-                    var tm = world.CreateEntity("Tilemap");
+                    var tm = world.CreateEntity(L10n.Tr("CreationType_Tilemap"));
                     tm.AddComponent<TilemapRenderer>();
+                    _app.AttachToBlueprintDefaultParent(tm);
                     EditorSelection.SelectedEntity = tm;
                 }
                 if (!WorldHasCamera(world))
@@ -84,6 +136,7 @@ public unsafe class HierarchyWindow : EditorWindow
                         _app.RecordUndo();
                         var camera = world.CreateEntity(L10n.Tr("CreationType_Camera"));
                         camera.AddComponent<Camera>();
+                        _app.AttachToBlueprintDefaultParent(camera);
                         EditorSelection.SelectedEntity = camera;
                     }
                 }
@@ -126,6 +179,7 @@ public unsafe class HierarchyWindow : EditorWindow
             var entity = world.CreateEntity(L10n.Tr("CreationType_Entity"));
             if (EditorSelection.SelectedEntity != null)
                 SetParent(entity, EditorSelection.SelectedEntity.Transform.Parent?.Owner);
+            _app.AttachToBlueprintDefaultParent(entity);
             EditorSelection.SelectedEntity = entity;
         }
 
@@ -215,7 +269,7 @@ public unsafe class HierarchyWindow : EditorWindow
         Entity? rootClone = null;
         void CopyRecursive(Entity src, Entity? parent)
         {
-            var clone = world.CreateEntity(src.Name + " (Copy)");
+            var clone = world.CreateEntity(src.Name + L10n.Tr("label_copy_suffix"));
             if (rootClone == null) rootClone = clone;
 
             // 1. Set Parent First
@@ -250,6 +304,7 @@ public unsafe class HierarchyWindow : EditorWindow
         }
 
         CopyRecursive(original, targetParent);
+        _app.AttachToBlueprintDefaultParent(rootClone);
         return rootClone;
     }
 
@@ -288,6 +343,7 @@ public unsafe class HierarchyWindow : EditorWindow
             if (ent != null)
             {
                 if (targetParent != null) ent.Transform.SetParent(targetParent.Transform, false);
+                _app.AttachToBlueprintDefaultParent(ent);
                 pasted.Add(ent);
             }
         }
@@ -348,6 +404,7 @@ public unsafe class HierarchyWindow : EditorWindow
     private void DrawRootDropZone(World world)
     {
         var remaining = ImGui.GetContentRegionAvail();
+        if (remaining.X < 1) remaining.X = 1;
         if (remaining.Y < 50) remaining.Y = 50;
         ImGui.InvisibleButton("##rootdrop", remaining);
         if (ImGui.BeginDragDropTarget())
@@ -415,8 +472,14 @@ public unsafe class HierarchyWindow : EditorWindow
         if (EditorSelection.IsSelected(entity))
             flags |= ImGuiTreeNodeFlags.Selected;
 
+        Vector4? hierarchyColor = GetBlueprintHierarchyColor(entity);
+
         ImGui.PushID(entity.GetHashCode());
+        if (hierarchyColor.HasValue)
+            ImGui.PushStyleColor(ImGuiCol.Text, hierarchyColor.Value);
         bool opened = ImGui.TreeNodeEx(entity.Name, flags);
+        if (hierarchyColor.HasValue)
+            ImGui.PopStyleColor();
 
         if (ImGui.IsItemClicked())
         {
@@ -469,12 +532,7 @@ public unsafe class HierarchyWindow : EditorWindow
                 var payload = ImGui.AcceptDragDropPayload("HIERARCHY_ENTITIES");
                 if (payload.Handle != null)
                 {
-                    _app.RecordUndo();
-                    foreach (var ent in EditorSelection.SelectedEntities.ToArray())
-                    {
-                        if (ent != entity && !IsDescendantOf(entity, ent))
-                            SetParent(ent, entity);
-                    }
+                    MoveEntities(EditorSelection.SelectedEntities.ToArray(), entity, entity.Transform.Children.Count);
                 }
 
                 var assetPayload = ImGui.AcceptDragDropPayload("ASSET_PATH");
@@ -502,12 +560,69 @@ public unsafe class HierarchyWindow : EditorWindow
 
         if (opened)
         {
-            foreach (var child in entity.Transform.Children.ToArray())
-                DrawEntityNode(child.Owner);
+            var children = entity.Transform.Children.ToArray();
+            bool showInsertionSlots = EditorSelection.DraggedEntity != null;
+            for (int i = 0; i < children.Length; i++)
+            {
+                if (showInsertionSlots)
+                    DrawInsertionSlot(entity, i, $"child-slot-{entity.Id}-{i}");
+                DrawEntityNode(children[i].Owner);
+            }
+
+            if (showInsertionSlots)
+                DrawInsertionSlot(entity, children.Length, $"child-slot-{entity.Id}-end");
             ImGui.TreePop();
         }
 
         ImGui.PopID();
+    }
+
+    private Vector4? GetBlueprintHierarchyColor(Entity entity)
+    {
+        if (!entity.IsBlueprintInstance)
+            return null;
+
+        return IsBlueprintEntityOverridden(entity)
+            ? new Vector4(0.35f, 0.65f, 1.0f, 1.0f)
+            : new Vector4(0.35f, 0.9f, 1.0f, 1.0f);
+    }
+
+    private bool IsBlueprintEntityOverridden(Entity entity)
+    {
+        if (!entity.BlueprintSourceEntityId.HasValue)
+            return false;
+
+        Entity? root = FindBlueprintInstanceRoot(entity);
+        if (root == null)
+            return false;
+
+        if (!_blueprintOverrideCache.TryGetValue(root.Id, out HashSet<Guid>? overriddenSourceIds))
+        {
+            overriddenSourceIds = [];
+            foreach (JsonNode? node in Verity.Core.Serialization.SceneSerializer.CaptureBlueprintInstanceOverrides(root))
+            {
+                if (Guid.TryParse((string?)node?["SourceId"], out Guid sourceId))
+                    overriddenSourceIds.Add(sourceId);
+            }
+
+            _blueprintOverrideCache[root.Id] = overriddenSourceIds;
+        }
+
+        return overriddenSourceIds.Contains(entity.BlueprintSourceEntityId.Value);
+    }
+
+    private static Entity? FindBlueprintInstanceRoot(Entity entity)
+    {
+        Entity? current = entity;
+        while (current != null)
+        {
+            if (current.IsBlueprintInstanceRoot)
+                return current;
+
+            current = current.Transform.Parent?.Owner;
+        }
+
+        return null;
     }
 
     private static void DeleteEntity(Entity entity, World world)
@@ -530,16 +645,29 @@ public unsafe class HierarchyWindow : EditorWindow
 
     private void SetParent(Entity child, Entity? newParent)
     {
+        SetParent(child, newParent, null);
+    }
+
+    private void SetParent(Entity child, Entity? newParent, int? siblingIndex)
+    {
         var world = WorldManager.ActiveWorld;
         if (world == null) return;
 
-        if (child.Transform.Parent == null)
-            world.RemoveFromRoot(child);
-
-        child.Transform.SetParent(newParent?.Transform, preserveWorldPosition: true);
-
         if (newParent == null)
-            world.AddToRoot(child);
+        {
+            if (child.Transform.Parent != null)
+            {
+                child.Transform.SetParent(null, preserveWorldPosition: true);
+            }
+
+            if (siblingIndex.HasValue)
+                world.AddToRoot(child, siblingIndex.Value);
+            else
+                world.AddToRoot(child);
+            return;
+        }
+
+        child.Transform.SetParent(newParent.Transform, preserveWorldPosition: true, siblingIndex ?? newParent.Transform.Children.Count);
     }
 
     private static bool IsDescendantOf(Entity potentialDescendant, Entity ancestor)
@@ -553,4 +681,81 @@ public unsafe class HierarchyWindow : EditorWindow
         }
         return false;
     }
+
+    private void MoveEntities(IReadOnlyList<Entity> entities, Entity? newParent, int insertIndex)
+    {
+        var world = WorldManager.ActiveWorld;
+        if (world == null)
+            return;
+
+        var orderedEntities = GetEntitiesInHierarchyOrder(world, entities)
+            .Where(ent => CanMoveEntity(ent, newParent))
+            .ToList();
+
+        if (orderedEntities.Count == 0)
+            return;
+
+        _app.RecordUndo();
+
+        int nextIndex = Math.Max(0, insertIndex);
+        foreach (var entity in orderedEntities)
+        {
+            Entity? currentParent = entity.Transform.Parent?.Owner;
+            bool sameParent = currentParent == newParent;
+            int currentIndex = entity.Transform.GetSiblingIndex();
+            if (sameParent && currentIndex >= 0 && currentIndex < nextIndex)
+                nextIndex--;
+
+            SetParent(entity, newParent, nextIndex);
+            nextIndex++;
+        }
+
+        EditorSelection.DraggedEntity = null;
+    }
+
+    private void DrawInsertionSlot(Entity? parent, int insertIndex, string id)
+    {
+        ImGui.PushID(id);
+        ImGui.PushStyleVar(ImGuiStyleVar.ItemSpacing, new Vector2(ImGui.GetStyle().ItemSpacing.X, 0f));
+        ImGui.InvisibleButton("##insert", new Vector2(-1, 3f));
+
+        if (ImGui.IsItemHovered() && EditorSelection.DraggedEntity != null)
+        {
+            Vector2 min = ImGui.GetItemRectMin();
+            Vector2 max = ImGui.GetItemRectMax();
+            var drawList = ImGui.GetWindowDrawList();
+            uint color = ImGui.ColorConvertFloat4ToU32(new Vector4(0.35f, 0.7f, 1f, 0.9f));
+            drawList.AddLine(new Vector2(min.X + 6f, (min.Y + max.Y) * 0.5f), new Vector2(max.X - 6f, (min.Y + max.Y) * 0.5f), color, 2f);
+        }
+
+        if (ImGui.BeginDragDropTarget())
+        {
+            unsafe
+            {
+                var payload = ImGui.AcceptDragDropPayload("HIERARCHY_ENTITIES");
+                if (payload.Handle != null)
+                    MoveEntities(EditorSelection.SelectedEntities.ToArray(), parent, insertIndex);
+            }
+
+            ImGui.EndDragDropTarget();
+        }
+
+        ImGui.PopStyleVar();
+        ImGui.PopID();
+    }
+
+    private static List<Entity> GetEntitiesInHierarchyOrder(World world, IReadOnlyList<Entity> entities)
+    {
+        var selected = entities.ToHashSet();
+        return world.GetAllEntities().Where(selected.Contains).ToList();
+    }
+
+    private static bool CanMoveEntity(Entity entity, Entity? newParent)
+    {
+        if (newParent == null)
+            return true;
+
+        return entity != newParent && !IsDescendantOf(newParent, entity);
+    }
+
 }

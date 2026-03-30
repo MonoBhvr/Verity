@@ -99,6 +99,11 @@ public class GraphicsDevice : IDisposable
         Window.SwapBuffers();
     }
 
+    public void SetSwapInterval(int interval)
+    {
+        Window.GlSwapInterval(interval);
+    }
+
     public void PollEvents()
     {
         Window.PollEvents();
@@ -107,6 +112,16 @@ public class GraphicsDevice : IDisposable
     public void SetSize(int w, int h)
     {
         Window.SetSize(w, h);
+    }
+
+    public (int X, int Y) GetWindowPosition()
+    {
+        return Window.GetPosition();
+    }
+
+    public void SetWindowPosition(int x, int y)
+    {
+        Window.SetPosition(x, y);
     }
 
     public void SetWindowIcon(byte[] rgbaPixels, int width, int height)

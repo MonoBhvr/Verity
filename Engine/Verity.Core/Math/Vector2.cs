@@ -11,10 +11,10 @@ public struct Vector2
 {
     private System.Numerics.Vector2 _inner;
 
-    public float X { get => _inner.X; set => _inner.X = value; }
+    public float X { get => _inner.X; set => _inner.X = value; } 
     public float Y { get => _inner.Y; set => _inner.Y = value; }
     public float x { get => _inner.X; set => _inner.X = value; }
-    public float y { get => _inner.Y; set => _inner.Y = value; }
+    public float y { get => _inner.Y; set => _inner.Y = value; }    
 
     public Vector2(float x, float y) => _inner = new System.Numerics.Vector2(x, y);
     public Vector2(float value) => _inner = new System.Numerics.Vector2(value);

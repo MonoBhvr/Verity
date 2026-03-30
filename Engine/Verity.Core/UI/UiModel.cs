@@ -171,10 +171,13 @@ public sealed class UiVisualStyle
 
     public float BorderThickness { get; set; } = 1f;
     public float CornerRadius { get; set; } = 8f;
+    public float FontSize { get; set; } = 16f;
 
     [JsonConverter(typeof(Vector4Converter))]
     public System.Numerics.Vector4 Padding { get; set; } = new(8, 8, 8, 8);
 
+    public string FontPath { get; set; } = string.Empty;
+    public string FontFamily { get; set; } = string.Empty;
     public string BackgroundToken { get; set; } = string.Empty;
     public string ForegroundToken { get; set; } = string.Empty;
 }

@@ -8,6 +8,18 @@ public class Entity
     public bool Active { get; set; } = true;
     public Transform Transform { get; }
 
+    [HideInInspector]
+    public string BlueprintAssetPath { get; set; } = string.Empty;
+
+    [HideInInspector]
+    public string BlueprintAssetGuid { get; set; } = string.Empty;
+
+    [HideInInspector]
+    public Guid? BlueprintSourceEntityId { get; set; }
+
+    [HideInInspector]
+    public Guid? BlueprintInstanceRootId { get; set; }
+
     internal Verity.Core.World.World? World { get; set; }
 
     private readonly List<Component> _components = [];
@@ -18,6 +30,12 @@ public class Entity
         Transform = new Transform { Owner = this };
         _components.Add(Transform);
     }
+
+    [HideInInspector]
+    public bool IsBlueprintInstance => BlueprintSourceEntityId.HasValue && !string.IsNullOrWhiteSpace(BlueprintAssetPath);
+
+    [HideInInspector]
+    public bool IsBlueprintInstanceRoot => IsBlueprintInstance && BlueprintInstanceRootId == Id;
 
     #region Find Methods
     public static Entity? Find(string name)
@@ -49,6 +67,7 @@ public class Entity
         {
             if (!includeInactive && !entity.Active) continue;
             var comp = entity.GetComponent<T>();
+            if (!includeInactive && comp is Component component && !component.Enabled) continue;
             if (comp != null) return comp;
         }
         return null;
@@ -62,7 +81,11 @@ public class Entity
         foreach (var entity in world.GetAllEntities())
         {
             if (!includeInactive && !entity.Active) continue;
-            results.AddRange(entity.GetComponents<T>());
+            foreach (var component in entity.GetComponents<T>())
+            {
+                if (!includeInactive && component is Component typedComponent && !typedComponent.Enabled) continue;
+                results.Add(component);
+            }
         }
         return results.ToArray();
     }
@@ -246,7 +269,7 @@ public class Entity
         if (!includeInactive && !Active) return default;
 
         var comp = GetComponent<T>();
-        if (comp != null) return comp;
+        if (comp != null && (includeInactive || comp is not Component component || component.Enabled)) return comp;
 
         foreach (var child in Transform.Children)
         {
@@ -262,7 +285,10 @@ public class Entity
         if (!includeInactive && !Active) yield break;
 
         foreach (var comp in GetComponents<T>())
-            yield return comp;
+        {
+            if (includeInactive || comp is not Component component || component.Enabled)
+                yield return comp;
+        }
 
         foreach (var child in Transform.Children)
         {
@@ -276,7 +302,7 @@ public class Entity
         if (!includeInactive && !Active) return default;
 
         var comp = GetComponent<T>();
-        if (comp != null) return comp;
+        if (comp != null && (includeInactive || comp is not Component component || component.Enabled)) return comp;
 
         return Transform.Parent?.Owner.GetComponentInParent<T>(includeInactive);
     }
@@ -286,7 +312,10 @@ public class Entity
         if (!includeInactive && !Active) yield break;
 
         foreach (var comp in GetComponents<T>())
-            yield return comp;
+        {
+            if (includeInactive || comp is not Component component || component.Enabled)
+                yield return comp;
+        }
 
         if (Transform.Parent != null)
         {

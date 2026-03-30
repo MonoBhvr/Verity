@@ -25,6 +25,9 @@ public class AssetReferenceAttribute : Attribute
 [AttributeUsage(AttributeTargets.Class)]
 public class SingleInstancePerWorldAttribute : Attribute { }
 
+[AttributeUsage(AttributeTargets.Class)]
+public class NonDisableableAttribute : Attribute { }
+
 [AttributeUsage(AttributeTargets.Method)]
 public class ButtonAttribute : Attribute
 {
@@ -40,7 +43,13 @@ public class TagSelectorAttribute : Attribute { }
 public class PhysicsGroupSelectorAttribute : Attribute { }
 
 [AttributeUsage(AttributeTargets.Field | AttributeTargets.Property)]
+public class PhysicsGroupMaskSelectorAttribute : Attribute { }
+
+[AttributeUsage(AttributeTargets.Field | AttributeTargets.Property)]
 public class SortingLayerSelectorAttribute : Attribute { }
+
+[AttributeUsage(AttributeTargets.Field | AttributeTargets.Property)]
+public class SortingLayerMaskSelectorAttribute : Attribute { }
 
 [AttributeUsage(AttributeTargets.Field | AttributeTargets.Property)]
 public class FilterSelectorAttribute : Attribute { }

@@ -8,6 +8,9 @@ public class BloomSettings
     public bool Enabled { get; set; } = false;
 
     [SerializeField]
+    public int Order { get; set; } = 400;
+
+    [SerializeField]
     public float Intensity { get; set; } = 1.0f;
 
     [SerializeField]
@@ -29,6 +32,9 @@ public class VignetteSettings
     public bool Enabled { get; set; } = false;
 
     [SerializeField]
+    public int Order { get; set; } = 700;
+
+    [SerializeField]
     public float Intensity { get; set; } = 0.4f;
 
     [SerializeField]
@@ -45,6 +51,9 @@ public class ColorAdjustmentsSettings
 {
     [SerializeField]
     public bool Enabled { get; set; } = false;
+
+    [SerializeField]
+    public int Order { get; set; } = 600;
 
     [SerializeField]
     public float Exposure { get; set; } = 0.0f;
@@ -65,6 +74,9 @@ public class MotionBlurSettings
     public bool Enabled { get; set; } = false;
 
     [SerializeField]
+    public int Order { get; set; } = 500;
+
+    [SerializeField]
     public float Intensity { get; set; } = 0.15f;
 }
 
@@ -74,22 +86,55 @@ public class DistortionSettings
     public bool Enabled { get; set; } = false;
 
     [SerializeField]
-    public float Intensity { get; set; } = 0.015f;
+    public int Order { get; set; } = 100;
 
     [SerializeField]
-    public float Speed { get; set; } = 1.5f;
-
-    [SerializeField]
-    public float Frequency { get; set; } = 12.0f;
+    public float Intensity { get; set; } = 0.08f;
 
     [SerializeField]
     public Vector2 Center { get; set; } = new(0.5f, 0.5f);
+
+    [SerializeField]
+    public float Scale { get; set; } = 1.0f;
+}
+
+public class ChromaticAberrationSettings
+{
+    [SerializeField]
+    public bool Enabled { get; set; } = false;
+
+    [SerializeField]
+    public int Order { get; set; } = 300;
+
+    [SerializeField]
+    public float Intensity { get; set; } = 0.01f;
+
+    [SerializeField]
+    public Vector2 Center { get; set; } = new(0.5f, 0.5f);
+}
+
+public class PixelateSettings
+{
+    [SerializeField]
+    public bool Enabled { get; set; } = false;
+
+    [SerializeField]
+    public int Order { get; set; } = 200;
+
+    [SerializeField]
+    public int Width { get; set; } = 320;
+
+    [SerializeField]
+    public int Height { get; set; } = 180;
 }
 
 public class CustomPostProcessSettings
 {
     [SerializeField]
     public bool Enabled { get; set; } = false;
+
+    [SerializeField]
+    public int Order { get; set; } = 800;
 
     [SerializeField]
     public StyleAsset Style { get; set; } = default;
@@ -101,20 +146,68 @@ public class PostProcessSettings
     public bool Enabled { get; set; } = false;
 
     [SerializeField]
-    public BloomSettings Bloom { get; set; } = new();
+    public BloomSettings? Bloom { get; set; }
 
     [SerializeField]
-    public VignetteSettings Vignette { get; set; } = new();
+    public VignetteSettings? Vignette { get; set; }
 
     [SerializeField]
-    public ColorAdjustmentsSettings ColorAdjustments { get; set; } = new();
+    public ColorAdjustmentsSettings? ColorAdjustments { get; set; }
 
     [SerializeField]
-    public MotionBlurSettings MotionBlur { get; set; } = new();
+    public MotionBlurSettings? MotionBlur { get; set; }
 
     [SerializeField]
-    public DistortionSettings Distortion { get; set; } = new();
+    public DistortionSettings? Distortion { get; set; }
 
     [SerializeField]
-    public CustomPostProcessSettings Custom { get; set; } = new();
+    public ChromaticAberrationSettings? ChromaticAberration { get; set; }
+
+    [SerializeField]
+    public PixelateSettings? Pixelate { get; set; }
+
+    [SerializeField]
+    public CustomPostProcessSettings? Custom { get; set; }
+
+    [SerializeField]
+    public List<CustomPostProcessSettings> Customs { get; set; } = [];
+
+    public List<CustomPostProcessSettings> GetCustomEffects()
+    {
+        if (Custom != null)
+        {
+            Customs ??= [];
+            Customs.Add(Custom);
+            Custom = null;
+        }
+
+        Customs ??= [];
+        return Customs;
+    }
+
+    public bool HasAnyEffect()
+    {
+        List<CustomPostProcessSettings> customs = GetCustomEffects();
+        return Bloom != null ||
+               Vignette != null ||
+               ColorAdjustments != null ||
+               MotionBlur != null ||
+               Distortion != null ||
+               ChromaticAberration != null ||
+               Pixelate != null ||
+               customs.Count > 0;
+    }
+
+    public bool HasAnyEnabledEffect()
+    {
+        List<CustomPostProcessSettings> customs = GetCustomEffects();
+        return (Bloom?.Enabled ?? false) ||
+               (Vignette?.Enabled ?? false) ||
+               (ColorAdjustments?.Enabled ?? false) ||
+               (MotionBlur?.Enabled ?? false) ||
+               (Distortion?.Enabled ?? false) ||
+               (ChromaticAberration?.Enabled ?? false) ||
+               (Pixelate?.Enabled ?? false) ||
+               customs.Any(custom => custom.Enabled);
+    }
 }

@@ -10,14 +10,19 @@ namespace Verity.Editor;
 public unsafe class ImGuiController : IDisposable
 {
     private ImGuiContextPtr _context;
+    private GraphicsDevice? _device;
+    public bool MultiViewportEnabled { get; private set; }
 
     public void Initialize(GraphicsDevice device, string? fontPath = null, float fontSize = 18f)
     {
+        _device = device;
         _context = ImGui.CreateContext();
         ImGui.SetCurrentContext(_context);
 
         var io = ImGui.GetIO();
         io.ConfigFlags |= ImGuiConfigFlags.DockingEnable;
+        io.ConfigWindowsMoveFromTitleBarOnly = true;
+        io.IniFilename = null;
 
         if (!string.IsNullOrEmpty(fontPath) && File.Exists(fontPath))
         {
@@ -35,6 +40,53 @@ public unsafe class ImGuiController : IDisposable
         ImGuiImplOpenGL3.Init((byte*)null);
 
         device.Window.OnSdlEvent += OnSdlEvent;
+    }
+
+    public void SetMultiViewportEnabled(bool enabled, bool separateAllWindows = false)
+    {
+        if ((nint)_context.Handle == 0)
+            return;
+
+        ImGui.SetCurrentContext(_context);
+        var io = ImGui.GetIO();
+        if (enabled)
+            io.ConfigFlags |= ImGuiConfigFlags.ViewportsEnable;
+        else
+            io.ConfigFlags &= ~ImGuiConfigFlags.ViewportsEnable;
+
+        io.ConfigViewportsNoAutoMerge = enabled && separateAllWindows;
+        io.ConfigViewportsNoDecoration = false;
+        io.ConfigViewportsNoTaskBarIcon = false;
+        io.ConfigViewportsNoDefaultParent = false;
+        MultiViewportEnabled = enabled;
+        ApplyModernDarkTheme(enabled);
+    }
+
+    public string SaveLayout()
+    {
+        if ((nint)_context.Handle == 0)
+            return string.Empty;
+
+        ImGui.SetCurrentContext(_context);
+        return ImGui.SaveIniSettingsToMemoryS();
+    }
+
+    public void LoadLayout(string ini)
+    {
+        if ((nint)_context.Handle == 0)
+            return;
+
+        ImGui.SetCurrentContext(_context);
+        ImGui.LoadIniSettingsFromMemory(ini ?? string.Empty);
+    }
+
+    public void ClearLayout()
+    {
+        if ((nint)_context.Handle == 0)
+            return;
+
+        ImGui.SetCurrentContext(_context);
+        ImGuiP.ClearIniSettings();
     }
 
     private void LoadFont(string path, float size)
@@ -57,10 +109,10 @@ public unsafe class ImGuiController : IDisposable
         }
     }
 
-    private static void ApplyModernDarkTheme()
+    private static void ApplyModernDarkTheme(bool viewportEnabled = false)
     {
         var style = ImGui.GetStyle();
-        style.WindowRounding = 6f;
+        style.WindowRounding = viewportEnabled ? 0f : 6f;
         style.ChildRounding = 4f;
         style.FrameRounding = 4f;
         style.PopupRounding = 4f;
@@ -95,6 +147,9 @@ public unsafe class ImGuiController : IDisposable
         colors[(int)ImGuiCol.Header] = new Vector4(0.20f, 0.24f, 0.32f, 1.00f);
         colors[(int)ImGuiCol.Tab] = new Vector4(0.14f, 0.14f, 0.17f, 1.00f);
         colors[(int)ImGuiCol.Text] = new Vector4(0.90f, 0.90f, 0.92f, 1.00f);
+
+        if (viewportEnabled)
+            colors[(int)ImGuiCol.WindowBg].W = 1.0f;
     }
 
     private void OnSdlEvent(SDL.SDL_Event evt)
@@ -130,6 +185,14 @@ public unsafe class ImGuiController : IDisposable
     {
         ImGui.Render();
         ImGuiImplOpenGL3.RenderDrawData(ImGui.GetDrawData());
+
+        if (MultiViewportEnabled && _device != null)
+        {
+            ImGui.UpdatePlatformWindows();
+            ImGui.RenderPlatformWindowsDefault();
+            NativeDetachedWindowStyler.Apply();
+            SDL.SDL_GL_MakeCurrent(_device.Window.SdlWindowHandle, _device.Window.GlContextHandle);
+        }
     }
 
     public void Dispose()

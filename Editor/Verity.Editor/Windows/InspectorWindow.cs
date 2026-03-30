@@ -1,4 +1,5 @@
 using System.Collections;
+using System.Collections.Concurrent;
 using System.Drawing;
 using System.Numerics;
 using System.Reflection;
@@ -29,6 +30,13 @@ using Vector3 = Verity.Core.Vector3;
 
 public unsafe class InspectorWindow : EditorWindow
 {
+    private static readonly ConcurrentDictionary<Type, MemberInfo[]> GenericInspectorMembersCache = new();
+    private static readonly ConcurrentDictionary<Type, MemberInfo[]> MultiInspectorMembersCache = new();
+    private static readonly ConcurrentDictionary<Type, MemberInfo[]> NestedInspectorMembersCache = new();
+    private static readonly ConcurrentDictionary<MemberInfo, HashSet<string>> MemberAttributeCache = new();
+    private static readonly ConcurrentDictionary<MethodInfo, string?> ButtonLabelCache = new();
+    private static readonly ConcurrentDictionary<MemberInfo, AssetReferenceAttribute?> AssetReferenceAttributeCache = new();
+
     private readonly EditorApp _app;
     private string _searchFilter = "";
     private readonly Dictionary<Guid, bool> _scaleLocks = [];
@@ -39,6 +47,8 @@ public unsafe class InspectorWindow : EditorWindow
     private int _sliceGridOffsetY = 0;
     private int _sliceGridPaddingX = 0;
     private int _sliceGridPaddingY = 0;
+    private uint _draggedCollectionId = 0;
+    private int _draggedCollectionIndex = -1;
 
     private string _newTagNameBuffer = "";
     private string _newGroupNameBuffer = "";
@@ -70,7 +80,7 @@ public unsafe class InspectorWindow : EditorWindow
     {
         public int Index { get; init; }
         public int ParentIndex { get; init; }
-        public string Name { get; init; } = "Entity";
+        public string Name { get; init; } = "";
         public bool Active { get; init; } = true;
         public Vector2 Position { get; init; }
         public float Rotation { get; init; }
@@ -81,7 +91,7 @@ public unsafe class InspectorWindow : EditorWindow
 
     private sealed class BlueprintComponentPreview
     {
-        public string Name { get; init; } = "Component";
+        public string Name { get; init; } = "";
         public JsonObject? Fields { get; init; }
     }
     
@@ -135,24 +145,15 @@ public unsafe class InspectorWindow : EditorWindow
     private void DrawGenericInspector(object target, Action? onUpdate = null)
     {
         var type = target.GetType();
-        var hierarchy = new List<Type>();
-        var curr = type;
-        while (curr != null && curr.FullName != "Verity.Core.ECS.Component" && curr != typeof(object)) { hierarchy.Add(curr); curr = curr.BaseType; }
-        hierarchy.Reverse();
-        var allMembers = type.GetMembers(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.FlattenHierarchy)
-                             .Where(m => m.DeclaringType != null && m.DeclaringType.FullName != "System.Object" && m.DeclaringType.FullName != "Verity.Core.ECS.Component")
-                             .OrderBy(m => hierarchy.IndexOf(m.DeclaringType!)).ThenBy(m => m.MetadataToken);
-        foreach (var member in allMembers) {
+        foreach (var member in GetGenericInspectorMembers(type)) {
             string localizedName = L10n.Tr($"field_{member.Name}");
             if (localizedName == $"field_{member.Name}") localizedName = member.Name;
 
-            if (member is FieldInfo field && ShouldShowMember(field)) ProcessMember(localizedName, field.FieldType, field.GetValue(target), val => { field.SetValue(target, val); onUpdate?.Invoke(); }, field, target);
-            else if (member is PropertyInfo prop && prop.CanRead && prop.CanWrite && prop.GetIndexParameters().Length == 0 && ShouldShowMember(prop)) ProcessMember(localizedName, prop.PropertyType, prop.GetValue(target), val => { prop.SetValue(target, val); onUpdate?.Invoke(); }, prop, target);
+            if (member is FieldInfo field && ShouldShowMember(field, target)) ProcessMember(localizedName, field.FieldType, field.GetValue(target), val => { field.SetValue(target, val); onUpdate?.Invoke(); }, field, target);
+            else if (member is PropertyInfo prop && prop.CanRead && prop.CanWrite && prop.GetIndexParameters().Length == 0 && ShouldShowMember(prop, target)) ProcessMember(localizedName, prop.PropertyType, prop.GetValue(target), val => { prop.SetValue(target, val); onUpdate?.Invoke(); }, prop, target);
             else if (member is MethodInfo method) {
-                var attr = method.GetCustomAttributes(true).FirstOrDefault(a => a.GetType().Name == "ButtonAttribute");
-                if (attr != null && method.GetParameters().Length == 0) {
-                    var labelProp = attr.GetType().GetProperty("Label") ?? attr.GetType().GetProperties().FirstOrDefault(p => p.Name == "Label");
-                    string label = labelProp?.GetValue(attr) as string ?? method.Name;
+                string? label = GetButtonLabel(method);
+                if (label != null) {
                     string localizedLabel = L10n.Tr($"btn_{label}") ?? label;
                     if (ImGui.Button($"{localizedLabel}##{method.Name}", new Vector2(-1, 25))) { try { method.Invoke(target, null); } catch (Exception e) { Verity.Core.Debug.LogError($"Button Error: {e.Message}"); } }
                 }
@@ -162,23 +163,71 @@ public unsafe class InspectorWindow : EditorWindow
 
     private void DrawMultiComponentFields(Type type, List<Component> components)
     {
-        var allMembers = type.GetMembers(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.FlattenHierarchy)
-                             .Where(m => m.DeclaringType != null && m.DeclaringType.FullName != "System.Object" && m.DeclaringType.FullName != "Verity.Core.ECS.Component")
-                             .OrderBy(m => m.MetadataToken);
-        foreach (var member in allMembers) {
+        foreach (var member in GetMultiInspectorMembers(type)) {
             string localizedName = L10n.Tr($"field_{member.Name}");
             if (localizedName == $"field_{member.Name}") localizedName = member.Name;
-            if (member is FieldInfo field && ShouldShowMember(field)) DrawMultiField(localizedName, field.FieldType, components.Select(c => field.GetValue(c)).ToList(), val => { foreach (var c in components) field.SetValue(c, val); }, field, type);
-            else if (member is PropertyInfo prop && prop.CanRead && prop.CanWrite && prop.GetIndexParameters().Length == 0 && ShouldShowMember(prop)) DrawMultiField(localizedName, prop.PropertyType, components.Select(c => prop.GetValue(c)).ToList(), val => { foreach (var c in components) prop.SetValue(c, val); }, prop, type);
+            if (member is FieldInfo field && ShouldShowMember(field, components)) DrawMultiField(localizedName, field.FieldType, components.Select(c => field.GetValue(c)).ToList(), val => { foreach (var c in components) field.SetValue(c, val); }, field, type, components);
+            else if (member is PropertyInfo prop && prop.CanRead && prop.CanWrite && prop.GetIndexParameters().Length == 0 && ShouldShowMember(prop, components)) DrawMultiField(localizedName, prop.PropertyType, components.Select(c => prop.GetValue(c)).ToList(), val => { foreach (var c in components) prop.SetValue(c, val); }, prop, type, components);
         }
     }
 
-    private void DrawMultiField(string name, Type type, List<object?> values, Action<object?> onUpdate, MemberInfo member, Type targetType)
+    private void DrawMultiField(string name, Type type, List<object?> values, Action<object?> onUpdate, MemberInfo member, Type targetType, List<Component> components)
     {
         ImGui.PushID(name);
         ImGui.Text(name); ImGui.SameLine(120);
         object? val = values[0]; bool changed = false;
         bool mixed = values.Any(v => !Equals(v, val));
+
+        if (type == typeof(ulong) && HasAttribute(member, "PhysicsGroupMaskSelectorAttribute")) {
+            DrawPhysicsGroupMaskDropdown("", mixed ? 0UL : (ulong)(val ?? 0UL), onUpdate, true, mixed);
+            ImGui.PopID(); return;
+        }
+
+        if (type == typeof(ulong) && HasAttribute(member, "SortingLayerMaskSelectorAttribute")) {
+            DrawSortingLayerMaskDropdown("", mixed ? 0UL : (ulong)(val ?? 0UL), onUpdate, true, mixed);
+            ImGui.PopID(); return;
+        }
+
+        if (targetType == typeof(Light2D) && member.Name == nameof(Light2D.ShadowReceiverMask))
+        {
+            var lights = components.OfType<Light2D>().ToList();
+            if (lights.Count == 0)
+            {
+                ImGui.PopID();
+                return;
+            }
+
+            bool mixedSource = lights.Select(light => light.ShadowLayerSource).Distinct().Skip(1).Any();
+            if (mixedSource)
+            {
+                ImGui.TextDisabled(L10n.Tr("msg_mixed"));
+                ImGui.PopID();
+                return;
+            }
+
+            if (lights[0].ShadowLayerSource == Light2DMaskSource.PhysicsGroup)
+                DrawPhysicsGroupMaskDropdown("", mixed ? 0UL : (ulong)(val ?? 0UL), onUpdate, true, mixed);
+            else
+                DrawSortingLayerMaskDropdown("", mixed ? 0UL : (ulong)(val ?? 0UL), onUpdate, true, mixed);
+            ImGui.PopID();
+            return;
+        }
+
+        if (targetType == typeof(Light2D) && type == typeof(Filter))
+        {
+            var lights = components.OfType<Light2D>().ToList();
+            Type? requiredType = GetLightFilterType(member.Name, lights);
+            if (requiredType == null)
+            {
+                ImGui.TextDisabled(L10n.Tr("msg_mixed"));
+                ImGui.PopID();
+                return;
+            }
+
+            DrawFilterField("", mixed ? null : val as Filter, onUpdate, true, mixed, requiredType);
+            ImGui.PopID();
+            return;
+        }
 
         if (type == typeof(string)) {
             if (HasAttribute(member, "PhysicsGroupSelectorAttribute")) {
@@ -204,6 +253,7 @@ public unsafe class InspectorWindow : EditorWindow
         else if (type == typeof(Vector3)) { Vector3 v3 = (Vector3)(val ?? Vector3.Zero); var raw = (System.Numerics.Vector3)v3; if (ImGui.DragFloat3("##v", ref raw, 0.1f)) { changed = true; val = (Vector3)raw; } }
         else if (type == typeof(Vector4)) { Vector4 v4 = (Vector4)(val ?? Vector4.Zero); if (ImGui.DragFloat4("##v", ref v4, 0.1f)) { changed = true; val = v4; } }
         else if (type == typeof(Color)) { var c = (Color)(val ?? Color.White); var v4 = (Vector4)c; if (ImGui.ColorEdit4("##v", ref v4)) { changed = true; val = (Color)v4; } }
+        else if (val is Enum enumValue) { string[] names = Enum.GetNames(type); string[] displayNames = names.Select(name => GetEnumDisplayName(type, name)).ToArray(); int curr = Array.IndexOf(names, enumValue.ToString()); if (ImGui.Combo("##v", ref curr, displayNames, displayNames.Length)) { changed = true; val = Enum.Parse(type, names[curr]); } }
         else { ImGui.TextDisabled(mixed ? L10n.Tr("msg_mixed") : (val?.ToString() ?? L10n.Tr("msg_none"))); }
         if (mixed) ImGui.PopStyleColor();
         if (changed) onUpdate(val);
@@ -212,11 +262,13 @@ public unsafe class InspectorWindow : EditorWindow
 
     private void DrawEntityInspector(Entity entity)
     {
+        DrawBlueprintInstanceInspectorHeader(entity);
+
         ImGui.PushID("EntityHeader");
         bool active = entity.Active; if (ImGui.Checkbox($"{L10n.Tr("label_active")}##Active", ref active)) entity.Active = active;
         ImGui.SameLine(); string name = entity.Name; if (ImGui.InputText("##Name", ref name, 128)) entity.Name = name;
         ImGui.Separator();
-        DrawTagDropdown(L10n.Tr("label_tag"), entity.Tag, val => entity.Tag = (string?)val ?? "Untagged");
+        DrawTagDropdown(L10n.Tr("label_tag"), entity.Tag, val => entity.Tag = (string?)val ?? L10n.Tr("label_untagged"));
         ImGui.PopID();
         ImGui.Separator();
         var components = entity.GetAllComponents();
@@ -241,6 +293,110 @@ public unsafe class InspectorWindow : EditorWindow
             }
             ImGui.EndPopup();
         }
+    }
+
+    private void DrawBlueprintInstanceInspectorHeader(Entity entity)
+    {
+        if (!entity.IsBlueprintInstance)
+            return;
+
+        ImGui.TextColored(new Vector4(0.35f, 0.9f, 1f, 1f), L10n.Tr("msg_blueprint_instance"));
+        ImGui.Text($"{L10n.Tr("msg_source")}: {AssetPathUtility.DisplayName(entity.BlueprintAssetPath)}");
+
+        if (!string.IsNullOrWhiteSpace(entity.BlueprintAssetPath) &&
+            ImGui.Button(L10n.Tr("btn_open_source_blueprint"), new Vector2(-1, 0)))
+        {
+            string resolvedPath = AssetPathUtility.ResolvePath(_app.ProjectPath ?? _app.AssetsPath, entity.BlueprintAssetPath, entity.BlueprintAssetGuid);
+            if (File.Exists(resolvedPath))
+            {
+                EditorSelection.ClearSelection();
+                EditorSelection.SelectedAssetPath = resolvedPath;
+            }
+        }
+
+        List<string> overrides = GetBlueprintOverrideLabels(entity);
+        if (overrides.Count > 0)
+        {
+            ImGui.Separator();
+            ImGui.TextColored(new Vector4(0.35f, 0.65f, 1f, 1f), L10n.Tr("label_overrides"));
+            foreach (string item in overrides)
+                ImGui.TextColored(new Vector4(0.35f, 0.65f, 1f, 1f), item);
+        }
+
+        ImGui.Separator();
+    }
+
+    private List<string> GetBlueprintOverrideLabels(Entity entity)
+    {
+        if (!entity.IsBlueprintInstanceRoot && !entity.BlueprintSourceEntityId.HasValue)
+            return [];
+
+        Entity? root = FindBlueprintRoot(entity);
+        if (root == null || !entity.BlueprintSourceEntityId.HasValue)
+            return [];
+
+        foreach (JsonNode? node in SceneSerializer.CaptureBlueprintInstanceOverrides(root))
+        {
+            if (!Guid.TryParse((string?)node?["SourceId"], out Guid sourceId) ||
+                sourceId != entity.BlueprintSourceEntityId.Value)
+            {
+                continue;
+            }
+
+            var labels = new List<string>();
+            if (node?["Name"] != null) labels.Add(LocalizeFieldName("Name"));
+            if (node?["Active"] != null) labels.Add(LocalizeFieldName("Active"));
+            if (node?["Position"] != null) labels.Add($"{LocalizeTypeName("Transform")}.{LocalizeFieldName("Position")}");
+            if (node?["Rotation"] != null) labels.Add($"{LocalizeTypeName("Transform")}.{LocalizeFieldName("Rotation")}");
+            if (node?["Scale"] != null) labels.Add($"{LocalizeTypeName("Transform")}.{LocalizeFieldName("Scale")}");
+
+            if (node?["Components"] is JsonArray componentOverrides)
+            {
+                foreach (JsonNode? componentNode in componentOverrides)
+                {
+                string componentName = ((string?)componentNode?["Type"] ?? L10n.Tr("label_blueprint_component_fallback")).Split('.').Last();
+                    string localizedComponentName = LocalizeTypeName(componentName);
+                    if ((bool?)componentNode?["Added"] == true)
+                    {
+                        labels.Add(L10n.Tr("label_blueprint_added_component", localizedComponentName));
+                        continue;
+                    }
+
+                    if ((bool?)componentNode?["Removed"] == true)
+                    {
+                        labels.Add(L10n.Tr("label_blueprint_removed_component", localizedComponentName));
+                        continue;
+                    }
+
+                    if (componentNode?["Enabled"] != null)
+                        labels.Add($"{localizedComponentName}.{LocalizeFieldName("Enabled")}");
+
+                    if (componentNode?["Fields"] is JsonObject fields)
+                    {
+                        foreach (string fieldName in fields.Select(field => field.Key))
+                            labels.Add($"{localizedComponentName}.{LocalizeFieldName(fieldName)}");
+                    }
+                }
+            }
+
+            return labels;
+        }
+
+        return [];
+    }
+
+    private static Entity? FindBlueprintRoot(Entity entity)
+    {
+        Entity? current = entity;
+        while (current != null)
+        {
+            if (current.IsBlueprintInstanceRoot)
+                return current;
+
+            current = current.Transform.Parent?.Owner;
+        }
+
+        return null;
     }
 
     private void DrawAssetInspector(string path)
@@ -272,9 +428,7 @@ public unsafe class InspectorWindow : EditorWindow
             if (ImGui.Button(L10n.Tr("btn_open_ui_editor"), new Vector2(-1, 30)))
             {
                 EditorSelection.SelectedAssetPath = path;
-                var uiEditor = _app.GetWindow<UIEditorWindow>();
-                if (uiEditor != null)
-                    uiEditor.IsOpen = true;
+                _app.OpenWindow<UIEditorWindow>();
             }
 
             ImGui.Separator();
@@ -410,6 +564,11 @@ public unsafe class InspectorWindow : EditorWindow
         {
             var preview = GetCachedBlueprintPreview(path);
 
+        if (ImGui.Button(L10n.Tr("btn_open_blueprint"), new Vector2(-1, 30)))
+                _app.OpenBlueprintAsset(path);
+
+            ImGui.Spacing();
+
             if (preview.HasPreviewSprite)
             {
                 ImGui.Text(L10n.Tr("label_preview"));
@@ -488,7 +647,7 @@ public unsafe class InspectorWindow : EditorWindow
         var entities = new List<BlueprintEntityPreview>();
         int componentCount = 0;
         Sprite previewSprite = default;
-        bool hasPreviewSprite = false;
+        bool hasPreviewSprite = _app.TryGetBlueprintPreviewSprite(path, out previewSprite);
 
         for (int i = 0; i < entitiesArray.Count; i++)
         {
@@ -500,7 +659,7 @@ public unsafe class InspectorWindow : EditorWindow
             {
                 Index = i,
                 ParentIndex = (int?)entityNode["ParentIndex"] ?? -1,
-                Name = (string?)entityNode["Name"] ?? $"Entity {i}",
+                Name = (string?)entityNode["Name"] ?? L10n.Tr("label_blueprint_entity_fallback", i),
                 Active = (bool?)entityNode["Active"] ?? true,
                 Position = ReadVector2(entityNode["Position"]),
                 Rotation = (float?)entityNode["Rotation"] ?? 0f,
@@ -514,7 +673,7 @@ public unsafe class InspectorWindow : EditorWindow
                     if (componentNode is not JsonObject componentObject)
                         continue;
 
-                    string typeName = (string?)componentObject["Type"] ?? "Component";
+                    string typeName = (string?)componentObject["Type"] ?? L10n.Tr("label_blueprint_component_fallback");
                     var fields = componentObject["Fields"] as JsonObject;
                     preview.Components.Add(new BlueprintComponentPreview
                     {
@@ -523,13 +682,6 @@ public unsafe class InspectorWindow : EditorWindow
                     });
                     componentCount++;
 
-                    if (!hasPreviewSprite &&
-                        string.Equals(typeName, "Verity.Graphics.SpriteRenderer", StringComparison.Ordinal) &&
-                        fields?["Sprite"] != null)
-                    {
-                        previewSprite = AssetPathUtility.FromSpriteJsonNode(fields["Sprite"]);
-                        hasPreviewSprite = !string.IsNullOrWhiteSpace(previewSprite.Path);
-                    }
                 }
             }
 
@@ -597,7 +749,8 @@ public unsafe class InspectorWindow : EditorWindow
 
     private void DrawBlueprintComponent(BlueprintComponentPreview component)
     {
-        if (!ImGui.TreeNodeEx($"{component.Name}##blueprint_component_{component.Name}", ImGuiTreeNodeFlags.DefaultOpen))
+        string localizedComponentName = LocalizeTypeName(component.Name);
+        if (!ImGui.TreeNodeEx($"{localizedComponentName}##blueprint_component_{component.Name}", ImGuiTreeNodeFlags.DefaultOpen))
             return;
 
         if (component.Fields == null || component.Fields.Count == 0)
@@ -608,7 +761,7 @@ public unsafe class InspectorWindow : EditorWindow
         }
 
         foreach (var field in component.Fields)
-            ImGui.Text($"{field.Key}: {FormatBlueprintValue(field.Value)}");
+            ImGui.Text($"{LocalizeFieldName(field.Key)}: {FormatBlueprintValue(field.Value)}");
 
         ImGui.TreePop();
     }
@@ -652,9 +805,9 @@ public unsafe class InspectorWindow : EditorWindow
 
             if (obj["EntityId"] != null || obj["ComponentType"] != null)
             {
-                string type = (string?)obj["ComponentType"] ?? "Component";
+                string type = (string?)obj["ComponentType"] ?? L10n.Tr("label_blueprint_component_fallback");
                 string id = (string?)obj["EntityId"] ?? string.Empty;
-                return $"{type.Split('.').Last()} ({id})";
+                return L10n.Tr("label_blueprint_component_ref", LocalizeTypeName(type.Split('.').Last()), id);
             }
 
             string[] orderedKeys = ["X", "Y", "Z", "W", "R", "G", "B", "A"];
@@ -709,7 +862,7 @@ public unsafe class InspectorWindow : EditorWindow
                 SaveStyle(path, data); 
             });
             ImGui.SameLine();
-            if (ImGui.Button(L10n.Tr("btn_refresh") ?? "Refresh", new Vector2(-1, 0))) {
+        if (ImGui.Button(L10n.Tr("btn_refresh"), new Vector2(-1, 0))) {
                 string relPath = Path.GetRelativePath(_app.ProjectPath!, path).Replace("\\", "/");
                 _app.RenderPipeline.ClearStyleCache(relPath);
                 if (!string.IsNullOrEmpty(data.ShaderPath)) _app.RenderPipeline.ClearShaderCache(data.ShaderPath);
@@ -725,7 +878,7 @@ public unsafe class InspectorWindow : EditorWindow
                     if (customUniforms.Count > 0) {
                         foreach (var u in customUniforms) {
                             ImGui.PushID(u.Name); ImGui.Text(u.Name); ImGui.SameLine(120); bool changed = false;
-                            if (u.Type == "float") { float val = data.Floats.TryGetValue(u.Name, out var f) ? f : 0f; if (val == 0f && u.Name.Contains("Count")) ImGui.TextColored(new Vector4(1, 1, 0, 1), "(Warning: 0 may cause black screen)"); if (ImGui.DragFloat("##v", ref val, 0.1f)) { data.Floats[u.Name] = val; changed = true; } }
+        if (u.Type == "float") { float val = data.Floats.TryGetValue(u.Name, out var f) ? f : 0f; if (val == 0f && u.Name.Contains("Count")) ImGui.TextColored(new Vector4(1, 1, 0, 1), L10n.Tr("msg_warning_zero_black_screen")); if (ImGui.DragFloat("##v", ref val, 0.1f)) { data.Floats[u.Name] = val; changed = true; } }
                             else if (u.Type == "vec2") { Vector2 val = data.Vector2s.TryGetValue(u.Name, out var v) ? v : Vector2.Zero; if (ImGui.DragFloat2("##v", (float*)&val, 0.1f)) { data.Vector2s[u.Name] = val; changed = true; } }
                             else if (u.Type == "vec3") { System.Numerics.Vector3 val = data.Vector3s.TryGetValue(u.Name, out var v) ? v : System.Numerics.Vector3.Zero; if (ImGui.DragFloat3("##v", (float*)&val, 0.1f)) { data.Vector3s[u.Name] = val; changed = true; } }
                             else if (u.Type == "vec4") {
@@ -736,10 +889,10 @@ public unsafe class InspectorWindow : EditorWindow
                             if (changed) { SaveStyle(path, data); string relPath = Path.GetRelativePath(_app.ProjectPath!, path).Replace("\\", "/"); _app.RenderPipeline.ClearStyleCache(relPath); }
                             ImGui.PopID();
                         }
-                    } else ImGui.TextDisabled("(No custom parameters)");
-                } else ImGui.TextColored(new Vector4(1, 0, 0, 1), "Shader not found");
-            } else ImGui.TextDisabled("(Select a shader)");
-        } catch (Exception e) { ImGui.TextColored(new Vector4(1, 0, 0, 1), $"Error: {e.Message}"); }
+                } else ImGui.TextDisabled(L10n.Tr("msg_no_custom_parameters"));
+            } else ImGui.TextColored(new Vector4(1, 0, 0, 1), L10n.Tr("msg_shader_not_found"));
+        } else ImGui.TextDisabled(L10n.Tr("msg_select_shader"));
+        } catch (Exception e) { ImGui.TextColored(new Vector4(1, 0, 0, 1), L10n.Tr("msg_error_generic", e.Message)); }
     }
 
     private string ResolveAssetPath(string p) => Path.IsPathRooted(p) ? p : (_app.ProjectPath == null ? p : Path.Combine(_app.ProjectPath, p));
@@ -1048,8 +1201,8 @@ public unsafe class InspectorWindow : EditorWindow
     {
         ImGui.Text($"{L10n.Tr("label_type")}: {Path.GetExtension(path)}");
         ImGui.Text($"{L10n.Tr("label_path")}: {path}");
-        ImGui.Text($"Guessed Type: {AudioClip.GuessType(path)}");
-        if (ImGui.Button("Preview", new Vector2(-1, 28)))
+        ImGui.Text(L10n.Tr("label_guessed_type", AudioClip.GuessType(path)));
+        if (ImGui.Button(L10n.Tr("btn_preview"), new Vector2(-1, 28)))
         {
             using var clip = AudioClip.FromPath(path);
             clip.Preview();
@@ -1058,16 +1211,22 @@ public unsafe class InspectorWindow : EditorWindow
 
     private void DrawComponent(Component component, Entity entity) {
         ImGui.PushID(component.GetHashCode());
-        string typeName = component.GetType().Name; string localizedTypeName = L10n.Tr($"type_{typeName}");
-        if (localizedTypeName == $"type_{typeName}") localizedTypeName = typeName;
+        string typeName = component.GetType().Name;
+        string localizedTypeName = LocalizeTypeName(typeName);
         if (ImGui.CollapsingHeader(localizedTypeName, ImGuiTreeNodeFlags.DefaultOpen)) {
             if (ImGui.BeginPopupContextItem()) { if (component is not Transform && ImGui.MenuItem(L10n.Tr("ctx_remove"))) { _app.BeginUndoAction(); entity.RemoveComponent(component); _app.EndUndoAction(); } ImGui.EndPopup(); }
-            ImGui.Indent(); 
+            ImGui.Indent();
+
+            bool enabled = component.Enabled;
+            if (!component.CanBeDisabled) ImGui.BeginDisabled();
+            if (ImGui.Checkbox($"{L10n.Tr("field_Enabled")}##ComponentEnabled", ref enabled) && component.CanBeDisabled) { _app.RecordUndo(); component.Enabled = enabled; }
+            if (!component.CanBeDisabled) ImGui.EndDisabled();
+
             if (component is PolygonShape || component is PolygonRenderer) { 
                 bool isEdit = EditorSelection.EditingPolygonComponent == component; 
                 if (isEdit) ImGui.PushStyleColor(ImGuiCol.Button, new Vector4(0.3f, 0.6f, 1.0f, 1.0f)); 
                 string btnLabel = isEdit ? L10n.Tr("btn_exit_edit") : (component is PolygonShape ? L10n.Tr("btn_edit_polygon_shape") : L10n.Tr("btn_edit_polygon_renderer"));
-                if (ImGui.Button(btnLabel, new Vector2(-1, 25))) EditorSelection.EditingPolygonComponent = isEdit ? null : component; 
+                if (ImGui.Button(btnLabel, new Vector2(-1, 25))) { _app.RecordUndo(); EditorSelection.EditingPolygonComponent = isEdit ? null : component; }
                 if (isEdit) ImGui.PopStyleColor(); 
             }
 
@@ -1086,13 +1245,13 @@ public unsafe class InspectorWindow : EditorWindow
         manager.EnsureDefaultGroups();
 
         float masterVolume = manager.MasterVolume;
-        if (ImGui.DragFloat("Master Volume", ref masterVolume, 0.01f, 0f, 1f))
+        if (ImGui.DragFloat(L10n.Tr("field_MasterVolume"), ref masterVolume, 0.01f, 0f, 1f))
         {
             manager.MasterVolume = masterVolume;
         }
 
         ImGui.Separator();
-        ImGui.Text($"Groups: {manager.Groups.Count}");
+        ImGui.Text(L10n.Tr("label_groups_count", manager.Groups.Count));
 
         for (int i = 0; i < manager.Groups.Count; i++)
         {
@@ -1101,27 +1260,27 @@ public unsafe class InspectorWindow : EditorWindow
             if (ImGui.TreeNodeEx(group.Name, ImGuiTreeNodeFlags.DefaultOpen))
             {
                 string name = group.Name;
-                if (ImGui.InputText("Name", ref name, 64))
+            if (ImGui.InputText(L10n.Tr("label_name"), ref name, 64))
                     group.Name = name;
 
                 float volume = group.Volume;
-                if (ImGui.DragFloat("Volume", ref volume, 0.01f, 0f, 1f))
+            if (ImGui.DragFloat(L10n.Tr("field_Volume"), ref volume, 0.01f, 0f, 1f))
                     group.Volume = volume;
 
                 float pitch = group.Pitch;
-                if (ImGui.DragFloat("Pitch", ref pitch, 0.01f, 0.1f, 4f))
+            if (ImGui.DragFloat(L10n.Tr("field_Pitch"), ref pitch, 0.01f, 0.1f, 4f))
                     group.Pitch = pitch;
 
                 bool muted = group.IsMuted;
-                if (ImGui.Checkbox("Muted", ref muted))
+            if (ImGui.Checkbox(L10n.Tr("field_Muted"), ref muted))
                     group.IsMuted = muted;
 
                 int maxVoices = group.MaxVoices;
-                if (ImGui.DragInt("Max Voices", ref maxVoices, 1, 1, 256))
+            if (ImGui.DragInt(L10n.Tr("field_MaxVoices"), ref maxVoices, 1, 1, 256))
                     group.MaxVoices = maxVoices;
 
                 bool protectedGroup = group.Name is "Master" or "BGM" or "SFX" or "UI";
-                if (!protectedGroup && ImGui.Button("Remove Group", new Vector2(-1, 24)))
+            if (!protectedGroup && ImGui.Button(L10n.Tr("btn_remove_group"), new Vector2(-1, 24)))
                 {
                     manager.Groups.RemoveAt(i);
                     manager.SyncGroupMap();
@@ -1135,7 +1294,7 @@ public unsafe class InspectorWindow : EditorWindow
             ImGui.PopID();
         }
 
-        if (ImGui.Button("+ Add Audio Group", new Vector2(-1, 26)))
+        if (ImGui.Button(L10n.Tr("btn_add_audio_group"), new Vector2(-1, 26)))
         {
             manager.Groups.Add(new AudioGroup($"Group_{manager.Groups.Count}", 16));
         }
@@ -1196,6 +1355,11 @@ public unsafe class InspectorWindow : EditorWindow
         if (ImGui.DragFloat2(L10n.Tr("field_TileSize"), (float*)&tileSize, 0.05f)) { tilemap.TileSize = tileSize; }
         
         ImGui.Text($"{L10n.Tr("label_tiles")}: {tilemap.Tiles.Count}");
+        var tilePalette = _app.GetWindow<TilePaletteWindow>();
+        if (ImGui.Button(L10n.Tr("btn_open_tile_palette"), new Vector2(-1, 0)) && tilePalette != null)
+        {
+            _app.OpenWindow(tilePalette);
+        }
         if (ImGui.Button(L10n.Tr("btn_clear_tilemap"), new Vector2(-1, 0))) { _app.RecordUndo(); tilemap.Clear(); }
     }
 
@@ -1205,7 +1369,129 @@ public unsafe class InspectorWindow : EditorWindow
         return HasAttribute(m, "SerializeFieldAttribute") || (m is FieldInfo f && f.IsPublic) || (m is PropertyInfo p && (p.GetGetMethod()?.IsPublic ?? false) && !HasAttribute(m, "HideInInspectorAttribute"));
     }
 
+    private bool ShouldShowMember(MemberInfo m, object target)
+    {
+        if (!ShouldShowMember(m))
+            return false;
+
+        if (target is Light2D light)
+            return ShouldShowLightMember(m.Name, light);
+
+        if (IsShadowCasterSettingsTarget(target))
+            return ShouldShowShadowCasterMember(m.Name, target);
+
+        return true;
+    }
+
+    private bool ShouldShowMember(MemberInfo m, IEnumerable<Component> targets)
+    {
+        if (!ShouldShowMember(m))
+            return false;
+
+        if (targets.All(target => target is Light2D))
+            return targets.Cast<Light2D>().All(light => ShouldShowLightMember(m.Name, light));
+
+        if (targets.All(IsShadowCasterSettingsTarget))
+            return targets.All(target => ShouldShowShadowCasterMember(m.Name, target));
+
+        return true;
+    }
+
+    private static MemberInfo[] GetGenericInspectorMembers(Type type)
+    {
+        return GenericInspectorMembersCache.GetOrAdd(type, static currentType =>
+        {
+            var hierarchy = new List<Type>();
+            var cursor = currentType;
+            while (cursor != null && cursor.FullName != "Verity.Core.ECS.Component" && cursor != typeof(object))
+            {
+                hierarchy.Add(cursor);
+                cursor = cursor.BaseType;
+            }
+
+            hierarchy.Reverse();
+            return currentType.GetMembers(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.FlattenHierarchy)
+                .Where(static member => member.DeclaringType != null &&
+                    member.DeclaringType.FullName != "System.Object" &&
+                    member.DeclaringType.FullName != "Verity.Core.ECS.Component")
+                .OrderBy(member => hierarchy.IndexOf(member.DeclaringType!))
+                .ThenBy(member => member.MetadataToken)
+                .ToArray();
+        });
+    }
+
+    private static MemberInfo[] GetMultiInspectorMembers(Type type)
+    {
+        return MultiInspectorMembersCache.GetOrAdd(type, static currentType =>
+            currentType.GetMembers(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.FlattenHierarchy)
+                .Where(static member => member.DeclaringType != null &&
+                    member.DeclaringType.FullName != "System.Object" &&
+                    member.DeclaringType.FullName != "Verity.Core.ECS.Component")
+                .OrderBy(member => member.MetadataToken)
+                .ToArray());
+    }
+
+    private static MemberInfo[] GetNestedInspectorMembers(Type type)
+    {
+        return NestedInspectorMembersCache.GetOrAdd(type, static currentType =>
+            currentType.GetMembers(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.FlattenHierarchy)
+                .Where(static member => member.DeclaringType != typeof(object))
+                .OrderBy(member => member.MetadataToken)
+                .ToArray());
+    }
+
+    private static string? GetButtonLabel(MethodInfo method)
+    {
+        return ButtonLabelCache.GetOrAdd(method, static currentMethod =>
+        {
+            if (currentMethod.GetParameters().Length != 0)
+                return null;
+
+            object? attribute = currentMethod.GetCustomAttributes(true).FirstOrDefault(attr => attr.GetType().Name == "ButtonAttribute");
+            if (attribute == null)
+                return null;
+
+            var attributeType = attribute.GetType();
+            var labelProperty = attributeType.GetProperty("Label") ?? attributeType.GetProperties().FirstOrDefault(property => property.Name == "Label");
+            return labelProperty?.GetValue(attribute) as string ?? currentMethod.Name;
+        });
+    }
+
+    private static AssetReferenceAttribute? GetAssetReferenceAttribute(MemberInfo member)
+    {
+        return AssetReferenceAttributeCache.GetOrAdd(member, static currentMember => currentMember.GetCustomAttribute<AssetReferenceAttribute>());
+    }
+
     private void ProcessMember(string name, Type type, object? value, Action<object?> onUpdate, MemberInfo member, object target) {
+        if (target is Light2D light && member.Name == nameof(Light2D.ShadowReceiverMask))
+        {
+            if (light.ShadowLayerSource == Light2DMaskSource.PhysicsGroup)
+                DrawPhysicsGroupMaskDropdown(name, (ulong?)value ?? 0UL, onUpdate);
+            else
+                DrawSortingLayerMaskDropdown(name, (ulong?)value ?? 0UL, onUpdate);
+            return;
+        }
+
+        if (type == typeof(ulong) && HasAttribute(member, "PhysicsGroupMaskSelectorAttribute")) {
+            DrawPhysicsGroupMaskDropdown(name, (ulong?)value ?? 0UL, onUpdate);
+            return;
+        }
+
+        if (type == typeof(ulong) && HasAttribute(member, "SortingLayerMaskSelectorAttribute")) {
+            DrawSortingLayerMaskDropdown(name, (ulong?)value ?? 0UL, onUpdate);
+            return;
+        }
+
+        if (target is Light2D lightTarget && type == typeof(Filter))
+        {
+            Type? requiredType = GetLightFilterType(member.Name, lightTarget);
+            if (requiredType != null)
+            {
+                DrawFilterField(name, value as Filter, onUpdate, false, false, requiredType);
+                return;
+            }
+        }
+
         if (type == typeof(string)) {
             if (HasAttribute(member, "PhysicsGroupSelectorAttribute")) { DrawPhysicsGroupDropdown(name, (string?)value ?? "", onUpdate); return; }
             if (HasAttribute(member, "SortingLayerSelectorAttribute")) { DrawSortingLayerDropdown(name, (string?)value ?? "", onUpdate); return; }
@@ -1222,42 +1508,253 @@ public unsafe class InspectorWindow : EditorWindow
         };
 
         if (member.Name == "Scale" && target is Transform t) { DrawTransformScaleField(t); return; }
-        if (type == typeof(AudioClip)) { DrawAudioClipField(name, value as AudioClip, wrappedUpdate); return; }
-        if (type == typeof(Sprite)) { DrawSpriteField(name, (Sprite?)value ?? default, wrappedUpdate); return; }
-        if (type == typeof(StyleAsset)) { DrawStyleField(name, (StyleAsset?)value ?? default, wrappedUpdate); return; }
-        if (type == typeof(ShaderAsset)) { DrawShaderField(name, (ShaderAsset?)value ?? default, wrappedUpdate); return; }
-        if (type == typeof(Filter)) { DrawFilterField(name, (Filter?)value, wrappedUpdate); return; }
-        if (HasAttribute(member, "AssetReferenceAttribute") && type == typeof(string)) {
-            DrawAssetReferenceField(name, (string?)value ?? "", member.GetCustomAttribute<AssetReferenceAttribute>()!.Extension, newVal => {
+        AssetReferenceAttribute? assetReferenceAttribute = type == typeof(string) ? GetAssetReferenceAttribute(member) : null;
+        if (assetReferenceAttribute != null) {
+            DrawAssetReferenceField(name, (string?)value ?? "", assetReferenceAttribute.Extension, newVal => {
                 string path = (string?)newVal ?? string.Empty;
                 UpdateSiblingAssetGuid(target, member, path);
                 wrappedUpdate(path);
             });
             return;
         }
-        if (typeof(Component).IsAssignableFrom(type)) { DrawComponentReferenceField(name, (Component?)value, type, wrappedUpdate); return; }
-        if (TryGetDictionaryTypes(type, out var keyType, out var valueType)) { DrawDictionary(name, value, type, keyType, valueType, wrappedUpdate); return; }
-        if (TryGetCollectionElementType(type, out var elementType)) { DrawCollection(name, value, type, elementType, wrappedUpdate); return; }
-        if (type == typeof(float?)) { DrawNullableFloat(name, (float?)value, wrappedUpdate, member); return; }
-        if (IsNestedInspectableType(type))
-        {
-            object? instance = value;
-            if (instance == null && type.GetConstructor(Type.EmptyTypes) != null)
-            {
-                instance = Activator.CreateInstance(type);
-                wrappedUpdate(instance);
-            }
-
-            if (instance != null)
-            {
-                DrawNestedObject(name, instance, () => wrappedUpdate(instance));
-                return;
-            }
-        }
-        DrawField(name, value, wrappedUpdate);
+        DrawValueEditor(name, type, value, wrappedUpdate);
     }
 
-    private bool HasAttribute(MemberInfo member, string attributeName) { return member.GetCustomAttributes(true).Any(a => a.GetType().Name == attributeName); }
+    private bool HasAttribute(MemberInfo member, string attributeName)
+    {
+        HashSet<string> attributes = MemberAttributeCache.GetOrAdd(member, static currentMember =>
+            currentMember.GetCustomAttributes(true)
+                .Select(attribute => attribute.GetType().Name)
+                .ToHashSet(StringComparer.Ordinal));
+        return attributes.Contains(attributeName);
+    }
+
+    private void DrawPostProcessSettings(string name, PostProcessSettings? settings, Action<object?> onUpdate)
+    {
+        settings ??= new PostProcessSettings();
+        settings.GetCustomEffects();
+
+        ImGui.PushID(name);
+        if (ImGui.TreeNodeEx(name, ImGuiTreeNodeFlags.DefaultOpen))
+        {
+            bool enabled = settings.Enabled;
+            if (ImGui.Checkbox(L10n.Tr("field_Enabled"), ref enabled))
+            {
+                settings.Enabled = enabled;
+                onUpdate(settings);
+            }
+
+            string[] missingEffects = GetMissingPostProcessEffects(settings);
+            if (missingEffects.Length > 0)
+            {
+                string addEffectLabel = L10n.Tr("postprocess_add_effect");
+                if (ImGui.BeginCombo(addEffectLabel, addEffectLabel))
+                {
+                    foreach (string effectKey in missingEffects)
+                    {
+                        if (ImGui.Selectable(GetPostProcessEffectLabel(effectKey)))
+                        {
+                            AddPostProcessEffect(settings, effectKey);
+                            onUpdate(settings);
+                        }
+                    }
+                    ImGui.EndCombo();
+                }
+            }
+
+            string[] addedEffects = GetAddedPostProcessEffects(settings);
+            if (addedEffects.Length == 0)
+            {
+                ImGui.TextDisabled(L10n.Tr("postprocess_no_effects"));
+            }
+            else
+            {
+                foreach (string effectKey in addedEffects)
+                {
+                    object? effect = GetPostProcessEffect(settings, effectKey);
+                    if (effect == null)
+                        continue;
+
+                    ImGui.PushID(effectKey);
+
+                    bool open = false;
+                    bool removed = false;
+                    if (ImGui.BeginTable("##postprocess_effect_row", 2, ImGuiTableFlags.SizingStretchProp))
+                    {
+                        ImGui.TableSetupColumn("Effect", ImGuiTableColumnFlags.WidthStretch);
+                        ImGui.TableSetupColumn("Actions", ImGuiTableColumnFlags.WidthFixed, 72f);
+                        ImGui.TableNextRow();
+
+                        ImGui.TableNextColumn();
+                        open = ImGui.CollapsingHeader(GetPostProcessEffectLabel(effectKey), ImGuiTreeNodeFlags.DefaultOpen);
+
+                        ImGui.TableNextColumn();
+                        if (ImGui.SmallButton(L10n.Tr("ctx_remove")))
+                        {
+                            RemovePostProcessEffect(settings, effectKey);
+                            onUpdate(settings);
+                            removed = true;
+                        }
+
+                        ImGui.EndTable();
+                    }
+
+                    if (removed)
+                    {
+                        ImGui.PopID();
+                        continue;
+                    }
+
+                    if (open)
+                        DrawNestedObject(L10n.Tr("label_settings"), effect, () => onUpdate(settings));
+
+                    ImGui.PopID();
+                }
+            }
+
+            ImGui.TreePop();
+        }
+        ImGui.PopID();
+    }
+
+    private static string LocalizeTypeName(Type type) => LocalizeTypeName(type.Name);
+
+    private static string LocalizeTypeName(string typeName)
+    {
+        string localized = L10n.Tr($"type_{typeName}");
+        return localized == $"type_{typeName}" ? typeName : localized;
+    }
+
+    private static string LocalizeFieldName(string fieldName)
+    {
+        string localized = L10n.Tr($"field_{fieldName}");
+        return localized == $"field_{fieldName}" ? fieldName : localized;
+    }
+
+    private static string[] GetMissingPostProcessEffects(PostProcessSettings settings)
+    {
+        return GetPostProcessEffectKeys()
+            .Where(key => key == "Custom" || GetPostProcessEffect(settings, key) == null)
+            .ToArray();
+    }
+
+    private static string[] GetAddedPostProcessEffects(PostProcessSettings settings)
+    {
+        settings.GetCustomEffects();
+
+        string[] fixedEffects = GetPostProcessEffectKeys()
+            .Where(key => key != "Custom")
+            .Where(key => GetPostProcessEffect(settings, key) != null)
+            .OrderBy(key => GetPostProcessEffectOrder(settings, key))
+            .ThenBy(key => key, StringComparer.Ordinal)
+            .ToArray();
+
+        string[] customEffects = settings.Customs
+            .Select((_, index) => GetCustomEffectKey(index))
+            .OrderBy(key => GetPostProcessEffectOrder(settings, key))
+            .ThenBy(key => key, StringComparer.Ordinal)
+            .ToArray();
+
+        return fixedEffects.Concat(customEffects).ToArray();
+    }
+
+    private static string[] GetPostProcessEffectKeys()
+    {
+        return ["Bloom", "Vignette", "ColorAdjustments", "MotionBlur", "Distortion", "ChromaticAberration", "Pixelate", "Custom"];
+    }
+
+    private static string GetPostProcessEffectLabel(string key)
+    {
+        if (TryParseCustomEffectIndex(key, out int customIndex))
+            return string.Format(L10n.Tr("postprocess_effect_CustomIndexed"), customIndex + 1);
+
+        string label = L10n.Tr($"postprocess_effect_{key}");
+        return label == $"postprocess_effect_{key}" ? key : label;
+    }
+
+    private static object? GetPostProcessEffect(PostProcessSettings settings, string key) => key switch
+    {
+        "Bloom" => settings.Bloom,
+        "Vignette" => settings.Vignette,
+        "ColorAdjustments" => settings.ColorAdjustments,
+        "MotionBlur" => settings.MotionBlur,
+        "Distortion" => settings.Distortion,
+        "ChromaticAberration" => settings.ChromaticAberration,
+        "Pixelate" => settings.Pixelate,
+        "Custom" => null,
+        _ => null
+    };
+
+    private static int GetPostProcessEffectOrder(PostProcessSettings settings, string key)
+    {
+        if (TryParseCustomEffectIndex(key, out int customIndex))
+        {
+            List<CustomPostProcessSettings> customs = settings.GetCustomEffects();
+            return customIndex >= 0 && customIndex < customs.Count ? customs[customIndex].Order : int.MaxValue;
+        }
+
+        return key switch
+        {
+            "Bloom" => settings.Bloom is BloomSettings bloom ? bloom.Order : int.MaxValue,
+            "Vignette" => settings.Vignette is VignetteSettings vignette ? vignette.Order : int.MaxValue,
+            "ColorAdjustments" => settings.ColorAdjustments is ColorAdjustmentsSettings colorAdjustments ? colorAdjustments.Order : int.MaxValue,
+            "MotionBlur" => settings.MotionBlur is MotionBlurSettings motionBlur ? motionBlur.Order : int.MaxValue,
+            "Distortion" => settings.Distortion is DistortionSettings distortion ? distortion.Order : int.MaxValue,
+            "ChromaticAberration" => settings.ChromaticAberration is ChromaticAberrationSettings chromaticAberration ? chromaticAberration.Order : int.MaxValue,
+            "Pixelate" => settings.Pixelate is PixelateSettings pixelate ? pixelate.Order : int.MaxValue,
+            _ => int.MaxValue
+        };
+    }
+
+    private static void AddPostProcessEffect(PostProcessSettings settings, string key)
+    {
+        switch (key)
+        {
+            case "Bloom": settings.Bloom ??= new BloomSettings(); break;
+            case "Vignette": settings.Vignette ??= new VignetteSettings(); break;
+            case "ColorAdjustments": settings.ColorAdjustments ??= new ColorAdjustmentsSettings(); break;
+            case "MotionBlur": settings.MotionBlur ??= new MotionBlurSettings(); break;
+            case "Distortion": settings.Distortion ??= new DistortionSettings(); break;
+            case "ChromaticAberration": settings.ChromaticAberration ??= new ChromaticAberrationSettings(); break;
+            case "Pixelate": settings.Pixelate ??= new PixelateSettings(); break;
+            case "Custom": settings.GetCustomEffects().Add(new CustomPostProcessSettings()); break;
+        }
+    }
+
+    private static void RemovePostProcessEffect(PostProcessSettings settings, string key)
+    {
+        if (TryParseCustomEffectIndex(key, out int customIndex))
+        {
+            List<CustomPostProcessSettings> customs = settings.GetCustomEffects();
+            if (customIndex >= 0 && customIndex < customs.Count)
+                customs.RemoveAt(customIndex);
+            return;
+        }
+
+        switch (key)
+        {
+            case "Bloom": settings.Bloom = null; break;
+            case "Vignette": settings.Vignette = null; break;
+            case "ColorAdjustments": settings.ColorAdjustments = null; break;
+            case "MotionBlur": settings.MotionBlur = null; break;
+            case "Distortion": settings.Distortion = null; break;
+            case "ChromaticAberration": settings.ChromaticAberration = null; break;
+            case "Pixelate": settings.Pixelate = null; break;
+        }
+    }
+
+    private static string GetCustomEffectKey(int index) => $"Custom:{index}";
+
+    private static bool TryParseCustomEffectIndex(string key, out int index)
+    {
+        const string prefix = "Custom:";
+        if (key.StartsWith(prefix, StringComparison.Ordinal) &&
+            int.TryParse(key[prefix.Length..], out index))
+            return true;
+
+        index = -1;
+        return false;
+    }
 
     private void DrawPhysicsGroupDropdown(string label, string current, Action<object?> onUpdate, bool noLabel = false) {
         if (!noLabel) { ImGui.PushID(label.GetHashCode()); ImGui.Text(label); ImGui.SameLine(120); }
@@ -1274,6 +1771,56 @@ public unsafe class InspectorWindow : EditorWindow
             if (ImGui.Button(L10n.Tr("btn_add")) && !string.IsNullOrWhiteSpace(_newGroupNameBuffer)) { if (!groups.Contains(_newGroupNameBuffer)) { groups.Add(_newGroupNameBuffer); _app.SaveProjectSettings(); onUpdate(_newGroupNameBuffer); } ImGui.CloseCurrentPopup(); }
             ImGui.EndPopup();
         }
+        if (!noLabel) ImGui.PopID();
+    }
+
+    private void DrawPhysicsGroupMaskDropdown(string label, ulong current, Action<object?> onUpdate, bool noLabel = false, bool mixed = false) {
+        if (!noLabel) { ImGui.PushID(label.GetHashCode()); ImGui.Text(label); ImGui.SameLine(120); }
+        bool openPopup = false;
+        var groups = _app.ProjectSettings.PhysicsGroups;
+        string preview = mixed ? L10n.Tr("msg_mixed") : GetPhysicsGroupMaskLabel(current, groups);
+
+        if (ImGui.BeginCombo("##GroupMask", preview)) {
+            ulong fullMask = BuildPhysicsGroupMask(groups);
+            if (ImGui.Selectable(L10n.Tr("label_all"), current == ulong.MaxValue))
+                onUpdate(ulong.MaxValue);
+            if (ImGui.Selectable(L10n.Tr("msg_none"), current == 0))
+                onUpdate(0UL);
+
+            ImGui.Separator();
+            ulong editableMask = current == ulong.MaxValue ? fullMask : current;
+            foreach (var group in groups) {
+                ulong bit = FilterRegistry.GetGroupMask(group);
+                bool selected = (editableMask & bit) != 0;
+                if (ImGui.Checkbox(group, ref selected)) {
+                    ulong next = current == ulong.MaxValue ? fullMask : current;
+                    if (selected) next |= bit;
+                    else next &= ~bit;
+                    onUpdate(next == fullMask ? ulong.MaxValue : next);
+                }
+            }
+
+            ImGui.Separator();
+            if (ImGui.Selectable(L10n.Tr("ctx_add_group"))) { _newGroupNameBuffer = ""; openPopup = true; }
+            ImGui.EndCombo();
+        }
+
+        if (openPopup) ImGui.OpenPopup("AddPhysicsGroupMaskPopup_Local");
+        if (ImGui.BeginPopup("AddPhysicsGroupMaskPopup_Local")) {
+            ImGui.Text(L10n.Tr("msg_new_group_name"));
+            if (ImGui.InputText("##newgroupmask", ref _newGroupNameBuffer, 32, ImGuiInputTextFlags.EnterReturnsTrue)) {
+                if (!string.IsNullOrWhiteSpace(_newGroupNameBuffer) && !groups.Contains(_newGroupNameBuffer)) _app.ProjectSettings.PhysicsGroups.Add(_newGroupNameBuffer);
+                _app.SaveProjectSettings();
+                ImGui.CloseCurrentPopup();
+            }
+            if (ImGui.Button(L10n.Tr("btn_add")) && !string.IsNullOrWhiteSpace(_newGroupNameBuffer)) {
+                if (!groups.Contains(_newGroupNameBuffer)) _app.ProjectSettings.PhysicsGroups.Add(_newGroupNameBuffer);
+                _app.SaveProjectSettings();
+                ImGui.CloseCurrentPopup();
+            }
+            ImGui.EndPopup();
+        }
+
         if (!noLabel) ImGui.PopID();
     }
 
@@ -1313,7 +1860,211 @@ public unsafe class InspectorWindow : EditorWindow
         if (!noLabel) ImGui.PopID();
     }
 
-    private void DrawNullableFloat(string name, float? value, Action<object?> onUpdate, MemberInfo member) {
+    private static ulong BuildPhysicsGroupMask(IEnumerable<string> groups)
+    {
+        ulong mask = 0;
+        foreach (var group in groups)
+            mask |= FilterRegistry.GetGroupMask(group);
+        return mask;
+    }
+
+    private static ulong BuildSortingLayerMask(IEnumerable<string> layers)
+    {
+        ulong mask = 0;
+        foreach (var layer in layers)
+            mask |= FilterRegistry.GetMask("SortingLayer", layer);
+        return mask;
+    }
+
+    private string GetPhysicsGroupMaskLabel(ulong mask, List<string> groups)
+    {
+        if (mask == ulong.MaxValue)
+            return L10n.Tr("label_all");
+        if (mask == 0)
+            return L10n.Tr("msg_none");
+
+        var selected = groups.Where(group => (mask & FilterRegistry.GetGroupMask(group)) != 0).ToList();
+        if (selected.Count == 0)
+            return L10n.Tr("msg_none");
+        if (selected.Count == groups.Count)
+            return L10n.Tr("label_all");
+        if (selected.Count == 1)
+            return selected[0];
+        return $"{selected[0]} +{selected.Count - 1}";
+    }
+
+    private void DrawSortingLayerMaskDropdown(string label, ulong current, Action<object?> onUpdate, bool noLabel = false, bool mixed = false) {
+        if (!noLabel) { ImGui.PushID(label.GetHashCode()); ImGui.Text(label); ImGui.SameLine(120); }
+        bool openPopup = false;
+        var layers = _app.ProjectSettings.SortingLayers;
+        string preview = mixed ? L10n.Tr("msg_mixed") : GetSortingLayerMaskLabel(current, layers);
+
+        if (ImGui.BeginCombo("##SortingLayerMask", preview)) {
+            ulong fullMask = BuildSortingLayerMask(layers);
+            if (ImGui.Selectable(L10n.Tr("label_all"), current == ulong.MaxValue))
+                onUpdate(ulong.MaxValue);
+            if (ImGui.Selectable(L10n.Tr("msg_none"), current == 0))
+                onUpdate(0UL);
+
+            ImGui.Separator();
+            foreach (var layer in layers) {
+                ulong bit = FilterRegistry.GetMask("SortingLayer", layer);
+                ulong editableMask = current == ulong.MaxValue ? fullMask : current;
+                bool selected = (editableMask & bit) != 0;
+                if (ImGui.Checkbox(layer, ref selected)) {
+                    ulong next = current == ulong.MaxValue ? fullMask : current;
+                    if (selected) next |= bit;
+                    else next &= ~bit;
+                    onUpdate(next == fullMask ? ulong.MaxValue : next);
+                }
+            }
+
+            ImGui.Separator();
+            if (ImGui.Selectable(L10n.Tr("ctx_add_layer"))) { _newLayerNameBuffer = ""; openPopup = true; }
+            ImGui.EndCombo();
+        }
+
+        if (openPopup) ImGui.OpenPopup("AddSortingLayerMaskPopup_Local");
+        if (ImGui.BeginPopup("AddSortingLayerMaskPopup_Local")) {
+            ImGui.Text(L10n.Tr("msg_new_layer_name"));
+            if (ImGui.InputText("##newlayermask", ref _newLayerNameBuffer, 32, ImGuiInputTextFlags.EnterReturnsTrue)) {
+                if (!string.IsNullOrWhiteSpace(_newLayerNameBuffer) && !layers.Contains(_newLayerNameBuffer)) _app.ProjectSettings.SortingLayers.Add(_newLayerNameBuffer);
+                _app.SaveProjectSettings();
+                ImGui.CloseCurrentPopup();
+            }
+            if (ImGui.Button(L10n.Tr("btn_add")) && !string.IsNullOrWhiteSpace(_newLayerNameBuffer)) {
+                if (!layers.Contains(_newLayerNameBuffer)) _app.ProjectSettings.SortingLayers.Add(_newLayerNameBuffer);
+                _app.SaveProjectSettings();
+                ImGui.CloseCurrentPopup();
+            }
+            ImGui.EndPopup();
+        }
+
+        if (!noLabel) ImGui.PopID();
+    }
+
+    private string GetSortingLayerMaskLabel(ulong mask, List<string> layers)
+    {
+        if (mask == ulong.MaxValue)
+            return L10n.Tr("label_all");
+        if (mask == 0)
+            return L10n.Tr("msg_none");
+
+        var selected = layers.Where(layer => (mask & FilterRegistry.GetMask("SortingLayer", layer)) != 0).ToList();
+        if (selected.Count == 0)
+            return L10n.Tr("msg_none");
+        if (selected.Count == layers.Count)
+            return L10n.Tr("label_all");
+        if (selected.Count == 1)
+            return selected[0];
+        return $"{selected[0]} +{selected.Count - 1}";
+    }
+
+    private static bool SupportsLightShadows(Light2D light)
+        => light.Type is Light2DType.Direction or Light2DType.Spot;
+
+    private static bool IsLightShadowMember(string memberName)
+        => memberName is nameof(Light2D.CastShadows)
+            or nameof(Light2D.ShadowStrength)
+            or nameof(Light2D.ShadowLayerSource)
+            or nameof(Light2D.ShadowReceiverSelectionMode)
+            or nameof(Light2D.ShadowReceiverMask)
+            or nameof(Light2D.ShadowReceiverFilter);
+
+    private static bool ShouldShowLightMember(string memberName, Light2D light)
+    {
+        if (memberName == nameof(Light2D.Spread))
+            return light.Type == Light2DType.Direction;
+
+        if (memberName == nameof(Light2D.AffectsCameraBackground))
+            return light.Type == Light2DType.World;
+
+        if (memberName == nameof(Light2D.AffectedSortingLayerMask))
+            return light.AffectedSortingLayerSelectionMode == Light2DSelectionMode.Direct;
+
+        if (memberName == nameof(Light2D.AffectedSortingLayerFilter))
+            return light.AffectedSortingLayerSelectionMode == Light2DSelectionMode.Filter;
+
+        if (IsLightShadowMember(memberName) && !SupportsLightShadows(light))
+            return false;
+
+        if (memberName == nameof(Light2D.ShadowReceiverMask))
+            return light.ShadowReceiverSelectionMode == Light2DSelectionMode.Direct;
+
+        if (memberName == nameof(Light2D.ShadowReceiverFilter))
+            return light.ShadowReceiverSelectionMode == Light2DSelectionMode.Filter;
+
+        return true;
+    }
+
+    private static bool IsShadowCasterSettingsTarget(object target)
+        => target is SpriteRenderer or PolygonRenderer or TilemapRenderer or Verity.Core.Physics.PhysicalShape;
+
+    private static bool UsesRendererShadowSource(ShadowCasterSourceMode mode)
+        => mode is ShadowCasterSourceMode.Renderer or ShadowCasterSourceMode.Both or ShadowCasterSourceMode.PreferRenderer;
+
+    private static bool ShouldShowShadowCasterMember(string memberName, object target)
+    {
+        return target switch
+        {
+            SpriteRenderer spriteRenderer => memberName switch
+            {
+                nameof(SpriteRenderer.ShadowSourceMode) => spriteRenderer.CastShadows,
+                nameof(SpriteRenderer.ShadowSelfMode) => spriteRenderer.CastShadows,
+                nameof(SpriteRenderer.ShadowAlphaThreshold) => spriteRenderer.CastShadows && UsesRendererShadowSource(spriteRenderer.ShadowSourceMode),
+                _ => true
+            },
+            PolygonRenderer polygonRenderer => memberName switch
+            {
+                nameof(PolygonRenderer.ShadowSourceMode) => polygonRenderer.CastShadows,
+                nameof(PolygonRenderer.ShadowSelfMode) => polygonRenderer.CastShadows,
+                _ => true
+            },
+            TilemapRenderer tilemapRenderer => memberName switch
+            {
+                nameof(TilemapRenderer.ShadowSourceMode) => tilemapRenderer.CastShadows,
+                nameof(TilemapRenderer.ShadowSelfMode) => tilemapRenderer.CastShadows,
+                _ => true
+            },
+            Verity.Core.Physics.PhysicalShape physicalShape => memberName switch
+            {
+                nameof(Verity.Core.Physics.PhysicalShape.ShadowSelfMode) => physicalShape.CastShadows,
+                _ => true
+            },
+            _ => true
+        };
+    }
+
+    private static Type? GetLightFilterType(string memberName, Light2D light)
+    {
+        if (memberName == nameof(Light2D.AffectedSortingLayerFilter))
+            return typeof(Verity.Core.SortingLayer);
+
+        if (memberName == nameof(Light2D.ShadowReceiverFilter))
+            return light.ShadowLayerSource == Light2DMaskSource.PhysicsGroup
+                ? typeof(Verity.Core.PhysicsGroup)
+                : typeof(Verity.Core.SortingLayer);
+
+        return null;
+    }
+
+    private static Type? GetLightFilterType(string memberName, List<Light2D> lights)
+    {
+        Type? requiredType = null;
+        foreach (var light in lights)
+        {
+            Type? nextType = GetLightFilterType(memberName, light);
+            if (nextType == null)
+                return null;
+            if (requiredType != null && requiredType != nextType)
+                return null;
+            requiredType = nextType;
+        }
+
+        return requiredType;
+    }
+
+    private void DrawNullableFloat(string name, float? value, Action<object?> onUpdate) {
         ImGui.PushID(name); ImGui.Text(name); ImGui.SameLine(120);
         bool hasValue = value.HasValue; if (ImGui.Checkbox("##hasValue", ref hasValue)) onUpdate(hasValue ? 0.0f : null);
         if (hasValue) { ImGui.SameLine(); float val = value ?? 0.0f; if (ImGui.DragFloat("##v", ref val, 0.1f)) onUpdate(val); }
@@ -1334,12 +2085,80 @@ public unsafe class InspectorWindow : EditorWindow
         ImGui.PopID();
     }
 
-    private void DrawFilterField(string name, Filter? current, Action<object?> onUpdate) {
-        ImGui.PushID(name); ImGui.Text(name); ImGui.SameLine(120);
-        if (ImGui.Button($"{(current?.Name ?? L10n.Tr("msg_none"))}##box", new Vector2(-25, 0))) { }
-        ImGui.SameLine(); if (ImGui.Button("o##picker", new Vector2(20, 0))) ImGui.OpenPopup("Picker");
-        if (ImGui.BeginPopup("Picker")) { if (ImGui.MenuItem(L10n.Tr("msg_none"))) onUpdate(null); ImGui.Separator(); foreach (var f in FilterManager.GetAllFilters()) if (ImGui.MenuItem(f.Name)) onUpdate(f); ImGui.EndPopup(); }
+    private void DrawFilterField(string name, Filter? current, Action<object?> onUpdate, bool noLabel = false, bool mixed = false, Type? requiredType = null) {
+        if (!noLabel) { ImGui.PushID(name); ImGui.Text(name); ImGui.SameLine(120); }
+        else ImGui.PushID($"{name}_filter");
+        string preview = mixed ? L10n.Tr("msg_mixed") : (current?.Name ?? L10n.Tr("msg_none"));
+        if (ImGui.Button($"{preview}##box", new Vector2(-25, 0))) { }
+        ImGui.SameLine();
+        if (ImGui.Button("o##picker", new Vector2(20, 0)))
+            ImGui.OpenPopup("Picker");
+        if (ImGui.BeginPopup("Picker")) {
+            if (ImGui.MenuItem(L10n.Tr("msg_none")))
+                onUpdate(null);
+            ImGui.Separator();
+            foreach (var f in FilterManager.GetAllFilters())
+            {
+                if (requiredType != null && !IsCompatibleSingleTypeFilter(f, requiredType))
+                    continue;
+                if (ImGui.MenuItem(f.Name))
+                    onUpdate(f);
+            }
+            ImGui.EndPopup();
+        }
         ImGui.PopID();
+    }
+
+    private static bool IsCompatibleSingleTypeFilter(Filter filter, Type requiredType)
+    {
+        if (!string.IsNullOrWhiteSpace(filter.EnumTypeName))
+            return FilterManager.ResolveTypeInternal(filter.EnumTypeName) == requiredType;
+
+        if (filter.MixedValues.Count == 0)
+            return false;
+
+        bool anyValue = false;
+        foreach (var value in filter.MixedValues)
+        {
+            if (FilterManager.ResolveTypeInternal(value.TypeName) != requiredType)
+                return false;
+            anyValue = true;
+        }
+
+        return anyValue;
+    }
+
+    private void DrawValueEditor(string name, Type type, object? value, Action<object?> onUpdate)
+    {
+        if (type == typeof(PostProcessSettings)) { DrawPostProcessSettings(name, value as PostProcessSettings, onUpdate); return; }
+        if (type == typeof(AudioClip)) { DrawAudioClipField(name, value as AudioClip, onUpdate); return; }
+        if (type == typeof(Sprite)) { DrawSpriteField(name, (Sprite?)value ?? default, onUpdate); return; }
+        if (type == typeof(StyleAsset)) { DrawStyleField(name, (StyleAsset?)value ?? default, onUpdate); return; }
+        if (type == typeof(ShaderAsset)) { DrawShaderField(name, (ShaderAsset?)value ?? default, onUpdate); return; }
+        if (type == typeof(Filter)) { DrawFilterField(name, value as Filter, onUpdate); return; }
+        if (typeof(Component).IsAssignableFrom(type)) { DrawComponentReferenceField(name, value as Component, type, onUpdate); return; }
+        if (TryGetDictionaryTypes(type, out var keyType, out var valueType)) { DrawDictionary(name, value, type, keyType, valueType, onUpdate); return; }
+        if (TryGetCollectionElementType(type, out var elementType)) { DrawCollection(name, value, type, elementType, onUpdate); return; }
+        if (type == typeof(float?)) { DrawNullableFloat(name, value is float floatValue ? floatValue : (float?)value, onUpdate); return; }
+        if (IsNestedInspectableType(type))
+        {
+            object? instance = value;
+            if (instance == null && type.GetConstructor(Type.EmptyTypes) != null)
+            {
+                instance = Activator.CreateInstance(type);
+                onUpdate(instance);
+            }
+
+            if (instance != null)
+            {
+                DrawNestedObject(name, instance, () => onUpdate(instance));
+                return;
+            }
+        }
+
+        object? actualValue = value ?? CreateDefaultValue(type);
+        if (actualValue != null)
+            DrawField(name, actualValue, onUpdate);
     }
 
     private void DrawField(string name, object? value, Action<object?> onUpdate) {
@@ -1347,28 +2166,33 @@ public unsafe class InspectorWindow : EditorWindow
         bool changed = false; Type t = value.GetType();
         if (t == typeof(float)) { float f = (float)value; if (ImGui.DragFloat("##v", ref f, 0.1f)) { changed = true; value = f; } }
         else if (t == typeof(int)) { int i = (int)value; if (ImGui.DragInt("##v", ref i)) { changed = true; value = i; } }
+        else if (t == typeof(ulong)) { string s = value.ToString() ?? "0"; if (ImGui.InputText("##v", ref s, 32) && ulong.TryParse(s, out ulong parsed)) { changed = true; value = parsed; } }
         else if (t == typeof(bool)) { bool b = (bool)value; if (ImGui.Checkbox("##v", ref b)) { changed = true; value = b; } }
         else if (t == typeof(string)) { string s = (string)value; if (ImGui.InputText("##v", ref s, 1024)) { changed = true; value = s; } }
         else if (t == typeof(Vector2)) { Vector2 v2 = (Vector2)value; if (ImGui.DragFloat2("##v", (float*)&v2, 0.1f)) { changed = true; value = v2; } }
         else if (t == typeof(Vector3)) { Vector3 v3 = (Vector3)value; var raw = (System.Numerics.Vector3)v3; if (ImGui.DragFloat3("##v", ref raw, 0.1f)) { changed = true; value = (Vector3)raw; } }
         else if (t == typeof(Vector4)) { Vector4 v4 = (Vector4)value; if (ImGui.DragFloat4("##v", ref v4, 0.1f)) { changed = true; value = v4; } }
         else if (t == typeof(Color)) { var c = (Color)value; var v4 = (Vector4)c; if (ImGui.ColorEdit4("##v", ref v4)) { changed = true; value = (Color)v4; } }
-        else if (value is Enum) { string[] names = Enum.GetNames(t); int curr = Array.IndexOf(names, value.ToString()); if (ImGui.Combo("##v", ref curr, names, names.Length)) { changed = true; value = Enum.Parse(t, names[curr]); } }
+        else if (value is Enum) { string[] names = Enum.GetNames(t); string[] displayNames = names.Select(name => GetEnumDisplayName(t, name)).ToArray(); int curr = Array.IndexOf(names, value.ToString()); if (ImGui.Combo("##v", ref curr, displayNames, displayNames.Length)) { changed = true; value = Enum.Parse(t, names[curr]); } }
         else { ImGui.TextDisabled(value.ToString() ?? L10n.Tr("msg_none")); }
         if (changed) onUpdate(value); ImGui.PopID();
+    }
+
+    private static string GetEnumDisplayName(Type enumType, string enumName)
+    {
+        string key = $"enum_{enumType.Name}_{enumName}";
+        string localized = L10n.Tr(key);
+        return localized == key ? enumName : localized;
     }
 
     private void DrawNestedObject(string name, object value, Action onChanged)
     {
         ImGui.PushID(name);
-        if (ImGui.TreeNodeEx(name, ImGuiTreeNodeFlags.DefaultOpen))
+        if (ImGui.TreeNodeEx(name, ImGuiTreeNodeFlags.DefaultOpen | ImGuiTreeNodeFlags.SpanAvailWidth))
         {
+            ImGui.Indent();
             var type = value.GetType();
-            var members = type.GetMembers(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.FlattenHierarchy)
-                              .Where(m => m.DeclaringType != typeof(object))
-                              .OrderBy(m => m.MetadataToken);
-
-            foreach (var member in members)
+            foreach (var member in GetNestedInspectorMembers(type))
             {
                 string localizedName = L10n.Tr($"field_{member.Name}");
                 if (localizedName == $"field_{member.Name}") localizedName = member.Name;
@@ -1383,6 +2207,7 @@ public unsafe class InspectorWindow : EditorWindow
                 }
             }
 
+            ImGui.Unindent();
             ImGui.TreePop();
         }
         ImGui.PopID();
@@ -1411,24 +2236,44 @@ public unsafe class InspectorWindow : EditorWindow
             return;
 
         var items = ExtractCollectionItems(collection).ToList();
-        if (!ImGui.TreeNodeEx($"{label} [{items.Count}]"))
+        ImGui.PushID(label);
+        uint collectionId = ImGui.GetID("##collection_reorder");
+        if (!ImGui.TreeNodeEx($"{label} [{items.Count}]", ImGuiTreeNodeFlags.SpanAvailWidth))
+        {
+            ImGui.PopID();
             return;
+        }
 
         bool changed = false;
         for (int i = 0; i < items.Count; i++)
         {
             int index = i;
-            DrawField($"[{i}]", items[i], newValue => { items[index] = newValue; changed = true; });
-            ImGui.SameLine();
-            if (ImGui.SmallButton($"-##remove_{label}_{i}"))
+            object? currentValue = items[i] ?? CreateDefaultValue(elementType);
+            DrawValueEditor($"[{i}]", elementType, currentValue, newValue => { items[index] = newValue; changed = true; });
+
+            float controlsX = ImGui.GetCursorPosX() + MathF.Max(0f, ImGui.GetContentRegionAvail().X - 44f);
+            ImGui.SetCursorPosX(controlsX);
+            if (DrawCollectionReorderHandle(collectionId, index, items))
+                changed = true;
+
+            ImGui.SameLine(0f, 4f);
+            ImGui.PushStyleColor(ImGuiCol.Button, new Vector4(0.55f, 0.20f, 0.20f, 1.0f));
+            ImGui.PushStyleColor(ImGuiCol.ButtonHovered, new Vector4(0.70f, 0.24f, 0.24f, 1.0f));
+            ImGui.PushStyleColor(ImGuiCol.ButtonActive, new Vector4(0.45f, 0.16f, 0.16f, 1.0f));
+            if (ImGui.SmallButton($"X##remove_{i}"))
             {
                 items.RemoveAt(i);
                 changed = true;
                 i--;
             }
+            ImGui.PopStyleColor(3);
+            ImGui.NewLine();
+
+            if (i < items.Count - 1)
+                ImGui.Separator();
         }
 
-        if (ImGui.Button("+ " + L10n.Tr("btn_add")))
+        if (ImGui.Button($"+ {L10n.Tr("btn_add")}##add_{label}", new Vector2(-1, 0)))
         {
             items.Add(CreateDefaultValue(elementType));
             changed = true;
@@ -1438,6 +2283,46 @@ public unsafe class InspectorWindow : EditorWindow
             onUpdate(RebuildCollection(collectionType, elementType, items));
 
         ImGui.TreePop();
+        ImGui.PopID();
+    }
+
+    private bool DrawCollectionReorderHandle(uint collectionId, int index, List<object?> items)
+    {
+        bool changed = false;
+        if (ImGui.SmallButton($"::##drag_{index}"))
+        {
+        }
+
+        if (ImGui.BeginDragDropSource())
+        {
+            _draggedCollectionId = collectionId;
+            _draggedCollectionIndex = index;
+            ImGui.SetDragDropPayload("INSPECTOR_COLLECTION_ITEM", null, 0);
+            ImGui.Text($"[{index}]");
+            ImGui.EndDragDropSource();
+        }
+
+        if (ImGui.BeginDragDropTarget())
+        {
+            var payload = ImGui.AcceptDragDropPayload("INSPECTOR_COLLECTION_ITEM");
+            if (payload.Handle != null &&
+                _draggedCollectionId == collectionId &&
+                _draggedCollectionIndex >= 0 &&
+                _draggedCollectionIndex != index &&
+                _draggedCollectionIndex < items.Count)
+            {
+                object? draggedItem = items[_draggedCollectionIndex];
+                items.RemoveAt(_draggedCollectionIndex);
+                int insertIndex = _draggedCollectionIndex < index ? index - 1 : index;
+                items.Insert(insertIndex, draggedItem);
+                _draggedCollectionIndex = insertIndex;
+                changed = true;
+            }
+
+            ImGui.EndDragDropTarget();
+        }
+
+        return changed;
     }
 
     private void DrawDictionary(string label, object? dictionary, Type dictionaryType, Type keyType, Type valueType, Action<object?> onUpdate)
@@ -1446,24 +2331,36 @@ public unsafe class InspectorWindow : EditorWindow
             return;
 
         var entries = rawDictionary.Cast<DictionaryEntry>().ToList();
-        if (!ImGui.TreeNodeEx($"{label} [{entries.Count}]"))
+        ImGui.PushID(label);
+        if (!ImGui.TreeNodeEx($"{label} [{entries.Count}]", ImGuiTreeNodeFlags.SpanAvailWidth))
+        {
+            ImGui.PopID();
             return;
+        }
 
         bool changed = false;
         for (int i = 0; i < entries.Count; i++)
         {
             var entry = entries[i];
-            DrawField($"[{entry.Key}]", entry.Value, newValue => { entries[i] = new DictionaryEntry(entry.Key, newValue); changed = true; });
-            ImGui.SameLine();
-            if (ImGui.SmallButton($"-##remove_dict_{label}_{i}"))
+            object? currentValue = entry.Value ?? CreateDefaultValue(valueType);
+            DrawValueEditor($"[{entry.Key}]", valueType, currentValue, newValue => { entries[i] = new DictionaryEntry(entry.Key, newValue); changed = true; });
+
+            ImGui.PushStyleColor(ImGuiCol.Button, new Vector4(0.55f, 0.20f, 0.20f, 1.0f));
+            ImGui.PushStyleColor(ImGuiCol.ButtonHovered, new Vector4(0.70f, 0.24f, 0.24f, 1.0f));
+            ImGui.PushStyleColor(ImGuiCol.ButtonActive, new Vector4(0.45f, 0.16f, 0.16f, 1.0f));
+            if (ImGui.Button($"{L10n.Tr("btn_delete")}##remove_dict_{i}", new Vector2(-1, 0)))
             {
                 entries.RemoveAt(i);
                 changed = true;
                 i--;
             }
+            ImGui.PopStyleColor(3);
+
+            if (i < entries.Count - 1)
+                ImGui.Separator();
         }
 
-        if (CanCreateDictionaryKey(keyType) && ImGui.Button("+ " + L10n.Tr("btn_add")))
+        if (CanCreateDictionaryKey(keyType) && ImGui.Button($"+ {L10n.Tr("btn_add")}##dict_{label}", new Vector2(-1, 0)))
         {
             entries.Add(new DictionaryEntry(CreateDictionaryKeyDefaultValue(keyType), CreateDefaultValue(valueType)));
             changed = true;
@@ -1473,6 +2370,7 @@ public unsafe class InspectorWindow : EditorWindow
             onUpdate(RebuildDictionary(dictionaryType, keyType, valueType, entries));
 
         ImGui.TreePop();
+        ImGui.PopID();
     }
 
     private static bool TryGetCollectionElementType(Type type, out Type elementType)
@@ -1606,6 +2504,8 @@ public unsafe class InspectorWindow : EditorWindow
     {
         if (type == typeof(string))
             return string.Empty;
+        if (type == typeof(ulong))
+            return 0UL;
         if (type == typeof(Sprite))
             return default(Sprite);
         if (type == typeof(StyleAsset))
@@ -1651,16 +2551,92 @@ public unsafe class InspectorWindow : EditorWindow
         return ext is ".wav" or ".ogg" or ".mp3" or ".flac" or ".mod";
     }
 
+    private bool DrawReferenceSlot(string? label, string displayText, string? tooltip = null)
+    {
+        if (!string.IsNullOrWhiteSpace(label))
+        {
+            ImGui.AlignTextToFramePadding();
+            ImGui.Text(label);
+            ImGui.SameLine(120);
+        }
+
+        float pickerWidth = 22f;
+        float slotWidth = MathF.Max(60f, ImGui.GetContentRegionAvail().X - pickerWidth - ImGui.GetStyle().ItemInnerSpacing.X);
+        Vector2 size = new(MathF.Max(1f, slotWidth), MathF.Max(1f, ImGui.GetFrameHeight()));
+        ImGui.InvisibleButton("##ref_slot", size);
+
+        bool hovered = ImGui.IsItemHovered();
+        bool clicked = ImGui.IsItemClicked(ImGuiMouseButton.Left);
+        Vector2 min = ImGui.GetItemRectMin();
+        Vector2 max = ImGui.GetItemRectMax();
+        var drawList = ImGui.GetWindowDrawList();
+
+        Vector4 background = hovered
+            ? new Vector4(0.22f, 0.24f, 0.28f, 1.0f)
+            : new Vector4(0.16f, 0.17f, 0.20f, 1.0f);
+        Vector4 border = hovered
+            ? new Vector4(0.78f, 0.80f, 0.84f, 0.38f)
+            : new Vector4(1f, 1f, 1f, 0.14f);
+        drawList.AddRectFilled(min, max, ImGui.GetColorU32(background), 4f);
+        drawList.AddRect(min, max, ImGui.GetColorU32(border), 4f);
+
+        Vector2 textSize = ImGui.CalcTextSize(displayText);
+        Vector2 textPos = new(min.X + 8f, min.Y + MathF.Max(0f, (size.Y - textSize.Y) * 0.5f));
+        drawList.AddText(textPos, ImGui.GetColorU32(ImGuiCol.Text), displayText);
+
+        if (hovered && !string.IsNullOrWhiteSpace(tooltip))
+            ImGui.SetTooltip(tooltip);
+
+        ImGui.SameLine();
+        return clicked;
+    }
+
+    private bool DrawReferencePickerButton()
+    {
+        return ImGui.Button("o##picker", new Vector2(22f, ImGui.GetFrameHeight()));
+    }
+
+    private void RevealAssetReference(string assetPath, string? spriteId = null)
+    {
+        if (string.IsNullOrWhiteSpace(assetPath))
+            return;
+
+        string resolved = ResolveAssetPath(assetPath);
+        var projectWindow = _app.GetWindow<ProjectWindow>();
+        if (projectWindow != null)
+        {
+            _app.OpenWindow(projectWindow);
+            if (string.IsNullOrWhiteSpace(spriteId))
+                projectWindow.RevealAsset(resolved);
+            else
+                projectWindow.RevealSprite(resolved, spriteId);
+        }
+
+        if (string.IsNullOrWhiteSpace(spriteId))
+            EditorSelection.SelectAsset(resolved);
+        else
+            EditorSelection.SelectSpriteAsset(_app.CreateSpriteReference(resolved, spriteId));
+    }
+
+    private void RevealComponentReference(Component? component)
+    {
+        if (component == null)
+            return;
+
+        EditorSelection.SelectedEntity = component.Owner;
+        var hierarchy = _app.GetWindow<HierarchyWindow>();
+        if (hierarchy != null)
+            _app.OpenWindow(hierarchy);
+    }
+
     private void DrawAudioClipField(string name, AudioClip? current, Action<object?> onUpdate)
     {
         current ??= new AudioClip();
 
         ImGui.PushID(name);
-        ImGui.Text(name);
-        ImGui.SameLine(120);
-
         string btnLabel = string.IsNullOrWhiteSpace(current.Path) ? L10n.Tr("msg_none") : AssetPathUtility.DisplayName(current.Path);
-        if (ImGui.Button($"{btnLabel}##box", new Vector2(-25, 0))) { }
+        if (DrawReferenceSlot(name, btnLabel, current.Path) && !string.IsNullOrWhiteSpace(current.Path))
+            RevealAssetReference(current.Path);
 
         if (ImGui.BeginDragDropTarget())
         {
@@ -1670,8 +2646,7 @@ public unsafe class InspectorWindow : EditorWindow
             ImGui.EndDragDropTarget();
         }
 
-        ImGui.SameLine();
-        if (ImGui.Button("o##picker", new Vector2(20, 0))) ImGui.OpenPopup("Picker");
+        if (DrawReferencePickerButton()) ImGui.OpenPopup("Picker");
         if (ImGui.BeginPopup("Picker"))
         {
             ImGui.InputText(L10n.Tr("label_search"), ref _searchFilter, 64);
@@ -1693,18 +2668,18 @@ public unsafe class InspectorWindow : EditorWindow
         }
 
         string clipName = current.Name;
-        if (ImGui.InputText("Name", ref clipName, 128))
+        if (ImGui.InputText(L10n.Tr("label_name"), ref clipName, 128))
         {
             current.Name = clipName;
             onUpdate(current);
         }
 
         AudioType type = current.Type;
-        if (ImGui.BeginCombo("Type", type.ToString()))
+        if (ImGui.BeginCombo(L10n.Tr("label_type"), GetEnumDisplayName(typeof(AudioType), type.ToString())))
         {
             foreach (AudioType option in Enum.GetValues<AudioType>())
             {
-                if (ImGui.Selectable(option.ToString(), option == type))
+                if (ImGui.Selectable(GetEnumDisplayName(typeof(AudioType), option.ToString()), option == type))
                 {
                     current.Type = option;
                     onUpdate(current);
@@ -1714,27 +2689,27 @@ public unsafe class InspectorWindow : EditorWindow
         }
 
         float defaultVolume = current.DefaultVolume;
-        if (ImGui.DragFloat("Default Volume", ref defaultVolume, 0.01f, 0f, 1f))
+        if (ImGui.DragFloat(L10n.Tr("field_DefaultVolume"), ref defaultVolume, 0.01f, 0f, 1f))
         {
             current.DefaultVolume = defaultVolume;
             onUpdate(current);
         }
 
         float defaultPitch = current.DefaultPitch;
-        if (ImGui.DragFloat("Default Pitch", ref defaultPitch, 0.01f, 0.1f, 4f))
+        if (ImGui.DragFloat(L10n.Tr("field_DefaultPitch"), ref defaultPitch, 0.01f, 0.1f, 4f))
         {
             current.DefaultPitch = defaultPitch;
             onUpdate(current);
         }
 
         bool looping = current.IsLooping;
-        if (ImGui.Checkbox("Looping", ref looping))
+        if (ImGui.Checkbox(L10n.Tr("field_Looping"), ref looping))
         {
             current.IsLooping = looping;
             onUpdate(current);
         }
 
-        if (ImGui.Button("Preview", new Vector2(-1, 24)))
+        if (ImGui.Button(L10n.Tr("btn_preview"), new Vector2(-1, 24)))
         {
             string resolved = ResolveAssetPath(current.Path);
             current.PostLoad(resolved);
@@ -1746,11 +2721,12 @@ public unsafe class InspectorWindow : EditorWindow
 
     private void DrawSpriteField(string name, Sprite current, Action<object?> onUpdate) 
     {
-        ImGui.PushID(name); ImGui.Text(name); ImGui.SameLine(120);
+        ImGui.PushID(name);
         string btnLabel = GetSpriteButtonLabel(current);
-        if (ImGui.Button($"{btnLabel}##box", new Vector2(-25, 0))) { }
+        if (DrawReferenceSlot(name, btnLabel, current.Path) && !string.IsNullOrWhiteSpace(current.Path))
+            RevealAssetReference(current.Path, current.SpriteId);
         if (ImGui.BeginDragDropTarget()) { var p = ImGui.AcceptDragDropPayload("ASSET_PATH"); if (p.Handle != null && EditorSelection.DraggedAssetPath != null) { var ext = Path.GetExtension(EditorSelection.DraggedAssetPath).ToLower(); if (ext is ".png" or ".jpg" or ".jpeg") onUpdate(EditorSelection.DraggedSpriteAsset ?? CreateSpriteFromAssetPath(EditorSelection.DraggedAssetPath)); } ImGui.EndDragDropTarget(); }
-        ImGui.SameLine(); if (ImGui.Button("o##picker", new Vector2(20, 0))) ImGui.OpenPopup("Picker");
+        if (DrawReferencePickerButton()) ImGui.OpenPopup("Picker");
         if (ImGui.BeginPopup("Picker")) {
             ImGui.InputText(L10n.Tr("label_search"), ref _searchFilter, 64);
             if (ImGui.MenuItem(L10n.Tr("msg_none"))) onUpdate(default(Sprite));
@@ -1823,11 +2799,12 @@ public unsafe class InspectorWindow : EditorWindow
 
     private void DrawStyleField(string name, StyleAsset current, Action<object?> onUpdate) 
     {
-        ImGui.PushID(name); ImGui.Text(name); ImGui.SameLine(120);
+        ImGui.PushID(name);
         string btnLabel = string.IsNullOrEmpty(current.Path) ? L10n.Tr("msg_none") : Path.GetFileName(current.Path);
-        if (ImGui.Button($"{btnLabel}##box", new Vector2(-25, 0))) { }
+        if (DrawReferenceSlot(name, btnLabel, current.Path) && !string.IsNullOrWhiteSpace(current.Path))
+            RevealAssetReference(current.Path);
         if (ImGui.BeginDragDropTarget()) { var p = ImGui.AcceptDragDropPayload("ASSET_PATH"); if (p.Handle != null && EditorSelection.DraggedAssetPath != null) if (Path.GetExtension(EditorSelection.DraggedAssetPath).ToLower() == ".style") onUpdate((StyleAsset)EditorSelection.DraggedAssetPath); ImGui.EndDragDropTarget(); }
-        ImGui.SameLine(); if (ImGui.Button("o##picker", new Vector2(20, 0))) ImGui.OpenPopup("Picker");
+        if (DrawReferencePickerButton()) ImGui.OpenPopup("Picker");
         if (ImGui.BeginPopup("Picker")) {
             ImGui.InputText(L10n.Tr("label_search"), ref _searchFilter, 64);
             if (ImGui.MenuItem(L10n.Tr("msg_none"))) onUpdate(default(StyleAsset));
@@ -1842,11 +2819,12 @@ public unsafe class InspectorWindow : EditorWindow
 
     private void DrawShaderField(string name, ShaderAsset current, Action<object?> onUpdate) 
     {
-        ImGui.PushID(name); ImGui.Text(name); ImGui.SameLine(120);
+        ImGui.PushID(name);
         string btnLabel = string.IsNullOrEmpty(current.Path) ? L10n.Tr("msg_none") : Path.GetFileName(current.Path);
-        if (ImGui.Button($"{btnLabel}##box", new Vector2(-25, 0))) { }
+        if (DrawReferenceSlot(name, btnLabel, current.Path) && !string.IsNullOrWhiteSpace(current.Path))
+            RevealAssetReference(current.Path);
         if (ImGui.BeginDragDropTarget()) { var p = ImGui.AcceptDragDropPayload("ASSET_PATH"); if (p.Handle != null && EditorSelection.DraggedAssetPath != null) if (Path.GetExtension(EditorSelection.DraggedAssetPath).ToLower() == ".shader") onUpdate((ShaderAsset)EditorSelection.DraggedAssetPath); ImGui.EndDragDropTarget(); }
-        ImGui.SameLine(); if (ImGui.Button("o##picker", new Vector2(20, 0))) ImGui.OpenPopup("Picker");
+        if (DrawReferencePickerButton()) ImGui.OpenPopup("Picker");
         if (ImGui.BeginPopup("Picker")) {
             ImGui.InputText(L10n.Tr("label_search"), ref _searchFilter, 64);
             if (ImGui.MenuItem(L10n.Tr("msg_none"))) onUpdate(default(ShaderAsset));
@@ -1861,11 +2839,12 @@ public unsafe class InspectorWindow : EditorWindow
 
     private void DrawAssetReferenceField(string name, string current, string exts, Action<object?> onUpdate) 
     {
-        ImGui.PushID(name); if (name != "##v") { ImGui.Text(name); ImGui.SameLine(120); }
+        ImGui.PushID(name);
         string btnLabel = string.IsNullOrEmpty(current) ? L10n.Tr("msg_none") : Path.GetFileName(current);
-        if (ImGui.Button($"{btnLabel}##box", new Vector2(-25, 0))) { }
+        if (DrawReferenceSlot(name == "##v" ? null : name, btnLabel, current) && !string.IsNullOrWhiteSpace(current))
+            RevealAssetReference(current);
         if (ImGui.BeginDragDropTarget()) { var p = ImGui.AcceptDragDropPayload("ASSET_PATH"); if (p.Handle != null && EditorSelection.DraggedAssetPath != null) { var ext = Path.GetExtension(EditorSelection.DraggedAssetPath).ToLower(); if (exts.Split(';').Any(e => e.Trim().ToLower() == ext)) onUpdate(EditorSelection.DraggedAssetPath); } ImGui.EndDragDropTarget(); }
-        ImGui.SameLine(); if (ImGui.Button("o##picker", new Vector2(20, 0))) ImGui.OpenPopup("Picker");
+        if (DrawReferencePickerButton()) ImGui.OpenPopup("Picker");
         if (ImGui.BeginPopup("Picker")) {
             ImGui.InputText(L10n.Tr("label_search"), ref _searchFilter, 64);
             if (ImGui.MenuItem(L10n.Tr("msg_none"))) onUpdate(null);
@@ -1883,11 +2862,13 @@ public unsafe class InspectorWindow : EditorWindow
 
     private void DrawComponentReferenceField(string name, Component? current, Type targetType, Action<object?> onUpdate) 
     {
-        ImGui.PushID(name); ImGui.Text(name); ImGui.SameLine(120);
-        string btnLabel = (current == null) ? L10n.Tr("msg_none") : current.Owner.Name;
-        if (ImGui.Button($"{btnLabel}##box", new Vector2(-25, 0))) { }
-        ImGui.SameLine(); if (ImGui.Button("o##picker", new Vector2(20, 0))) ImGui.OpenPopup("Picker");
+        ImGui.PushID(name);
+        string btnLabel = current == null ? L10n.Tr("msg_none") : $"{current.Owner.Name} ({LocalizeTypeName(current.GetType())})";
+        if (DrawReferenceSlot(name, btnLabel) && current != null)
+            RevealComponentReference(current);
+        if (DrawReferencePickerButton()) ImGui.OpenPopup("Picker");
         if (ImGui.BeginPopup("Picker")) {
+            ImGui.InputText(L10n.Tr("label_search"), ref _searchFilter, 64);
             if (ImGui.MenuItem(L10n.Tr("msg_none"))) onUpdate(null);
             if (WorldManager.ActiveWorld != null) foreach (var e in WorldManager.ActiveWorld.GetAllEntities()) {
                 var c = e.GetComponent(targetType);

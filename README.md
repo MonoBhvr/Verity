@@ -77,17 +77,17 @@ dotnet run --project Editor/Verity.Editor.App/Verity.Editor.App.csproj
 
 ---
 
+## 📙 Supporting Language
+- **Korean** (ko)
+- **English** (en)
+
+현지화 형식으로 json파일로 새 언어를 추가할 수 있습니다.(현재는 소스코드 수정을 통해 추가할 수 있습니다. 차후에 엔진 내부에서 언어 패치를 추가할 수 있습니다.)
+
 ## 🚧 Status
 
 Verity Engine은 현재 활발히 개발 중인 Alpha 단계 프로젝트입니다. 핵심 기능들이 지속적으로 추가 및 개선되고 있습니다.
 ### Inprogress...
-- **UI**
-- **Rope**
-- **Fracture**
-- **TileMap**
-- **Sprite Setting**
-- **Animation**
-- **SoundManager**
-- **PostProcessing**
-- **Fluid Simulation**
-- **Networking**
+- **UI** : 현재 개발중. 잔존 기능이 있으나 작동하지 않습니다.
+- **Sprite Setting** : 슬라이싱을 제외한 구현이 완료되었습니다.
+- **Animation** : 테스트가 완료되지 않았습니다.
+- **Networking** : 구현되지 않았습니다.

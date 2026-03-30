@@ -15,7 +15,9 @@ public class SpriteRenderer : Component, IHasSize
         get => _sprite;
         set
         {
-            if (_sprite.Path == value.Path)
+            if (_sprite.Path == value.Path &&
+                _sprite.Guid == value.Guid &&
+                _sprite.SpriteId == value.SpriteId)
                 return;
 
             _sprite = value;
@@ -55,6 +57,18 @@ public class SpriteRenderer : Component, IHasSize
 
     [SerializeField]
     public bool FlipY { get; set; } = false;
+
+    [SerializeField]
+    public bool CastShadows { get; set; } = true;
+
+    [SerializeField]
+    public ShadowCasterSourceMode ShadowSourceMode { get; set; } = ShadowCasterSourceMode.PreferRenderer;
+
+    [SerializeField]
+    public ShadowSelfMode ShadowSelfMode { get; set; } = ShadowSelfMode.ExcludeSelf;
+
+    [SerializeField]
+    public float ShadowAlphaThreshold { get; set; } = 0.5f;
 
     [Button("Apply Native Aspect Ratio")]
     public void ApplyNativeAspectRatio()

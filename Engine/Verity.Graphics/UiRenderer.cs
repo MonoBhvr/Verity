@@ -1,4 +1,5 @@
 using System.Numerics;
+using System.Text.RegularExpressions;
 using Irodori.Framebuffer;
 using Irodori.Texture;
 using Verity.Core.UI;
@@ -46,6 +47,8 @@ public static class UiRenderer
             RenderProgressFill(pipeline, progress, projection, view, targetFbo);
         else if (node is Slider slider)
             RenderSliderHandle(pipeline, slider, projection, view, targetFbo);
+
+        RenderNodeText(pipeline, node, projection, view, targetFbo);
     }
 
     private static TextureObjectUploaded? ResolveTexture(RenderPipeline pipeline, UiNode node)
@@ -95,5 +98,161 @@ public static class UiRenderer
         var model = Matrix4x4.CreateScale(handleSize, handleSize, 1f) * Matrix4x4.CreateTranslation(x, y, 0f);
         if (DefaultSprites.Square != null)
             pipeline.DrawTile(DefaultSprites.Square, model, slider.Visual.ForegroundColor, projection, view, targetFbo);
+    }
+
+    private static void RenderNodeText(RenderPipeline pipeline, UiNode node, Matrix4x4 projection, Matrix4x4 view, FramebufferObject.Uploaded? targetFbo)
+    {
+        if (!TryGetNodeText(node, out var text, out var color, out var wordWrap))
+            return;
+
+        if (string.IsNullOrWhiteSpace(text))
+            return;
+
+        var rect = GetTextRect(node);
+        if (rect.Width <= 0f || rect.Height <= 0f)
+            return;
+
+        var fontSize = ResolveFontSize(node);
+        var horizontal = ResolveHorizontalAlignment(node);
+        var vertical = ResolveVerticalAlignment(node);
+
+        pipeline.DrawText(
+            new TextRenderOptions(
+                text,
+                new System.Numerics.Vector2(rect.X, rect.Y),
+                new System.Numerics.Vector2(rect.Width, rect.Height),
+                color,
+                fontSize,
+                wordWrap,
+                node.Visual.FontPath,
+                node.Visual.FontFamily,
+                horizontal,
+                vertical),
+            projection,
+            view,
+            targetFbo);
+    }
+
+    private static bool TryGetNodeText(UiNode node, out string text, out Color color, out bool wordWrap)
+    {
+        text = string.Empty;
+        color = node.Visual.ForegroundColor;
+        wordWrap = false;
+
+        switch (node)
+        {
+            case Label label:
+                text = label.Text;
+                wordWrap = label.WordWrap;
+                return true;
+            case RichText richText:
+                text = Regex.Replace(richText.Text ?? string.Empty, "<.*?>", string.Empty);
+                wordWrap = richText.WordWrap;
+                return true;
+            case Button button:
+                text = button.Text;
+                return true;
+            case Toggle toggle:
+                text = toggle.Text;
+                return true;
+            case InputField inputField:
+                if (!string.IsNullOrEmpty(inputField.Value))
+                {
+                    text = inputField.Value;
+                    return true;
+                }
+
+                text = inputField.Placeholder;
+                color = WithAlpha(node.Visual.ForegroundColor, 0.55f);
+                return !string.IsNullOrWhiteSpace(text);
+            case TextArea textArea:
+                if (!string.IsNullOrEmpty(textArea.Value))
+                {
+                    text = textArea.Value;
+                    wordWrap = true;
+                    return true;
+                }
+
+                text = textArea.Placeholder;
+                color = WithAlpha(node.Visual.ForegroundColor, 0.55f);
+                wordWrap = true;
+                return !string.IsNullOrWhiteSpace(text);
+            case Dropdown dropdown:
+                if (dropdown.Options.Count == 0)
+                    return false;
+
+                int selected = Math.Clamp(dropdown.SelectedIndex, 0, dropdown.Options.Count - 1);
+                text = dropdown.Options[selected];
+                return true;
+            case Tabs tabs:
+                if (tabs.Titles.Count == 0)
+                    return false;
+
+                int selectedTab = Math.Clamp(tabs.SelectedIndex, 0, tabs.Titles.Count - 1);
+                text = tabs.Titles[selectedTab];
+                return !string.IsNullOrWhiteSpace(text);
+            case Tooltip tooltip:
+                text = tooltip.Text;
+                wordWrap = true;
+                return true;
+            case Window window:
+                text = window.Title;
+                return !string.IsNullOrWhiteSpace(text);
+            default:
+                return false;
+        }
+    }
+
+    private static UiRect GetTextRect(UiNode node)
+    {
+        var rect = node.LayoutRect;
+        var padding = node.Visual.Padding;
+
+        return node switch
+        {
+            Button or Toggle or Dropdown => new UiRect(rect.X + padding.X, rect.Y, Math.Max(0f, rect.Width - padding.X - padding.Z), rect.Height),
+            Tabs => new UiRect(rect.X + padding.X, rect.Y + padding.Y, Math.Max(0f, rect.Width - padding.X - padding.Z), Math.Max(0f, Math.Min(rect.Height, 30f))),
+            Window => new UiRect(rect.X + padding.X, rect.Y + padding.Y, Math.Max(0f, rect.Width - padding.X - padding.Z), Math.Max(0f, Math.Min(rect.Height, 32f))),
+            _ => new UiRect(
+                rect.X + padding.X,
+                rect.Y + padding.Y,
+                Math.Max(0f, rect.Width - padding.X - padding.Z),
+                Math.Max(0f, rect.Height - padding.Y - padding.W))
+        };
+    }
+
+    private static float ResolveFontSize(UiNode node)
+    {
+        return node switch
+        {
+            TextNode textNode when textNode.FontSize > 0f => textNode.FontSize,
+            _ => node.Visual.FontSize > 0f ? node.Visual.FontSize : 16f
+        };
+    }
+
+    private static TextHorizontalAlignment ResolveHorizontalAlignment(UiNode node)
+    {
+        return node switch
+        {
+            Button or Toggle or Dropdown => TextHorizontalAlignment.Center,
+            Tabs => TextHorizontalAlignment.Left,
+            Window => TextHorizontalAlignment.Left,
+            _ => TextHorizontalAlignment.Left
+        };
+    }
+
+    private static TextVerticalAlignment ResolveVerticalAlignment(UiNode node)
+    {
+        return node switch
+        {
+            Button or Toggle or Dropdown or Tooltip or Tabs => TextVerticalAlignment.Middle,
+            InputField => TextVerticalAlignment.Middle,
+            _ => TextVerticalAlignment.Top
+        };
+    }
+
+    private static Color WithAlpha(Color color, float alphaScale)
+    {
+        return new Color(color.R, color.G, color.B, color.A * alphaScale);
     }
 }

@@ -16,6 +16,11 @@ public class TilemapShape : PhysicalShape
     protected override void OnEnable()
     {
         _tilemap = Owner.GetComponent<Tilemap>();
+        if (_tilemap != null)
+        {
+            // Tile collision data is derived runtime state and must be rebuilt after scene load.
+            _tilemap.PhysicsDirty = true;
+        }
     }
 
     private void RebuildShapes()
@@ -99,9 +104,26 @@ public class TilemapShape : PhysicalShape
         _tilemap.PhysicsDirty = false;
     }
 
+    private void EnsureShapesReady()
+    {
+        if (_tilemap == null)
+        {
+            _tilemap = Owner.GetComponent<Tilemap>();
+            if (_tilemap != null)
+            {
+                _tilemap.PhysicsDirty = true;
+            }
+        }
+
+        if (_tilemap != null && (_tilemap.PhysicsDirty || _mergedBoxes.Count == 0))
+        {
+            RebuildShapes();
+        }
+    }
+
     public override AABB GetAABB()
     {
-        if (_tilemap != null && _tilemap.PhysicsDirty) RebuildShapes();
+        EnsureShapesReady();
         if (_mergedBoxes.Count == 0) return new AABB();
 
         Vector2 min = new Vector2(float.MaxValue);
@@ -138,7 +160,7 @@ public class TilemapShape : PhysicalShape
     /// </summary>
     public List<Vector2[]> GetWorldPolygons()
     {
-        if (_tilemap != null && _tilemap.PhysicsDirty) RebuildShapes();
+        EnsureShapesReady();
         
         var worldMatrix = Owner.Transform.GetWorldMatrix();
         var polygons = new List<Vector2[]>();

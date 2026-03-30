@@ -4,11 +4,13 @@
     <LangVersion>latest</LangVersion>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
+    <DefaultItemExcludes>$(DefaultItemExcludes);**/obj_codex/**;**/bin_codex/**</DefaultItemExcludes>
   </PropertyGroup>
 
   <!-- Guard against accidental compilation of generated files under obj/** -->
   <ItemGroup>
     <Compile Remove="$(BaseIntermediateOutputPath)**/*.cs" />
     <Compile Remove="obj/**/*.cs" />
+    <Compile Remove="obj_codex/**/*.cs" />
   </ItemGroup>
 </Project>

@@ -15,6 +15,12 @@ public abstract class PhysicalShape : Component
     [SerializeField, PhysicsGroupSelector]
     public string GroupName { get; set; } = "Default";
 
+    [SerializeField]
+    public bool CastShadows { get; set; } = true;
+
+    [SerializeField]
+    public ShadowSelfMode ShadowSelfMode { get; set; } = ShadowSelfMode.ExcludeSelf;
+
     public ulong GroupMask => Verity.Input.Filter.Get(GroupName)?.Mask ?? Verity.Input.FilterRegistry.GetGroupMask(GroupName);
 
     public Vector2 GetBaseScale()

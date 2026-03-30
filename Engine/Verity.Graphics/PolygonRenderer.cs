@@ -33,6 +33,15 @@ public class PolygonRenderer : Component
     [SerializeField]
     public int OrderInLayer { get; set; } = 0;
 
+    [SerializeField]
+    public bool CastShadows { get; set; } = true;
+
+    [SerializeField]
+    public ShadowCasterSourceMode ShadowSourceMode { get; set; } = ShadowCasterSourceMode.PreferRenderer;
+
+    [SerializeField]
+    public ShadowSelfMode ShadowSelfMode { get; set; } = ShadowSelfMode.ExcludeSelf;
+
     internal int ResolvedLayerIndex => SortingLayer.GetLayerIndex(SortingLayerName);
 
     public Vector2[] GetWorldVertices()

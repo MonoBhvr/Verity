@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Numerics;
 using Hexa.NET.ImGui;
 using Irodori.Backend.OpenGL;
@@ -10,7 +11,14 @@ namespace Verity.Editor.Windows;
 
 public class ScreenWindow : EditorWindow
 {
+    private const double IdleRenderIntervalSeconds = 0.125;
+
     private readonly EditorApp _app;
+    private readonly Stopwatch _renderStopwatch = Stopwatch.StartNew();
+    private double _lastRenderSeconds;
+    private int _lastRenderedWidth;
+    private int _lastRenderedHeight;
+    private bool _hasRenderedFrame;
 
     public ScreenWindow(EditorApp app) : base(L10n.Tr("window_screen"))
     {
@@ -28,24 +36,34 @@ public class ScreenWindow : EditorWindow
 
         _app.RenderPipeline.EnsureScreenFbo(width, height);
 
+        bool sizeChanged = width != _lastRenderedWidth || height != _lastRenderedHeight;
+        var uiEditor = _app.GetWindow<UIEditorWindow>();
+        bool overlayActive = uiEditor is { IsOpen: true, OverlayEnabled: true } && uiEditor.PreviewScreen != null;
+        bool shouldRender = ShouldRenderFrame(sizeChanged, overlayActive);
+
         var world = WorldManager.ActiveWorld;
         Camera? camera = null;
-        if (world != null)
+        if (shouldRender)
         {
-            camera = FindWorldCamera(world);
-            if (camera != null)
-                _app.RenderPipeline.RenderWorld(world, camera, _app.RenderPipeline.ScreenFbo);
+            if (world != null)
+            {
+                camera = FindWorldCamera(world);
+                if (camera != null)
+                    _app.RenderPipeline.RenderWorld(world, camera, _app.RenderPipeline.ScreenFbo);
+                else
+                    _app.Device.Clear(new Verity.Core.Color(0.12f, 0.12f, 0.14f, 1f), _app.RenderPipeline.ScreenFbo);
+            }
             else
                 _app.Device.Clear(new Verity.Core.Color(0.12f, 0.12f, 0.14f, 1f), _app.RenderPipeline.ScreenFbo);
-        }
-        else
-        {
-            _app.Device.Clear(new Verity.Core.Color(0.12f, 0.12f, 0.14f, 1f), _app.RenderPipeline.ScreenFbo);
-        }
 
-        var uiEditor = _app.GetWindow<UIEditorWindow>();
-        if (uiEditor is { IsOpen: true, OverlayEnabled: true } && uiEditor.PreviewScreen != null)
-            UiRenderer.Render(_app.RenderPipeline, uiEditor.PreviewScreen, width, height, _app.RenderPipeline.ScreenFbo);
+            if (overlayActive)
+                UiRenderer.Render(_app.RenderPipeline, uiEditor!.PreviewScreen!, width, height, _app.RenderPipeline.ScreenFbo);
+
+            _lastRenderedWidth = width;
+            _lastRenderedHeight = height;
+            _lastRenderSeconds = _renderStopwatch.Elapsed.TotalSeconds;
+            _hasRenderedFrame = true;
+        }
 
         var colorTex = _app.RenderPipeline.ScreenColorTexture;
         if (colorTex is OpenGlTexture glTex)
@@ -59,6 +77,17 @@ public class ScreenWindow : EditorWindow
             if (camera != null)
                 HandleInteraction(camera, ImGui.GetItemRectMin(), ImGui.GetItemRectSize());
         }
+    }
+
+    private bool ShouldRenderFrame(bool sizeChanged, bool overlayActive)
+    {
+        if (!_hasRenderedFrame || sizeChanged || _app.IsPlaying || overlayActive)
+            return true;
+
+        if (ImGui.IsWindowFocused(ImGuiFocusedFlags.RootAndChildWindows) || ImGui.IsWindowHovered(ImGuiHoveredFlags.RootAndChildWindows))
+            return true;
+
+        return _renderStopwatch.Elapsed.TotalSeconds - _lastRenderSeconds >= IdleRenderIntervalSeconds;
     }
 
     public override void RefreshTitle() { Title = L10n.Tr("window_screen"); }

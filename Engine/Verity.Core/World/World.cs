@@ -43,9 +43,41 @@ public class World
         }
     }
 
+    public void AddToRoot(Entity entity, int index)
+    {
+        if (_entities.Contains(entity))
+        {
+            SetRootIndex(entity, index);
+            return;
+        }
+
+        entity.World = this;
+        int insertIndex = Math.Clamp(index, 0, _entities.Count);
+        _entities.Insert(insertIndex, entity);
+    }
+
     public void RemoveFromRoot(Entity entity)
     {
         _entities.Remove(entity);
+    }
+
+    public int IndexOfRoot(Entity entity)
+    {
+        return _entities.IndexOf(entity);
+    }
+
+    public void SetRootIndex(Entity entity, int index)
+    {
+        int currentIndex = _entities.IndexOf(entity);
+        if (currentIndex < 0)
+            return;
+
+        int clampedIndex = Math.Clamp(index, 0, _entities.Count - 1);
+        if (currentIndex == clampedIndex)
+            return;
+
+        _entities.RemoveAt(currentIndex);
+        _entities.Insert(clampedIndex, entity);
     }
 
     public void DestroyEntity(Entity entity)

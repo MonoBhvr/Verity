@@ -1,0 +1,381 @@
+{
+  "format": 1,
+  "restore": {
+    "D:\\Verity\\Editor\\Verity.Editor.App\\Verity.Editor.App.csproj": {}
+  },
+  "projects": {
+    "D:\\Verity\\Editor\\Verity.Editor.App\\Verity.Editor.App.csproj": {
+      "version": "1.0.0",
+      "restore": {
+        "projectUniqueName": "D:\\Verity\\Editor\\Verity.Editor.App\\Verity.Editor.App.csproj",
+        "projectName": "Verity.Editor.App",
+        "projectPath": "D:\\Verity\\Editor\\Verity.Editor.App\\Verity.Editor.App.csproj",
+        "packagesPath": "C:\\Users\\dlgus\\.nuget\\packages\\",
+        "outputPath": "D:\\Verity\\Editor\\Verity.Editor.App\\obj_codex\\",
+        "projectStyle": "PackageReference",
+        "configFilePaths": [
+          "C:\\Users\\dlgus\\AppData\\Roaming\\NuGet\\NuGet.Config"
+        ],
+        "originalTargetFrameworks": [
+          "net9.0"
+        ],
+        "sources": {
+          "https://api.nuget.org/v3/index.json": {}
+        },
+        "frameworks": {
+          "net9.0": {
+            "targetAlias": "net9.0",
+            "projectReferences": {
+              "D:\\Verity\\Editor\\Verity.Editor\\Verity.Editor.csproj": {
+                "projectPath": "D:\\Verity\\Editor\\Verity.Editor\\Verity.Editor.csproj"
+              }
+            }
+          }
+        },
+        "warningProperties": {
+          "warnAsError": [
+            "NU1605"
+          ]
+        },
+        "restoreAuditProperties": {
+          "enableAudit": "true",
+          "auditLevel": "low",
+          "auditMode": "direct"
+        },
+        "SdkAnalysisLevel": "9.0.200"
+      },
+      "frameworks": {
+        "net9.0": {
+          "targetAlias": "net9.0",
+          "imports": [
+            "net461",
+            "net462",
+            "net47",
+            "net471",
+            "net472",
+            "net48",
+            "net481"
+          ],
+          "assetTargetFallback": true,
+          "warn": true,
+          "frameworkReferences": {
+            "Microsoft.NETCore.App": {
+              "privateAssets": "all"
+            }
+          },
+          "runtimeIdentifierGraphPath": "C:\\Program Files\\dotnet\\sdk\\9.0.203/PortableRuntimeIdentifierGraph.json"
+        }
+      }
+    },
+    "D:\\Verity\\Editor\\Verity.Editor\\Verity.Editor.csproj": {
+      "version": "1.0.0",
+      "restore": {
+        "projectUniqueName": "D:\\Verity\\Editor\\Verity.Editor\\Verity.Editor.csproj",
+        "projectName": "Verity.Editor",
+        "projectPath": "D:\\Verity\\Editor\\Verity.Editor\\Verity.Editor.csproj",
+        "packagesPath": "C:\\Users\\dlgus\\.nuget\\packages\\",
+        "outputPath": "D:\\Verity\\Editor\\Verity.Editor\\obj_codex\\",
+        "projectStyle": "PackageReference",
+        "configFilePaths": [
+          "C:\\Users\\dlgus\\AppData\\Roaming\\NuGet\\NuGet.Config"
+        ],
+        "originalTargetFrameworks": [
+          "net9.0"
+        ],
+        "sources": {
+          "https://api.nuget.org/v3/index.json": {}
+        },
+        "frameworks": {
+          "net9.0": {
+            "targetAlias": "net9.0",
+            "projectReferences": {
+              "D:\\Verity\\Engine\\Verity.Core\\Verity.Core.csproj": {
+                "projectPath": "D:\\Verity\\Engine\\Verity.Core\\Verity.Core.csproj"
+              },
+              "D:\\Verity\\Engine\\Verity.Graphics\\Verity.Graphics.csproj": {
+                "projectPath": "D:\\Verity\\Engine\\Verity.Graphics\\Verity.Graphics.csproj"
+              },
+              "D:\\Verity\\Engine\\Verity.Input\\Verity.Input.csproj": {
+                "projectPath": "D:\\Verity\\Engine\\Verity.Input\\Verity.Input.csproj"
+              }
+            }
+          }
+        },
+        "warningProperties": {
+          "warnAsError": [
+            "NU1605"
+          ]
+        },
+        "restoreAuditProperties": {
+          "enableAudit": "true",
+          "auditLevel": "low",
+          "auditMode": "direct"
+        },
+        "SdkAnalysisLevel": "9.0.200"
+      },
+      "frameworks": {
+        "net9.0": {
+          "targetAlias": "net9.0",
+          "dependencies": {
+            "Hexa.NET.ImGui": {
+              "target": "Package",
+              "version": "[2.2.9, )"
+            },
+            "Hexa.NET.ImGui.Backends": {
+              "target": "Package",
+              "version": "[1.0.18, )"
+            },
+            "Hexa.NET.ImGui.Backends.SDL2": {
+              "target": "Package",
+              "version": "[1.0.18, )"
+            },
+            "Microsoft.CodeAnalysis.CSharp": {
+              "target": "Package",
+              "version": "[4.12.0, )"
+            }
+          },
+          "imports": [
+            "net461",
+            "net462",
+            "net47",
+            "net471",
+            "net472",
+            "net48",
+            "net481"
+          ],
+          "assetTargetFallback": true,
+          "warn": true,
+          "frameworkReferences": {
+            "Microsoft.NETCore.App": {
+              "privateAssets": "all"
+            }
+          },
+          "runtimeIdentifierGraphPath": "C:\\Program Files\\dotnet\\sdk\\9.0.203/PortableRuntimeIdentifierGraph.json"
+        }
+      }
+    },
+    "D:\\Verity\\Engine\\Verity.Core\\Verity.Core.csproj": {
+      "version": "1.0.0",
+      "restore": {
+        "projectUniqueName": "D:\\Verity\\Engine\\Verity.Core\\Verity.Core.csproj",
+        "projectName": "Verity.Core",
+        "projectPath": "D:\\Verity\\Engine\\Verity.Core\\Verity.Core.csproj",
+        "packagesPath": "C:\\Users\\dlgus\\.nuget\\packages\\",
+        "outputPath": "D:\\Verity\\Engine\\Verity.Core\\obj_codex\\",
+        "projectStyle": "PackageReference",
+        "configFilePaths": [
+          "C:\\Users\\dlgus\\AppData\\Roaming\\NuGet\\NuGet.Config"
+        ],
+        "originalTargetFrameworks": [
+          "net9.0"
+        ],
+        "sources": {
+          "https://api.nuget.org/v3/index.json": {}
+        },
+        "frameworks": {
+          "net9.0": {
+            "targetAlias": "net9.0",
+            "projectReferences": {
+              "D:\\Verity\\Engine\\Verity.Input\\Verity.Input.csproj": {
+                "projectPath": "D:\\Verity\\Engine\\Verity.Input\\Verity.Input.csproj"
+              }
+            }
+          }
+        },
+        "warningProperties": {
+          "warnAsError": [
+            "NU1605"
+          ]
+        },
+        "restoreAuditProperties": {
+          "enableAudit": "true",
+          "auditLevel": "low",
+          "auditMode": "direct"
+        },
+        "SdkAnalysisLevel": "9.0.200"
+      },
+      "frameworks": {
+        "net9.0": {
+          "targetAlias": "net9.0",
+          "dependencies": {
+            "SDL2-CS.NetCore": {
+              "target": "Package",
+              "version": "[2.0.8, )"
+            }
+          },
+          "imports": [
+            "net461",
+            "net462",
+            "net47",
+            "net471",
+            "net472",
+            "net48",
+            "net481"
+          ],
+          "assetTargetFallback": true,
+          "warn": true,
+          "frameworkReferences": {
+            "Microsoft.NETCore.App": {
+              "privateAssets": "all"
+            }
+          },
+          "runtimeIdentifierGraphPath": "C:\\Program Files\\dotnet\\sdk\\9.0.203/PortableRuntimeIdentifierGraph.json"
+        }
+      }
+    },
+    "D:\\Verity\\Engine\\Verity.Graphics\\Verity.Graphics.csproj": {
+      "version": "1.0.0",
+      "restore": {
+        "projectUniqueName": "D:\\Verity\\Engine\\Verity.Graphics\\Verity.Graphics.csproj",
+        "projectName": "Verity.Graphics",
+        "projectPath": "D:\\Verity\\Engine\\Verity.Graphics\\Verity.Graphics.csproj",
+        "packagesPath": "C:\\Users\\dlgus\\.nuget\\packages\\",
+        "outputPath": "D:\\Verity\\Engine\\Verity.Graphics\\obj_codex\\",
+        "projectStyle": "PackageReference",
+        "configFilePaths": [
+          "C:\\Users\\dlgus\\AppData\\Roaming\\NuGet\\NuGet.Config"
+        ],
+        "originalTargetFrameworks": [
+          "net9.0"
+        ],
+        "sources": {
+          "https://api.nuget.org/v3/index.json": {}
+        },
+        "frameworks": {
+          "net9.0": {
+            "targetAlias": "net9.0",
+            "projectReferences": {
+              "D:\\Verity\\Engine\\Verity.Core\\Verity.Core.csproj": {
+                "projectPath": "D:\\Verity\\Engine\\Verity.Core\\Verity.Core.csproj"
+              }
+            }
+          }
+        },
+        "warningProperties": {
+          "warnAsError": [
+            "NU1605"
+          ]
+        },
+        "restoreAuditProperties": {
+          "enableAudit": "true",
+          "auditLevel": "low",
+          "auditMode": "direct"
+        },
+        "SdkAnalysisLevel": "9.0.200"
+      },
+      "frameworks": {
+        "net9.0": {
+          "targetAlias": "net9.0",
+          "dependencies": {
+            "Irodori": {
+              "target": "Package",
+              "version": "[0.0.8, )"
+            },
+            "Irodori.Backend.OpenGL": {
+              "target": "Package",
+              "version": "[0.0.8, )"
+            },
+            "StbImageSharp": {
+              "target": "Package",
+              "version": "[2.30.15, )"
+            },
+            "System.Drawing.Common": {
+              "target": "Package",
+              "version": "[9.0.3, )"
+            },
+            "ppy.SDL2-CS": {
+              "target": "Package",
+              "version": "[1.0.82, )"
+            }
+          },
+          "imports": [
+            "net461",
+            "net462",
+            "net47",
+            "net471",
+            "net472",
+            "net48",
+            "net481"
+          ],
+          "assetTargetFallback": true,
+          "warn": true,
+          "frameworkReferences": {
+            "Microsoft.NETCore.App": {
+              "privateAssets": "all"
+            }
+          },
+          "runtimeIdentifierGraphPath": "C:\\Program Files\\dotnet\\sdk\\9.0.203/PortableRuntimeIdentifierGraph.json"
+        }
+      }
+    },
+    "D:\\Verity\\Engine\\Verity.Input\\Verity.Input.csproj": {
+      "version": "1.0.0",
+      "restore": {
+        "projectUniqueName": "D:\\Verity\\Engine\\Verity.Input\\Verity.Input.csproj",
+        "projectName": "Verity.Input",
+        "projectPath": "D:\\Verity\\Engine\\Verity.Input\\Verity.Input.csproj",
+        "packagesPath": "C:\\Users\\dlgus\\.nuget\\packages\\",
+        "outputPath": "D:\\Verity\\Engine\\Verity.Input\\obj_codex\\",
+        "projectStyle": "PackageReference",
+        "configFilePaths": [
+          "C:\\Users\\dlgus\\AppData\\Roaming\\NuGet\\NuGet.Config"
+        ],
+        "originalTargetFrameworks": [
+          "net9.0"
+        ],
+        "sources": {
+          "https://api.nuget.org/v3/index.json": {}
+        },
+        "frameworks": {
+          "net9.0": {
+            "targetAlias": "net9.0",
+            "projectReferences": {}
+          }
+        },
+        "warningProperties": {
+          "warnAsError": [
+            "NU1605"
+          ]
+        },
+        "restoreAuditProperties": {
+          "enableAudit": "true",
+          "auditLevel": "low",
+          "auditMode": "direct"
+        },
+        "SdkAnalysisLevel": "9.0.200"
+      },
+      "frameworks": {
+        "net9.0": {
+          "targetAlias": "net9.0",
+          "dependencies": {
+            "System.Text.Json": {
+              "target": "Package",
+              "version": "[9.0.2, )"
+            },
+            "ppy.SDL2-CS": {
+              "target": "Package",
+              "version": "[1.0.82, )"
+            }
+          },
+          "imports": [
+            "net461",
+            "net462",
+            "net47",
+            "net471",
+            "net472",
+            "net48",
+            "net481"
+          ],
+          "assetTargetFallback": true,
+          "warn": true,
+          "frameworkReferences": {
+            "Microsoft.NETCore.App": {
+              "privateAssets": "all"
+            }
+          },
+          "runtimeIdentifierGraphPath": "C:\\Program Files\\dotnet\\sdk\\9.0.203/PortableRuntimeIdentifierGraph.json"
+        }
+      }
+    }
+  }
+}

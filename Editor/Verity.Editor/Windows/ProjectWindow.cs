@@ -37,7 +37,17 @@ public unsafe class ProjectWindow : EditorWindow
     private string? _cachedBrowserDirectory;
     private string[] _cachedBrowserDirectories = Array.Empty<string>();
     private string[] _cachedBrowserFiles = Array.Empty<string>();
+    private string? _cachedBrowserItemsDirectory;
+    private List<BrowserItem> _cachedBrowserItems = [];
     private readonly Dictionary<string, string[]> _cachedTreeDirectories = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, CachedTexturePreview> _cachedTexturePreviews = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, CachedSpritePreview> _cachedSpritePreviews = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, CachedBlueprintPreviewSprite> _cachedBlueprintPreviewSprites = new(StringComparer.OrdinalIgnoreCase);
+    private string? _pendingRevealAssetPath;
+    private string? _pendingRevealSpriteId;
+    private readonly HashSet<string> _selectedBrowserItemKeys = new(StringComparer.OrdinalIgnoreCase);
+    private string? _browserSelectionAnchorKey;
+    private List<BrowserItem> _visibleBrowserItems = [];
 
     private enum ModalMode
     {
@@ -93,6 +103,10 @@ public unsafe class ProjectWindow : EditorWindow
         public int Height { get; }
     }
 
+    private readonly record struct CachedTexturePreview(DateTime AssetWriteTimeUtc, BrowserPreview Preview);
+    private readonly record struct CachedSpritePreview(DateTime AssetWriteTimeUtc, DateTime MetaWriteTimeUtc, BrowserPreview Preview);
+    private readonly record struct CachedBlueprintPreviewSprite(DateTime AssetWriteTimeUtc, Sprite Sprite, bool HasPreview);
+
     private readonly struct BrowserItem
     {
         public BrowserItem(BrowserItemKind kind, string assetPath, string title, string subtitle, string? spriteId = null)
@@ -139,15 +153,16 @@ public unsafe class ProjectWindow : EditorWindow
         ImGui.Separator();
 
         ImGui.Columns(2, "ProjectBrowserColumns", true);
+        _leftPanelWidth = MathF.Max(160f, _leftPanelWidth);
         ImGui.SetColumnWidth(0, _leftPanelWidth);
 
         DrawFolderTreePanel();
+        _leftPanelWidth = MathF.Max(160f, ImGui.GetColumnWidth(0));
         ImGui.NextColumn();
         DrawBrowserToolbar();
         DrawBrowserPanel();
         DrawZoomFooter();
 
-        _leftPanelWidth = ImGui.GetColumnWidth(0);
         ImGui.Columns(1);
     }
 
@@ -182,6 +197,17 @@ public unsafe class ProjectWindow : EditorWindow
         }
 
         DrawDirectoryNode(_app.AssetsPath!, true);
+
+        Vector2 remaining = ImGui.GetContentRegionAvail();
+        float fillHeight = MathF.Max(remaining.Y, 80f);
+        float fillWidth = MathF.Max(remaining.X, 1f);
+        ImGui.InvisibleButton("##ProjectFolderTreeBackground", new Vector2(MathF.Max(1f, fillWidth), MathF.Max(1f, fillHeight)));
+        if (ImGui.BeginDragDropTarget())
+        {
+            HandleBrowserDropTarget(GetFolderTreeDropDirectory());
+            ImGui.EndDragDropTarget();
+        }
+
         ImGui.EndChild();
     }
 
@@ -242,7 +268,8 @@ public unsafe class ProjectWindow : EditorWindow
             return;
         }
 
-        var items = BuildBrowserItems();
+        var items = GetBrowserItems();
+        _visibleBrowserItems = items;
         switch (GetBrowserViewMode())
         {
             case BrowserViewMode.Details:
@@ -259,35 +286,17 @@ public unsafe class ProjectWindow : EditorWindow
         Vector2 remaining = ImGui.GetContentRegionAvail();
         float fillHeight = MathF.Max(remaining.Y, 80f);
         float fillWidth = MathF.Max(remaining.X, 1f);
-        ImGui.InvisibleButton("##ProjectBrowserBackground", new Vector2(fillWidth, fillHeight));
+        ImGui.InvisibleButton("##ProjectBrowserBackground", new Vector2(MathF.Max(1f, fillWidth), MathF.Max(1f, fillHeight)));
 
         if (ImGui.IsItemClicked(ImGuiMouseButton.Left))
         {
-            _selectedFolderPath = null;
+            ClearBrowserSelection();
             _contextDirectory = _currentDirectory;
-            EditorSelection.ClearAssetSelection();
-            EditorSelection.SelectedEntity = null;
         }
 
         if (ImGui.BeginDragDropTarget())
         {
-            unsafe
-            {
-                var assetPayload = ImGui.AcceptDragDropPayload("ASSET_PATH");
-                if (assetPayload.Handle != null && EditorSelection.DraggedAssetPath != null && EditorSelection.DraggedSpriteAsset == null)
-                {
-                    MoveAsset(EditorSelection.DraggedAssetPath, _currentDirectory!);
-                    EditorSelection.ClearAssetDrag();
-                }
-
-                var entityPayload = ImGui.AcceptDragDropPayload("HIERARCHY_ENTITIES");
-                if (entityPayload.Handle != null)
-                {
-                    foreach (var ent in EditorSelection.SelectedEntities)
-                        _app.SaveEntityAsBlueprint(ent, _currentDirectory!);
-                    EditorSelection.DraggedEntity = null;
-                }
-            }
+            HandleBrowserDropTarget(_currentDirectory!);
 
             ImGui.EndDragDropTarget();
         }
@@ -300,7 +309,7 @@ public unsafe class ProjectWindow : EditorWindow
             ImGui.Separator();
             if (ImGui.MenuItem(L10n.Tr("menu_show_in_explorer")))
                 Process.Start("explorer.exe", _currentDirectory!.Replace("/", "\\"));
-            if (ImGui.MenuItem("Reload"))
+            if (ImGui.MenuItem(L10n.Tr("btn_reload")))
                 ReloadProjectBrowser();
             ImGui.EndPopup();
         }
@@ -403,6 +412,18 @@ public unsafe class ProjectWindow : EditorWindow
         return items;
     }
 
+    private List<BrowserItem> GetBrowserItems()
+    {
+        string normalized = NormalizePath(_currentDirectory!);
+        if (!string.Equals(_cachedBrowserItemsDirectory, normalized, StringComparison.OrdinalIgnoreCase))
+        {
+            _cachedBrowserItemsDirectory = normalized;
+            _cachedBrowserItems = BuildBrowserItems();
+        }
+
+        return _cachedBrowserItems;
+    }
+
     private void DrawBrowserItemsDetails(List<BrowserItem> items)
     {
         foreach (var item in items)
@@ -445,13 +466,17 @@ public unsafe class ProjectWindow : EditorWindow
     {
         string normalized = NormalizePath(path);
         string name = Path.GetFileName(path);
-        bool selected = string.Equals(_selectedFolderPath, normalized, StringComparison.OrdinalIgnoreCase);
+        var item = new BrowserItem(BrowserItemKind.Folder, normalized, name, ToProjectDisplayPath(normalized));
+        bool selected = IsBrowserItemSelected(item);
         var row = BeginBrowserRow($"folder_{normalized}", selected, 0f);
 
         if (row.Clicked)
-            SelectFolder(normalized);
+            HandleBrowserItemClick(item);
         if (row.DoubleClicked)
+        {
+            EnsureBrowserItemSelected(item);
             NavigateToDirectory(normalized, true);
+        }
 
         if (ImGui.BeginDragDropSource())
         {
@@ -463,30 +488,14 @@ public unsafe class ProjectWindow : EditorWindow
 
         if (ImGui.BeginDragDropTarget())
         {
-            unsafe
-            {
-                var assetPayload = ImGui.AcceptDragDropPayload("ASSET_PATH");
-                if (assetPayload.Handle != null && EditorSelection.DraggedAssetPath != null && EditorSelection.DraggedSpriteAsset == null)
-                {
-                    MoveAsset(EditorSelection.DraggedAssetPath, normalized);
-                    EditorSelection.ClearAssetDrag();
-                }
-
-                var entityPayload = ImGui.AcceptDragDropPayload("HIERARCHY_ENTITIES");
-                if (entityPayload.Handle != null)
-                {
-                    foreach (var ent in EditorSelection.SelectedEntities)
-                        _app.SaveEntityAsBlueprint(ent, normalized);
-                    EditorSelection.DraggedEntity = null;
-                }
-            }
+            HandleBrowserDropTarget(normalized);
 
             ImGui.EndDragDropTarget();
         }
 
         if (ImGui.BeginPopupContextItem("FolderBrowserContext"))
         {
-            SelectFolder(normalized);
+            EnsureBrowserItemSelected(item);
             _creationShaderPath = null;
             if (ImGui.MenuItem(L10n.Tr("menu_show_in_explorer")))
                 Process.Start("explorer.exe", normalized.Replace("/", "\\"));
@@ -504,6 +513,7 @@ public unsafe class ProjectWindow : EditorWindow
 
         DrawFolderPreview(row.PreviewPosition, row.PreviewSize);
         DrawBrowserRowText(row, name, ToProjectDisplayPath(normalized));
+        MaybeScrollToBrowserItem(item);
         EndBrowserRow();
     }
 
@@ -511,7 +521,6 @@ public unsafe class ProjectWindow : EditorWindow
     {
         string normalized = NormalizePath(path);
         string fileName = Path.GetFileName(path);
-        bool selected = string.Equals(EditorSelection.SelectedAssetPath, normalized, StringComparison.OrdinalIgnoreCase) && EditorSelection.SelectedSpriteAsset == null;
         string subtitle = Path.GetExtension(path).ToUpperInvariant();
 
         SpriteImportSettings? spriteImport = null;
@@ -522,12 +531,17 @@ public unsafe class ProjectWindow : EditorWindow
                 subtitle = L10n.Tr("label_slice_count", spriteImport.Slices.Count);
         }
 
+        var item = new BrowserItem(BrowserItemKind.File, normalized, fileName, subtitle);
+        bool selected = IsBrowserItemSelected(item);
         var row = BeginBrowserRow($"file_{normalized}", selected, 0f);
 
         if (row.Clicked)
-            SelectAsset(normalized);
+            HandleBrowserItemClick(item);
         if (row.DoubleClicked)
+        {
+            EnsureBrowserItemSelected(item);
             OnAssetDoubleClicked(normalized);
+        }
 
         if (ImGui.BeginDragDropSource())
         {
@@ -539,7 +553,7 @@ public unsafe class ProjectWindow : EditorWindow
 
         if (ImGui.BeginPopupContextItem("FileBrowserContext"))
         {
-            SelectAsset(normalized);
+            EnsureBrowserItemSelected(item);
             string parentDir = NormalizePath(Path.GetDirectoryName(path)!);
             _contextDirectory = parentDir;
             _creationShaderPath = path.EndsWith(".shader", StringComparison.OrdinalIgnoreCase) && _app.ProjectPath != null
@@ -559,8 +573,15 @@ public unsafe class ProjectWindow : EditorWindow
             ImGui.EndPopup();
         }
 
+        if (ImGui.BeginDragDropTarget())
+        {
+            HandleBrowserDropTarget(NormalizePath(Path.GetDirectoryName(path)!));
+            ImGui.EndDragDropTarget();
+        }
+
         DrawFilePreview(normalized, row.PreviewPosition, row.PreviewSize);
         DrawBrowserRowText(row, fileName, subtitle);
+        MaybeScrollToBrowserItem(item);
         EndBrowserRow();
 
         if (spriteImport is { SpriteMode: SpriteImportMode.Multiple, Slices.Count: > 0 })
@@ -573,15 +594,13 @@ public unsafe class ProjectWindow : EditorWindow
     private void DrawSpriteBrowserItem(string assetPath, SpriteSlice slice)
     {
         string normalized = NormalizePath(assetPath);
-        bool selected = EditorSelection.SelectedSpriteAsset.HasValue &&
-                        string.Equals(NormalizePath(EditorSelection.SelectedSpriteAsset.Value.Path), normalized, StringComparison.OrdinalIgnoreCase) &&
-                        string.Equals(EditorSelection.SelectedSpriteAsset.Value.SpriteId, slice.Id, StringComparison.OrdinalIgnoreCase);
-
         string subtitle = $"{slice.Width} x {slice.Height}";
+        var item = new BrowserItem(BrowserItemKind.Sprite, normalized, slice.Name, subtitle, slice.Id);
+        bool selected = IsBrowserItemSelected(item);
         var row = BeginBrowserRow($"sprite_{normalized}_{slice.Id}", selected, 24f);
 
         if (row.Clicked)
-            SelectSprite(normalized, slice.Id);
+            HandleBrowserItemClick(item);
 
         if (ImGui.BeginDragDropSource())
         {
@@ -594,7 +613,7 @@ public unsafe class ProjectWindow : EditorWindow
 
         if (ImGui.BeginPopupContextItem("SpriteBrowserContext"))
         {
-            SelectSprite(normalized, slice.Id);
+            EnsureBrowserItemSelected(item);
             if (ImGui.MenuItem(L10n.Tr("btn_rename")))
                 OpenRenamePopup(_app.CreateSpriteReference(normalized, slice.Id));
             if (ImGui.MenuItem(L10n.Tr("ctx_duplicate")))
@@ -616,6 +635,7 @@ public unsafe class ProjectWindow : EditorWindow
 
         DrawSpritePreview(_app.CreateSpriteReference(normalized, slice.Id), row.PreviewPosition, row.PreviewSize);
         DrawBrowserRowText(row, slice.Name, subtitle);
+        MaybeScrollToBrowserItem(item);
         EndBrowserRow();
     }
 
@@ -653,7 +673,7 @@ public unsafe class ProjectWindow : EditorWindow
     private void DrawBrowserItemCard(BrowserItem item, float width, float height, bool previewOnTop)
     {
         ImGui.PushID($"card_{item.Kind}_{item.AssetPath}_{item.SpriteId}");
-        Vector2 size = new(MathF.Max(40f, width), height);
+        Vector2 size = new(MathF.Max(1f, MathF.Max(40f, width)), MathF.Max(1f, height));
         ImGui.InvisibleButton("##card", size);
         bool hovered = ImGui.IsItemHovered();
         bool clicked = hovered && ImGui.IsMouseReleased(ImGuiMouseButton.Left);
@@ -698,8 +718,67 @@ public unsafe class ProjectWindow : EditorWindow
             ImGui.EndDragDropSource();
         }
 
+        if (ImGui.BeginDragDropTarget())
+        {
+            HandleBrowserDropTarget(GetDropDirectoryForItem(item));
+            ImGui.EndDragDropTarget();
+        }
+
         DrawBrowserItemContextMenu(item);
+        MaybeScrollToBrowserItem(item);
         ImGui.PopID();
+    }
+
+    private void HandleBrowserDropTarget(string targetDirectory)
+    {
+        unsafe
+        {
+            var assetPayload = ImGui.AcceptDragDropPayload("ASSET_PATH");
+            if (assetPayload.Handle != null && EditorSelection.DraggedAssetPath != null && EditorSelection.DraggedSpriteAsset == null)
+            {
+                MoveAsset(EditorSelection.DraggedAssetPath, targetDirectory);
+                EditorSelection.ClearAssetDrag();
+            }
+
+            var entityPayload = ImGui.AcceptDragDropPayload("HIERARCHY_ENTITIES");
+            if (entityPayload.Handle != null)
+            {
+                var draggedEntities = EditorSelection.SelectedEntities.Count > 0
+                    ? EditorSelection.SelectedEntities.ToArray()
+                    : EditorSelection.DraggedEntity != null
+                        ? [EditorSelection.DraggedEntity]
+                        : [];
+
+                foreach (var ent in draggedEntities)
+                {
+                    if (ent != null)
+                        _app.SaveEntityAsBlueprint(ent, targetDirectory);
+                }
+
+                if (draggedEntities.Length > 0)
+                    ReloadProjectBrowser();
+
+                EditorSelection.DraggedEntity = null;
+            }
+        }
+    }
+
+    private string GetDropDirectoryForItem(BrowserItem item)
+    {
+        if (item.Kind == BrowserItemKind.Folder)
+            return item.AssetPath;
+
+        string? parent = Path.GetDirectoryName(item.AssetPath);
+        return string.IsNullOrWhiteSpace(parent) ? _currentDirectory! : NormalizePath(parent);
+    }
+
+    private string GetFolderTreeDropDirectory()
+    {
+        if (!string.IsNullOrWhiteSpace(_selectedFolderPath))
+            return _selectedFolderPath;
+        if (!string.IsNullOrWhiteSpace(_currentDirectory))
+            return _currentDirectory;
+        return NormalizePath(_app.AssetsPath!);
     }
 
     private void DrawCardTextCentered(Vector2 min, float width, float textY, string title, string subtitle)
@@ -715,6 +794,9 @@ public unsafe class ProjectWindow : EditorWindow
 
     private bool IsBrowserItemSelected(BrowserItem item)
     {
+        if (_selectedBrowserItemKeys.Count > 0)
+            return _selectedBrowserItemKeys.Contains(GetBrowserItemKey(item));
+
         return item.Kind switch
         {
             BrowserItemKind.Folder => string.Equals(_selectedFolderPath, item.AssetPath, StringComparison.OrdinalIgnoreCase),
@@ -728,18 +810,199 @@ public unsafe class ProjectWindow : EditorWindow
 
     private void ActivateBrowserItem(BrowserItem item)
     {
+        SelectOnlyBrowserItem(item);
+    }
+
+    private void HandleBrowserItemClick(BrowserItem item)
+    {
+        var io = ImGui.GetIO();
+        string key = GetBrowserItemKey(item);
+
+        if (io.KeyShift)
+        {
+            SelectBrowserItemRange(item, additive: io.KeyCtrl);
+            return;
+        }
+
+        if (io.KeyCtrl)
+        {
+            if (!_selectedBrowserItemKeys.Remove(key))
+            {
+                _selectedBrowserItemKeys.Add(key);
+                ApplyPrimaryBrowserItem(item);
+            }
+            else
+            {
+                ApplyPrimaryBrowserSelection();
+            }
+
+            _browserSelectionAnchorKey = key;
+            return;
+        }
+
+        SelectOnlyBrowserItem(item);
+    }
+
+    private void EnsureBrowserItemSelected(BrowserItem item)
+    {
+        if (IsBrowserItemSelected(item))
+            return;
+
+        SelectOnlyBrowserItem(item);
+    }
+
+    private void SelectOnlyBrowserItem(BrowserItem item)
+    {
+        _selectedBrowserItemKeys.Clear();
+        _selectedBrowserItemKeys.Add(GetBrowserItemKey(item));
+        _browserSelectionAnchorKey = GetBrowserItemKey(item);
+        ApplyPrimaryBrowserItem(item);
+    }
+
+    private void SelectBrowserItemRange(BrowserItem item, bool additive)
+    {
+        if (_visibleBrowserItems.Count == 0)
+        {
+            SelectOnlyBrowserItem(item);
+            return;
+        }
+
+        string anchorKey = _browserSelectionAnchorKey ?? GetBrowserItemKey(item);
+        int start = _visibleBrowserItems.FindIndex(value => string.Equals(GetBrowserItemKey(value), anchorKey, StringComparison.OrdinalIgnoreCase));
+        int end = _visibleBrowserItems.FindIndex(value => string.Equals(GetBrowserItemKey(value), GetBrowserItemKey(item), StringComparison.OrdinalIgnoreCase));
+        if (start < 0 || end < 0)
+        {
+            SelectOnlyBrowserItem(item);
+            return;
+        }
+
+        if (!additive)
+            _selectedBrowserItemKeys.Clear();
+
+        for (int i = Math.Min(start, end); i <= Math.Max(start, end); i++)
+            _selectedBrowserItemKeys.Add(GetBrowserItemKey(_visibleBrowserItems[i]));
+
+        ApplyPrimaryBrowserItem(item);
+    }
+
+    private void ApplyPrimaryBrowserSelection()
+    {
+        BrowserItem? primary = null;
+        foreach (var item in _visibleBrowserItems)
+        {
+            if (_selectedBrowserItemKeys.Contains(GetBrowserItemKey(item)))
+                primary = item;
+        }
+
+        if (primary.HasValue)
+        {
+            ApplyPrimaryBrowserItem(primary.Value);
+            return;
+        }
+
+        ClearBrowserSelection();
+    }
+
+    private void ApplyPrimaryBrowserItem(BrowserItem item)
+    {
         switch (item.Kind)
         {
             case BrowserItemKind.Folder:
-                SelectFolder(item.AssetPath);
+                _selectedFolderPath = item.AssetPath;
+                _contextDirectory = item.AssetPath;
+                EditorSelection.ClearAssetSelection();
                 break;
             case BrowserItemKind.File:
-                SelectAsset(item.AssetPath);
+                _selectedFolderPath = null;
+                _contextDirectory = NormalizePath(Path.GetDirectoryName(item.AssetPath)!);
+                EditorSelection.SelectAsset(item.AssetPath);
                 break;
             case BrowserItemKind.Sprite:
-                SelectSprite(item.AssetPath, item.SpriteId);
+                _selectedFolderPath = null;
+                _contextDirectory = NormalizePath(Path.GetDirectoryName(item.AssetPath)!);
+                EditorSelection.SelectSpriteAsset(_app.CreateSpriteReference(item.AssetPath, item.SpriteId));
                 break;
         }
+
+        EditorSelection.SelectedEntity = null;
+    }
+
+    private void ClearBrowserSelection()
+    {
+        _selectedBrowserItemKeys.Clear();
+        _browserSelectionAnchorKey = null;
+        _selectedFolderPath = null;
+        EditorSelection.ClearAssetSelection();
+        EditorSelection.SelectedEntity = null;
+    }
+
+    private static string GetBrowserItemKey(BrowserItem item)
+    {
+        return item.Kind == BrowserItemKind.Sprite
+            ? $"{item.Kind}:{item.AssetPath}:{item.SpriteId}"
+            : $"{item.Kind}:{item.AssetPath}";
+    }
+
+    public void RevealAsset(string path)
+    {
+        RevealBrowserItem(NormalizePath(path), null);
+    }
+
+    public void RevealSprite(string assetPath, string spriteId)
+    {
+        RevealBrowserItem(NormalizePath(assetPath), spriteId);
+    }
+
+    private void RevealBrowserItem(string assetPath, string? spriteId)
+    {
+        string normalized = NormalizePath(assetPath);
+        string? directory = Path.GetDirectoryName(normalized);
+        if (!string.IsNullOrWhiteSpace(directory) && Directory.Exists(directory))
+        {
+            _currentDirectory = NormalizePath(directory);
+            _contextDirectory = _currentDirectory;
+            _pathBarBuffer = ToProjectDisplayPath(_currentDirectory);
+        }
+
+        _selectedFolderPath = null;
+        _pendingRevealAssetPath = normalized;
+        _pendingRevealSpriteId = string.IsNullOrWhiteSpace(spriteId) ? null : spriteId;
+
+        if (string.IsNullOrWhiteSpace(spriteId))
+            SelectAsset(normalized);
+        else
+            SelectSprite(normalized, spriteId);
+    }
+
+    private void MaybeScrollToBrowserItem(BrowserItem item)
+    {
+        if (!ShouldScrollToBrowserItem(item))
+            return;
+
+        ImGui.SetScrollHereY(0.35f);
+    }
+
+    private bool ShouldScrollToBrowserItem(BrowserItem item)
+    {
+        if (string.IsNullOrWhiteSpace(_pendingRevealAssetPath))
+            return false;
+
+        if (!string.Equals(item.AssetPath, _pendingRevealAssetPath, StringComparison.OrdinalIgnoreCase))
+            return false;
+
+        if (item.Kind == BrowserItemKind.Sprite)
+        {
+            if (!string.Equals(item.SpriteId, _pendingRevealSpriteId, StringComparison.OrdinalIgnoreCase))
+                return false;
+        }
+        else if (!string.IsNullOrWhiteSpace(_pendingRevealSpriteId))
+        {
+            return false;
+        }
+
+        _pendingRevealAssetPath = null;
+        _pendingRevealSpriteId = null;
+        return true;
     }
 
     private void OpenBrowserItem(BrowserItem item)
@@ -849,7 +1112,7 @@ public unsafe class ProjectWindow : EditorWindow
         float rowHeight = MathF.Max(42f, _thumbnailSize + 14f);
         ImGui.PushID(id);
         float rowWidth = MathF.Max(1f, ImGui.GetContentRegionAvail().X);
-        ImGui.InvisibleButton("##row", new Vector2(rowWidth, rowHeight));
+        ImGui.InvisibleButton("##row", new Vector2(MathF.Max(1f, rowWidth), MathF.Max(1f, rowHeight)));
         bool hovered = ImGui.IsItemHovered();
         bool clicked = hovered && ImGui.IsMouseReleased(ImGuiMouseButton.Left);
         bool doubleClicked = hovered && ImGui.IsMouseDoubleClicked(ImGuiMouseButton.Left);
@@ -911,9 +1174,30 @@ public unsafe class ProjectWindow : EditorWindow
 
     private void DrawFilePreview(string path, Vector2 position, float size)
     {
+        if (path.EndsWith(".verity", StringComparison.OrdinalIgnoreCase) &&
+            TryGetFullTexturePreview(_app.EditorLogoPath, out var worldPreview))
+        {
+            DrawTexturePreview(worldPreview, position, size);
+            return;
+        }
+
+        if (IsTileAsset(path) && TryGetTilePreviewSprite(path, out var tileSprite))
+        {
+            DrawSpritePreview(tileSprite, position, size);
+            return;
+        }
+
         if (IsImageAsset(path) && TryGetFullTexturePreview(path, out var preview))
         {
             DrawTexturePreview(preview, position, size);
+            return;
+        }
+
+        if (path.EndsWith(".blueprint", StringComparison.OrdinalIgnoreCase) &&
+            TryGetCachedBlueprintPreviewSprite(path, out Sprite blueprintSprite) &&
+            TryGetSpritePreview(blueprintSprite, out var blueprintPreview))
+        {
+            DrawTexturePreview(blueprintPreview, position, size);
             return;
         }
 
@@ -963,14 +1247,22 @@ public unsafe class ProjectWindow : EditorWindow
     private bool TryGetFullTexturePreview(string assetPath, out BrowserPreview preview)
     {
         preview = default;
+        string normalized = NormalizePath(assetPath);
+        DateTime assetWriteTimeUtc = GetFileWriteTimeUtc(normalized);
+        if (_cachedTexturePreviews.TryGetValue(normalized, out var cached) &&
+            cached.AssetWriteTimeUtc == assetWriteTimeUtc)
+        {
+            preview = cached.Preview;
+            return true;
+        }
+
         try
         {
-            var sprite = _app.CreateSpriteReference(assetPath);
-            var texture = _app.LoadSpriteTexture(sprite);
-            if (texture == null)
-                return false;
+            SpriteImportSettings? settings = _app.TryGetSpriteImportSettings(normalized, false);
+            var texture = _app.TextureManager.Load(normalized, settings?.Filter ?? SpriteTextureFilter.Point);
 
             preview = new BrowserPreview(texture, new Vector2(0, 1), new Vector2(1, 0), texture.Width, texture.Height);
+            _cachedTexturePreviews[normalized] = new CachedTexturePreview(assetWriteTimeUtc, preview);
             return true;
         }
         catch
@@ -991,20 +1283,81 @@ public unsafe class ProjectWindow : EditorWindow
             if (!File.Exists(fullPath))
                 return false;
 
-            var texture = _app.LoadSpriteTexture(sprite);
-            if (texture == null)
-                return false;
+            string normalized = NormalizePath(fullPath);
+            string cacheKey = string.IsNullOrWhiteSpace(sprite.SpriteId)
+                ? normalized
+                : $"{normalized}::{sprite.SpriteId}";
+            DateTime assetWriteTimeUtc = GetFileWriteTimeUtc(normalized);
+            DateTime metaWriteTimeUtc = GetFileWriteTimeUtc(AssetPathUtility.GetMetaPath(normalized));
+            if (_cachedSpritePreviews.TryGetValue(cacheKey, out var cached) &&
+                cached.AssetWriteTimeUtc == assetWriteTimeUtc &&
+                cached.MetaWriteTimeUtc == metaWriteTimeUtc)
+            {
+                preview = cached.Preview;
+                return true;
+            }
 
-            var slice = _app.ResolveSpriteSlice(sprite);
+            SpriteImportSettings? settings = _app.TryGetSpriteImportSettings(normalized, false);
+            var texture = _app.TextureManager.Load(normalized, settings?.Filter ?? SpriteTextureFilter.Point);
+            var resolvedSprite = new Sprite(AssetPathUtility.Normalize(normalized), sprite.Guid, sprite.SpriteId);
+            var slice = AssetPathUtility.ResolveSpriteSlice(normalized, resolvedSprite, texture.Width, texture.Height);
             Vector2 uvMin = new(slice.X / (float)Math.Max(1, texture.Width), 1f - (slice.Y / (float)Math.Max(1, texture.Height)));
             Vector2 uvMax = new((slice.X + slice.Width) / (float)Math.Max(1, texture.Width), 1f - ((slice.Y + slice.Height) / (float)Math.Max(1, texture.Height)));
             preview = new BrowserPreview(texture, uvMin, uvMax, slice.Width, slice.Height);
+            _cachedSpritePreviews[cacheKey] = new CachedSpritePreview(assetWriteTimeUtc, metaWriteTimeUtc, preview);
             return true;
         }
         catch
         {
             return false;
         }
+    }
+
+    private bool TryGetCachedBlueprintPreviewSprite(string path, out Sprite sprite)
+    {
+        string normalized = NormalizePath(path);
+        DateTime assetWriteTimeUtc = GetFileWriteTimeUtc(normalized);
+        if (_cachedBlueprintPreviewSprites.TryGetValue(normalized, out var cached) &&
+            cached.AssetWriteTimeUtc == assetWriteTimeUtc)
+        {
+            sprite = cached.Sprite;
+            return cached.HasPreview;
+        }
+
+        bool hasPreview = _app.TryGetBlueprintPreviewSprite(normalized, out sprite);
+        _cachedBlueprintPreviewSprites[normalized] = new CachedBlueprintPreviewSprite(assetWriteTimeUtc, sprite, hasPreview);
+        return hasPreview;
+    }
+
+    private static DateTime GetFileWriteTimeUtc(string path)
+    {
+        return File.Exists(path) ? File.GetLastWriteTimeUtc(path) : DateTime.MinValue;
+    }
+
+    private static bool IsTileAsset(string path)
+    {
+        return path.EndsWith(".tile", StringComparison.OrdinalIgnoreCase) ||
+               path.EndsWith(".animtile", StringComparison.OrdinalIgnoreCase) ||
+               path.EndsWith(".ruletile", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private bool TryGetTilePreviewSprite(string path, out Sprite sprite)
+    {
+        sprite = default;
+        TileBase? tile = TileAssetCache.Load(path, assetRootPath: _app.ProjectPath);
+        Sprite? previewSprite = tile switch
+        {
+            Tile simpleTile => simpleTile.Sprite,
+            AnimatedTile animatedTile => animatedTile.Sprites.FirstOrDefault(),
+            RuleTile ruleTile => ruleTile.DefaultSprite ?? ruleTile.Rules.Select(rule => rule.Sprite).FirstOrDefault(value => value.HasValue),
+            _ => null
+        };
+
+        if (!previewSprite.HasValue || string.IsNullOrWhiteSpace(previewSprite.Value.Path))
+            return false;
+
+        sprite = previewSprite.Value;
+        return true;
     }
 
     private void DrawDirectoryNode(string path, bool isRoot)
@@ -1033,23 +1386,7 @@ public unsafe class ProjectWindow : EditorWindow
 
         if (ImGui.BeginDragDropTarget())
         {
-            unsafe
-            {
-                var assetPayload = ImGui.AcceptDragDropPayload("ASSET_PATH");
-                if (assetPayload.Handle != null && EditorSelection.DraggedAssetPath != null && EditorSelection.DraggedSpriteAsset == null)
-                {
-                    MoveAsset(EditorSelection.DraggedAssetPath, normalized);
-                    EditorSelection.ClearAssetDrag();
-                }
-
-                var entityPayload = ImGui.AcceptDragDropPayload("HIERARCHY_ENTITIES");
-                if (entityPayload.Handle != null)
-                {
-                    foreach (var ent in EditorSelection.SelectedEntities)
-                        _app.SaveEntityAsBlueprint(ent, normalized);
-                    EditorSelection.DraggedEntity = null;
-                }
-            }
+            HandleBrowserDropTarget(normalized);
 
             ImGui.EndDragDropTarget();
         }
@@ -1179,26 +1516,38 @@ public unsafe class ProjectWindow : EditorWindow
 
     private void SelectFolder(string path)
     {
-        _selectedFolderPath = NormalizePath(path);
-        _contextDirectory = _selectedFolderPath;
-        EditorSelection.ClearAssetSelection();
-        EditorSelection.SelectedEntity = null;
+        SelectOnlyBrowserItem(new BrowserItem(
+            BrowserItemKind.Folder,
+            NormalizePath(path),
+            Path.GetFileName(path),
+            ToProjectDisplayPath(path)));
     }
 
     private void SelectAsset(string path)
     {
-        _selectedFolderPath = null;
-        _contextDirectory = NormalizePath(Path.GetDirectoryName(path)!);
-        EditorSelection.SelectAsset(NormalizePath(path));
-        EditorSelection.SelectedEntity = null;
+        string normalized = NormalizePath(path);
+        SelectOnlyBrowserItem(new BrowserItem(
+            BrowserItemKind.File,
+            normalized,
+            Path.GetFileName(normalized),
+            Path.GetExtension(normalized).ToUpperInvariant()));
     }
 
     private void SelectSprite(string assetPath, string spriteId)
     {
-        _selectedFolderPath = null;
-        _contextDirectory = NormalizePath(Path.GetDirectoryName(assetPath)!);
-        EditorSelection.SelectSpriteAsset(_app.CreateSpriteReference(assetPath, spriteId));
-        EditorSelection.SelectedEntity = null;
+        string normalized = NormalizePath(assetPath);
+        string title = spriteId;
+        var settings = _app.TryGetSpriteImportSettings(normalized, false);
+        var slice = settings?.Slices.FirstOrDefault(item => string.Equals(item.Id, spriteId, StringComparison.OrdinalIgnoreCase));
+        if (slice != null)
+            title = slice.Name;
+
+        SelectOnlyBrowserItem(new BrowserItem(
+            BrowserItemKind.Sprite,
+            normalized,
+            title,
+            string.Empty,
+            spriteId));
     }
 
     private void DeleteAsset(string path)
@@ -1253,7 +1602,7 @@ public unsafe class ProjectWindow : EditorWindow
             string dir = NormalizePath(Path.GetDirectoryName(normalized)!);
             string name = Path.GetFileNameWithoutExtension(normalized);
             string ext = Path.GetExtension(normalized);
-            string next = NormalizePath(Path.Combine(dir, name + " (Copy)" + ext));
+            string next = NormalizePath(Path.Combine(dir, name + L10n.Tr("label_copy_suffix") + ext));
             if (File.Exists(normalized))
             {
                 File.Copy(normalized, next, true);
@@ -1285,7 +1634,7 @@ public unsafe class ProjectWindow : EditorWindow
 
         var duplicated = settings.Slices[sliceIndex].Clone();
         duplicated.Id = Guid.NewGuid().ToString("N");
-        duplicated.Name = MakeUniqueSliceName(settings, $"{duplicated.Name} Copy");
+        duplicated.Name = MakeUniqueSliceName(settings, $"{duplicated.Name} {L10n.Tr("label_copy_word")}");
         settings.Slices.Insert(sliceIndex + 1, duplicated);
         AssetPathUtility.SaveSpriteImportSettings(assetPath, settings);
         AssetPathUtility.InvalidateCache(_app.ProjectPath);
@@ -1349,16 +1698,16 @@ public unsafe class ProjectWindow : EditorWindow
         _targetSpriteId = null;
         _inputBuffer = type switch
         {
-            CreationType.Script => "NewScript",
-            CreationType.World => "NewWorld",
-            CreationType.Shader => "NewShader",
-            CreationType.Style => "NewStyle",
-            CreationType.UiScreen => "NewUIScreen",
-            CreationType.UiStyle => "NewUIStyle",
-            CreationType.Tile => "NewTile",
-            CreationType.AnimatedTile => "NewAnimatedTile",
-            CreationType.RuleTile => "NewRuleTile",
-            _ => "NewFolder"
+            CreationType.Script => L10n.Tr("creation_default_script"),
+            CreationType.World => L10n.Tr("creation_default_world"),
+            CreationType.Shader => L10n.Tr("creation_default_shader"),
+            CreationType.Style => L10n.Tr("creation_default_style"),
+            CreationType.UiScreen => L10n.Tr("creation_default_ui_screen"),
+            CreationType.UiStyle => L10n.Tr("creation_default_ui_style"),
+            CreationType.Tile => L10n.Tr("creation_default_tile"),
+            CreationType.AnimatedTile => L10n.Tr("creation_default_animated_tile"),
+            CreationType.RuleTile => L10n.Tr("creation_default_rule_tile"),
+            _ => L10n.Tr("creation_default_folder")
         };
         _shouldOpenPopup = true;
     }
@@ -1568,12 +1917,16 @@ public unsafe class ProjectWindow : EditorWindow
             return;
         }
 
+        if (normalized.EndsWith(".blueprint", StringComparison.OrdinalIgnoreCase))
+        {
+            _app.OpenBlueprintAsset(normalized);
+            return;
+        }
+
         if (normalized.EndsWith(".ui", StringComparison.OrdinalIgnoreCase))
         {
             SelectAsset(normalized);
-            var uiEditor = _app.GetWindow<UIEditorWindow>();
-            if (uiEditor != null)
-                uiEditor.IsOpen = true;
+            _app.OpenWindow<UIEditorWindow>();
             return;
         }
 
@@ -1602,6 +1955,7 @@ public unsafe class ProjectWindow : EditorWindow
         SceneSerializer.Deserialize(world, File.ReadAllText(normalized), _app.ScriptCompiler?.CompiledAssembly);
         _app.BindWorldAssets(world);
         WorldManager.SetActiveWorld(world);
+        _app.SetActiveAssetContext(normalized, EditorAssetKind.World);
         _app.ResetDirty();
     }
 
@@ -1618,9 +1972,19 @@ public unsafe class ProjectWindow : EditorWindow
         if (WorldManager.ActiveWorld == null || _app.AssetsPath == null)
             return;
 
-        string path = Path.Combine(_app.AssetsPath, $"{WorldManager.ActiveWorld.Name}.verity");
+        if (_app.IsEditingBlueprint)
+        {
+            _app.SaveActiveBlueprint();
+            return;
+        }
+
+        string? path = _app.ActiveAssetPath;
+        if (string.IsNullOrWhiteSpace(path) || !path.EndsWith(".verity", StringComparison.OrdinalIgnoreCase))
+            path = Path.Combine(_app.AssetsPath, $"{WorldManager.ActiveWorld.Name}.verity");
+
         File.WriteAllText(path, SceneSerializer.Serialize(WorldManager.ActiveWorld));
         AssetPathUtility.EnsureMetaAndGetGuid(path);
+        _app.SetActiveAssetContext(path, EditorAssetKind.World);
         _app.ResetDirty();
         _app.ShowOverlayMessage(L10n.Tr("msg_world_saved", WorldManager.ActiveWorld.Name));
     }
@@ -1635,7 +1999,7 @@ public unsafe class ProjectWindow : EditorWindow
             _app.IsBuilding = true;
             try
             {
-                _app.BuildStatus = "Preparing publish directory...";
+                _app.BuildStatus = L10n.Tr("msg_publish_preparing_dir");
                 string publishDir = Path.Combine(_app.ProjectPath, "Build");
                 if (Directory.Exists(publishDir))
                 {
@@ -1651,22 +2015,22 @@ public unsafe class ProjectWindow : EditorWindow
                 }
 
                 string gameProjDir = Path.Combine(projectRoot, "Verity.Game");
-                _app.BuildStatus = "Syncing Assets to Game Engine...";
+                _app.BuildStatus = L10n.Tr("msg_publish_syncing_assets");
                 string gameAssets = Path.Combine(gameProjDir, "Assets");
                 if (Directory.Exists(gameAssets))
                     Directory.Delete(gameAssets, true);
                 CopyDirectory(_app.AssetsPath!, gameAssets);
 
-                _app.BuildStatus = "Syncing Build Settings...";
+                _app.BuildStatus = L10n.Tr("msg_publish_syncing_build_settings");
                 string settingsSrc = Path.Combine(_app.ProjectPath, "BuildSettings.json");
                 if (File.Exists(settingsSrc))
                     File.Copy(settingsSrc, Path.Combine(gameProjDir, "BuildSettings.json"), true);
 
-                _app.BuildStatus = "Compiling Script Library...";
+                _app.BuildStatus = L10n.Tr("msg_publish_compiling_scripts");
                 string gameDll = Path.Combine(gameProjDir, "UserScripts.dll");
                 _app.ScriptCompiler?.CompileToFile(gameDll);
 
-                _app.BuildStatus = "Running .NET Publish (May take a minute)...";
+                _app.BuildStatus = L10n.Tr("msg_publish_running_dotnet");
                 var psi = new ProcessStartInfo("dotnet", $"publish \"{Path.Combine(gameProjDir, "Verity.Game.csproj")}\" -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -o \"{publishDir}\"")
                 {
                     CreateNoWindow = true,
@@ -1686,7 +2050,7 @@ public unsafe class ProjectWindow : EditorWindow
                 process.WaitForExit();
                 if (process.ExitCode == 0)
                 {
-                    _app.BuildStatus = "Done!";
+                    _app.BuildStatus = L10n.Tr("msg_done");
                     Process.Start("explorer.exe", publishDir);
                 }
                 else
@@ -1898,6 +2262,8 @@ public unsafe class ProjectWindow : EditorWindow
         if (!string.IsNullOrWhiteSpace(_selectedFolderPath) && PathMatchesOrContains(_selectedFolderPath, normalized))
             _selectedFolderPath = null;
 
+        _selectedBrowserItemKeys.RemoveWhere(key => key.Contains(normalized, StringComparison.OrdinalIgnoreCase));
+
         if (!string.IsNullOrWhiteSpace(_currentDirectory) && PathMatchesOrContains(_currentDirectory, normalized))
             _currentDirectory = NormalizePath(_app.AssetsPath!);
 
@@ -1916,6 +2282,7 @@ public unsafe class ProjectWindow : EditorWindow
         _currentDirectory = RewriteMovedPath(_currentDirectory, oldPath, newPath);
         _contextDirectory = RewriteMovedPath(_contextDirectory, oldPath, newPath);
         _selectedFolderPath = RewriteMovedPath(_selectedFolderPath, oldPath, newPath);
+        RewriteSelectedBrowserItems(oldPath, newPath);
 
         if (!string.IsNullOrWhiteSpace(EditorSelection.SelectedAssetPath))
             EditorSelection.SelectedAssetPath = RewriteMovedPath(EditorSelection.SelectedAssetPath, oldPath, newPath);
@@ -1969,6 +2336,26 @@ public unsafe class ProjectWindow : EditorWindow
             return newNormalized + current[oldNormalized.Length..];
 
         return currentPath;
+    }
+
+    private void RewriteSelectedBrowserItems(string oldPath, string newPath)
+    {
+        if (_selectedBrowserItemKeys.Count == 0)
+            return;
+
+        var updated = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (string key in _selectedBrowserItemKeys)
+        {
+            string rewritten = key.Replace(AssetPathUtility.Normalize(oldPath), AssetPathUtility.Normalize(newPath), StringComparison.OrdinalIgnoreCase);
+            updated.Add(rewritten);
+        }
+
+        _selectedBrowserItemKeys.Clear();
+        foreach (string key in updated)
+            _selectedBrowserItemKeys.Add(key);
+
+        if (!string.IsNullOrWhiteSpace(_browserSelectionAnchorKey))
+            _browserSelectionAnchorKey = _browserSelectionAnchorKey.Replace(AssetPathUtility.Normalize(oldPath), AssetPathUtility.Normalize(newPath), StringComparison.OrdinalIgnoreCase);
     }
 
     private string ResolveContextDirectory() => _contextDirectory ?? _currentDirectory ?? _app.AssetsPath ?? AppContext.BaseDirectory;
@@ -2049,7 +2436,12 @@ public unsafe class ProjectWindow : EditorWindow
         _cachedBrowserDirectory = null;
         _cachedBrowserDirectories = Array.Empty<string>();
         _cachedBrowserFiles = Array.Empty<string>();
+        _cachedBrowserItemsDirectory = null;
+        _cachedBrowserItems = [];
         _cachedTreeDirectories.Clear();
+        _cachedTexturePreviews.Clear();
+        _cachedSpritePreviews.Clear();
+        _cachedBlueprintPreviewSprites.Clear();
     }
 
     private void ReloadProjectBrowser()

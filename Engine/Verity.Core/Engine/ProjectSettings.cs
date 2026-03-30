@@ -31,6 +31,14 @@ public class ProjectSettings
     public List<string> Tags { get; set; } = new() { "Untagged", "MainCamera", "Player", "GameController" };
     public List<string> SortingLayers { get; set; } = new() { "Default" };
     public List<string> PhysicsGroups { get; set; } = new() { "Default" };
+    public string LastOpenedWorldAssetPath { get; set; } = string.Empty;
+    public EditorDockLayoutSettings EditorDockLayout { get; set; } = new();
 
     public static ProjectSettings Default => new();
+}
+
+public class EditorDockLayoutSettings
+{
+    public string Ini { get; set; } = string.Empty;
+    public List<string> OpenWindowIds { get; set; } = new();
 }
