@@ -61,7 +61,7 @@ public class GameLoop
 
         Verity.Core.Animation.AnimationSystem.Update(fixedDelta);
 
-        var scripts = world.GetAllScripts().ToList();
+        var scripts = world.GetActiveScripts();
 
         // Start Phase
         foreach (var script in scripts)

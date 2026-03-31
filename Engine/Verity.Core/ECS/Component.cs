@@ -16,6 +16,8 @@ public abstract class Component
             if (!value && !CanBeDisabled) return;
             if (_enabled == value) return;
             _enabled = value;
+            if (this is Script)
+                Owner?.World?.InvalidateScriptCache();
             if (_enabled)
                 OnEnable();
             else

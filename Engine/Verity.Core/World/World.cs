@@ -20,6 +20,10 @@ public class World
     private readonly List<Entity> _entities = [];
     private readonly List<Entity> _pendingDestroy = [];
 
+    // Script cache: avoids full tree traversal every logic tick
+    private readonly List<Script> _cachedScripts = [];
+    private bool _scriptCacheDirty = true;
+
     public World(string name)
     {
         Name = name;
@@ -27,10 +31,46 @@ public class World
 
     public IReadOnlyList<Entity> RootEntities => _entities;
 
+    internal void InvalidateScriptCache()
+    {
+        _scriptCacheDirty = true;
+    }
+
+    internal IReadOnlyList<Script> GetActiveScripts()
+    {
+        if (!_scriptCacheDirty)
+            return _cachedScripts;
+
+        _cachedScripts.Clear();
+        foreach (var entity in _entities)
+        {
+            if (!entity.Active) continue;
+            CollectScriptsRecursiveInto(entity, _cachedScripts);
+        }
+        _scriptCacheDirty = false;
+        return _cachedScripts;
+    }
+
+    private static void CollectScriptsRecursiveInto(Entity entity, List<Script> result)
+    {
+        foreach (var script in entity.GetScripts())
+        {
+            if (script.Enabled)
+                result.Add(script);
+        }
+
+        foreach (var child in entity.Transform.Children)
+        {
+            if (!child.Owner.Active) continue;
+            CollectScriptsRecursiveInto(child.Owner, result);
+        }
+    }
+
     public Entity CreateEntity(string name)
     {
         var entity = new Entity(name) { World = this };
         _entities.Add(entity);
+        _scriptCacheDirty = true;
         return entity;
     }
 
@@ -40,6 +80,7 @@ public class World
         {
             entity.World = this;
             _entities.Add(entity);
+            _scriptCacheDirty = true;
         }
     }
 
@@ -54,11 +95,13 @@ public class World
         entity.World = this;
         int insertIndex = Math.Clamp(index, 0, _entities.Count);
         _entities.Insert(insertIndex, entity);
+        _scriptCacheDirty = true;
     }
 
     public void RemoveFromRoot(Entity entity)
     {
         _entities.Remove(entity);
+        _scriptCacheDirty = true;
     }
 
     public int IndexOfRoot(Entity entity)
@@ -78,16 +121,22 @@ public class World
 
         _entities.RemoveAt(currentIndex);
         _entities.Insert(clampedIndex, entity);
+        _scriptCacheDirty = true;
     }
 
     public void DestroyEntity(Entity entity)
     {
         if (!_pendingDestroy.Contains(entity))
+        {
             _pendingDestroy.Add(entity);
+            _scriptCacheDirty = true;
+        }
     }
 
     public void ProcessPendingDestroys()
     {
+        if (_pendingDestroy.Count == 0) return;
+
         foreach (var entity in _pendingDestroy)
         {
             DestroyEntityRecursive(entity);
@@ -96,6 +145,7 @@ public class World
                 entity.Transform.Parent = null;
         }
         _pendingDestroy.Clear();
+        _scriptCacheDirty = true;
     }
 
     private static void DestroyEntityRecursive(Entity entity)
@@ -113,6 +163,8 @@ public class World
     {
         _entities.Clear();
         _pendingDestroy.Clear();
+        _cachedScripts.Clear();
+        _scriptCacheDirty = true;
     }
 
     public IEnumerable<Entity> GetAllEntities()

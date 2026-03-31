@@ -5,7 +5,17 @@ public class Entity
     public Guid Id { get; internal set; } = Guid.NewGuid();
     public string Name { get; set; }
     public string Tag { get; set; } = "Untagged";
-    public bool Active { get; set; } = true;
+    private bool _active = true;
+    public bool Active
+    {
+        get => _active;
+        set
+        {
+            if (_active == value) return;
+            _active = value;
+            World?.InvalidateScriptCache();
+        }
+    }
     public Transform Transform { get; }
 
     [HideInInspector]
@@ -143,9 +153,11 @@ public class Entity
         var component = new T { Owner = this };
         _components.Add(component);
 
+        if (component is Script)
+            World?.InvalidateScriptCache();
+
         CheckRequiredComponents(typeof(T));
 
-        // [SYNC] PolygonShape가 추가될 때 PolygonRenderer가 이미 있으면 동기화
         if (component is Verity.Core.Physics.PolygonShape poly)
         {
             poly.SyncWithRenderer();
@@ -172,9 +184,11 @@ public class Entity
         component.Owner = this;
         _components.Add(component);
 
+        if (component is Script)
+            World?.InvalidateScriptCache();
+
         CheckRequiredComponents(componentType);
 
-        // [SYNC] PolygonShape가 추가될 때 PolygonRenderer가 이미 있으면 동기화
         if (component is Verity.Core.Physics.PolygonShape poly)
         {
             poly.SyncWithRenderer();
@@ -333,8 +347,10 @@ public class Entity
         {
             if (_components[i] is T)
             {
+                bool wasScript = _components[i] is Script;
                 _components[i].OnDestroy();
                 _components.RemoveAt(i);
+                if (wasScript) World?.InvalidateScriptCache();
                 return true;
             }
         }
@@ -348,7 +364,9 @@ public class Entity
 
         if (_components.Remove(component))
         {
+            bool wasScript = component is Script;
             component.OnDestroy();
+            if (wasScript) World?.InvalidateScriptCache();
             return true;
         }
         return false;

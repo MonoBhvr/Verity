@@ -94,6 +94,8 @@ public sealed class Transform : Component
             WorldRotation = worldRot!.Value;
             WorldScale = worldScale!.Value;
         }
+
+        Owner.World?.InvalidateScriptCache();
     }
 
     public int GetSiblingIndex()
@@ -122,6 +124,7 @@ public sealed class Transform : Component
 
         _parent._children.RemoveAt(currentIndex);
         _parent._children.Insert(clampedIndex, this);
+        Owner.World?.InvalidateScriptCache();
     }
 
     public IReadOnlyList<Transform> Children => _children;
