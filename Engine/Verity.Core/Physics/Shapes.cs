@@ -10,6 +10,8 @@ public class BoxShape : PhysicalShape
     [SerializeField]
     public Vector2 Size { get; set; } = Vector2.One;
 
+    private readonly Vector2[] _vertexBuffer = new Vector2[4];
+
     public override AABB GetAABB()
     {
         var vertices = GetVertices();
@@ -31,32 +33,26 @@ public class BoxShape : PhysicalShape
         if (transform == null) return Array.Empty<Vector2>();
 
         Vector2 baseScale = GetBaseScale();
-        // Use absolute scale for size calculations
         Vector2 effSize = Size * new Vector2(MathF.Abs(baseScale.X), MathF.Abs(baseScale.Y));
         if (MathF.Abs(effSize.X) < 0.0001f || MathF.Abs(effSize.Y) < 0.0001f) return Array.Empty<Vector2>();
 
         float rotationRad = transform.WorldRotation * MathF.PI / 180.0f;
+        float cos = MathF.Cos(rotationRad);
+        float sin = MathF.Sin(rotationRad);
         Vector2 pos = transform.WorldPosition;
-        
+
         Vector2 halfSize = effSize / 2.0f;
-        // Offset should also be affected by baseScale
-        Vector2 rotatedOffset = RotateVector(Offset * baseScale, rotationRad);
-        Vector2 center = pos + rotatedOffset;
+        Vector2 scaledOffset = Offset * baseScale;
+        Vector2 center = pos + new Vector2(scaledOffset.X * cos - scaledOffset.Y * sin, scaledOffset.X * sin + scaledOffset.Y * cos);
 
-        Vector2[] localPoints = new[]
-        {
-            new Vector2(-halfSize.X, -halfSize.Y),
-            new Vector2(halfSize.X, -halfSize.Y),
-            new Vector2(halfSize.X, halfSize.Y),
-            new Vector2(-halfSize.X, halfSize.Y)
-        };
+        float hxc = halfSize.X * cos, hxs = halfSize.X * sin;
+        float hyc = halfSize.Y * cos, hys = halfSize.Y * sin;
 
-        Vector2[] result = new Vector2[4];
-        for (int i = 0; i < 4; i++)
-        {
-            result[i] = center + RotateVector(localPoints[i], rotationRad);
-        }
-        return result;
+        _vertexBuffer[0] = center + new Vector2(-hxc + hys, -hxs - hyc);
+        _vertexBuffer[1] = center + new Vector2(hxc + hys, hxs - hyc);
+        _vertexBuffer[2] = center + new Vector2(hxc - hys, hxs + hyc);
+        _vertexBuffer[3] = center + new Vector2(-hxc - hys, -hxs + hyc);
+        return _vertexBuffer;
     }
 
     public override float CalculateInertiaCoefficient()
@@ -112,14 +108,32 @@ public class CircleShape : PhysicalShape
 public class PolygonShape : PhysicalShape
 {
     [SerializeField]
-    public List<Vector2> Vertices { get; set; } = new()
+    private List<Vector2> _vertices = new()
     {
         new Vector2(0, 0.5f),
         new Vector2(-0.433f, -0.25f),
         new Vector2(0.433f, -0.25f)
     };
 
+    public List<Vector2> Vertices
+    {
+        get => _vertices;
+        set { _vertices = value; InvalidateShapeCache(); }
+    }
+
+    private int[]? _cachedTriangulationIndices;
+    private bool? _cachedIsConvex;
+    private bool? _cachedIsSelfIntersecting;
+    private Vector2[]? _vertexBuffer;
+
     public PolygonShape() { }
+
+    public void InvalidateShapeCache()
+    {
+        _cachedTriangulationIndices = null;
+        _cachedIsConvex = null;
+        _cachedIsSelfIntersecting = null;
+    }
 
     [Button("Sync With Renderer")]
     public void SyncWithRenderer()
@@ -138,8 +152,9 @@ public class PolygonShape : PhysicalShape
                         var value = prop.GetValue(comp);
                         if (value is IEnumerable<Vector2> vertices)
                         {
-                            Vertices = new List<Vector2>();
-                            foreach (var v in vertices) Vertices.Add(v - Offset);
+                            var newVerts = new List<Vector2>();
+                            foreach (var v in vertices) newVerts.Add(v - Offset);
+                            Vertices = newVerts;
                             return;
                         }
                     }
@@ -151,17 +166,23 @@ public class PolygonShape : PhysicalShape
 
     public bool IsSelfIntersecting()
     {
-        if (Vertices.Count < 4) return false;
-        for (int i = 0; i < Vertices.Count; i++)
+        if (_cachedIsSelfIntersecting.HasValue) return _cachedIsSelfIntersecting.Value;
+
+        bool result = false;
+        if (Vertices.Count >= 4)
         {
-            for (int j = i + 2; j < Vertices.Count; j++)
+            for (int i = 0; i < Vertices.Count && !result; i++)
             {
-                if (i == 0 && j == Vertices.Count - 1) continue;
-                if (Intersect(Vertices[i], Vertices[(i + 1) % Vertices.Count], Vertices[j], Vertices[(j + 1) % Vertices.Count]))
-                    return true;
+                for (int j = i + 2; j < Vertices.Count; j++)
+                {
+                    if (i == 0 && j == Vertices.Count - 1) continue;
+                    if (Intersect(Vertices[i], Vertices[(i + 1) % Vertices.Count], Vertices[j], Vertices[(j + 1) % Vertices.Count]))
+                    { result = true; break; }
+                }
             }
         }
-        return false;
+        _cachedIsSelfIntersecting = result;
+        return result;
     }
 
     private bool Intersect(Vector2 a, Vector2 b, Vector2 c, Vector2 d)
@@ -190,34 +211,41 @@ public class PolygonShape : PhysicalShape
         float rotationRad = transform.WorldRotation * MathF.PI / 180.0f;
         Vector2 pos = transform.WorldPosition;
 
-        Vector2[] result = new Vector2[Vertices.Count];
+        if (_vertexBuffer == null || _vertexBuffer.Length != Vertices.Count)
+            _vertexBuffer = new Vector2[Vertices.Count];
+
         for (int i = 0; i < Vertices.Count; i++)
         {
             Vector2 localPos = (Vertices[i] + Offset) * baseScale;
-            result[i] = pos + RotateVector(localPos, rotationRad);
+            _vertexBuffer[i] = pos + RotateVector(localPos, rotationRad);
         }
-        return result;
+        return _vertexBuffer;
     }
 
     public List<Vector2[]> GetConvexSubShapes()
     {
         var worldVertices = GetVertices();
         if (worldVertices.Length < 3) return new List<Vector2[]>();
-        if (IsConvex(worldVertices)) return new List<Vector2[]> { worldVertices };
+
+        if (!_cachedIsConvex.HasValue)
+            _cachedIsConvex = IsConvexLocal();
+
+        if (_cachedIsConvex.Value) return new List<Vector2[]> { worldVertices };
+
         var indices = Triangulate();
-        var subShapes = new List<Vector2[]>();
+        var subShapes = new List<Vector2[]>(indices.Length / 3);
         for (int i = 0; i < indices.Length; i += 3)
             subShapes.Add(new[] { worldVertices[indices[i]], worldVertices[indices[i + 1]], worldVertices[indices[i + 2]] });
         return subShapes;
     }
 
-    private bool IsConvex(Vector2[] v)
+    private bool IsConvexLocal()
     {
-        if (v.Length < 3) return false;
+        if (Vertices.Count < 3) return false;
         bool? gotNegative = null;
-        for (int i = 0; i < v.Length; i++)
+        for (int i = 0; i < Vertices.Count; i++)
         {
-            Vector2 a = v[i], b = v[(i + 1) % v.Length], c = v[(i + 2) % v.Length];
+            Vector2 a = Vertices[i], b = Vertices[(i + 1) % Vertices.Count], c = Vertices[(i + 2) % Vertices.Count];
             float cross = (b.X - a.X) * (c.Y - b.Y) - (b.Y - a.Y) * (c.X - b.X);
             if (cross == 0) continue;
             bool isNegative = cross < 0;
@@ -229,7 +257,9 @@ public class PolygonShape : PhysicalShape
 
     public int[] Triangulate()
     {
-        if (Vertices.Count < 3) return Array.Empty<int>();
+        if (_cachedTriangulationIndices != null) return _cachedTriangulationIndices;
+
+        if (Vertices.Count < 3) { _cachedTriangulationIndices = Array.Empty<int>(); return _cachedTriangulationIndices; }
         List<int> indices = new List<int>(), V = new List<int>();
         for (int i = 0; i < Vertices.Count; i++) V.Add(i);
         float area = 0;
@@ -252,7 +282,8 @@ public class PolygonShape : PhysicalShape
             if (!earFound) break; 
         }
         if (V.Count == 3) { indices.Add(V[0]); indices.Add(V[1]); indices.Add(V[2]); }
-        return indices.ToArray();
+        _cachedTriangulationIndices = indices.ToArray();
+        return _cachedTriangulationIndices;
     }
 
     private bool IsEar(int p, int c, int n, List<int> V)
