@@ -59,7 +59,7 @@ public class PolygonRenderer : Component
         return result;
     }
 
-    [Button("Sync With Shape")]
+    [Button("Sync With Shape", undoable: true)]
     public void SyncWithShape()
     {
         var shape = Owner.GetComponent<Verity.Core.Physics.PolygonShape>();

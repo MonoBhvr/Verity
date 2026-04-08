@@ -70,7 +70,7 @@ public class SpriteRenderer : Component, IHasSize
     [SerializeField]
     public float ShadowAlphaThreshold { get; set; } = 0.5f;
 
-    [Button("Apply Native Aspect Ratio")]
+    [Button("Apply Native Aspect Ratio", undoable: true)]
     public void ApplyNativeAspectRatio()
     {
         if (Texture == null || Owner == null) return;

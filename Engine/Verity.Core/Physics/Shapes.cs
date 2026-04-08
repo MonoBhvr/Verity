@@ -135,7 +135,7 @@ public class PolygonShape : PhysicalShape
         _cachedIsSelfIntersecting = null;
     }
 
-    [Button("Sync With Renderer")]
+    [Button("Sync With Renderer", undoable: true)]
     public void SyncWithRenderer()
     {
         if (Owner == null) return;

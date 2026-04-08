@@ -7,6 +7,7 @@ using Verity.Core;
 using Verity.Graphics;
 using System.Diagnostics;
 using Verity.Core.Physics;
+using Verity.Core.Engine;
 
 namespace Verity.Editor.Windows;
 
@@ -37,6 +38,7 @@ public unsafe class WorldViewWindow : EditorWindow
 
     private readonly EditorApp _app;
     private readonly Dictionary<Tilemap, TilemapSelectionCacheEntry> _tilemapSelectionCache = new();
+    private readonly List<Entity> _renderablePickOrderCache = [];
     private bool _isDragging;
     private bool _isBoxSelecting;
     private Vector2 _boxSelectionStart;
@@ -74,6 +76,8 @@ public unsafe class WorldViewWindow : EditorWindow
 
     private Entity? _previewEntity;
     private string? _previewPath;
+    private int _renderablePickOrderFrame = -1;
+    private World? _renderablePickOrderWorld;
 
     public WorldViewWindow(EditorApp app) : base(L10n.Tr("window_worldview")) { _app = app; }
 
@@ -1438,6 +1442,10 @@ public unsafe class WorldViewWindow : EditorWindow
     private Vector2 ToWorldMousePosition(Vector2 min, Vector2 sz, Vector2 abs) { var l = abs - min; l.X = Math.Clamp(l.X, 0f, sz.X); l.Y = Math.Clamp(l.Y, 0f, sz.Y); return _app.WorldCamera.ScreenToWorld(l); }
     private List<Entity> CollectRenderableEntitiesInRenderOrder(World world)
     {
+        if (ReferenceEquals(_renderablePickOrderWorld, world) && _renderablePickOrderFrame == Time.FrameCount)
+            return _renderablePickOrderCache;
+
+        _renderablePickOrderCache.Clear();
         var hierarchyOrder = world.GetAllEntities()
             .Select((entity, index) => (entity, index))
             .ToDictionary(pair => pair.entity, pair => pair.index);
@@ -1476,7 +1484,12 @@ public unsafe class WorldViewWindow : EditorWindow
             return vc != 0 ? vc : a.Owner.Id.CompareTo(b.Owner.Id);
         });
 
-        return renderables.Select(static component => component.Owner).ToList();
+        foreach (Component renderable in renderables)
+            _renderablePickOrderCache.Add(renderable.Owner);
+
+        _renderablePickOrderWorld = world;
+        _renderablePickOrderFrame = Time.FrameCount;
+        return _renderablePickOrderCache;
     }
 
     private float GetSortAxisValueForPicking(Transform transform) => _app.RenderPipeline.CustomSortAxis switch

@@ -19,10 +19,13 @@ public class World
 
     private readonly List<Entity> _entities = [];
     private readonly List<Entity> _pendingDestroy = [];
+    private readonly List<Entity> _allEntitiesCache = [];
 
     // Script cache: avoids full tree traversal every logic tick
     private readonly List<Script> _cachedScripts = [];
     private bool _scriptCacheDirty = true;
+    private bool _entityCacheDirty = true;
+    private int _stateVersion;
 
     public World(string name)
     {
@@ -30,10 +33,27 @@ public class World
     }
 
     public IReadOnlyList<Entity> RootEntities => _entities;
+    public int StateVersion => _stateVersion;
 
     internal void InvalidateScriptCache()
     {
         _scriptCacheDirty = true;
+        MarkStateChanged();
+    }
+
+    internal void MarkHierarchyChanged()
+    {
+        _entityCacheDirty = true;
+        _scriptCacheDirty = true;
+        MarkStateChanged();
+    }
+
+    internal void MarkStateChanged()
+    {
+        unchecked
+        {
+            _stateVersion++;
+        }
     }
 
     internal IReadOnlyList<Script> GetActiveScripts()
@@ -70,7 +90,7 @@ public class World
     {
         var entity = new Entity(name) { World = this };
         _entities.Add(entity);
-        _scriptCacheDirty = true;
+        MarkHierarchyChanged();
         return entity;
     }
 
@@ -80,7 +100,7 @@ public class World
         {
             entity.World = this;
             _entities.Add(entity);
-            _scriptCacheDirty = true;
+            MarkHierarchyChanged();
         }
     }
 
@@ -95,13 +115,13 @@ public class World
         entity.World = this;
         int insertIndex = Math.Clamp(index, 0, _entities.Count);
         _entities.Insert(insertIndex, entity);
-        _scriptCacheDirty = true;
+        MarkHierarchyChanged();
     }
 
     public void RemoveFromRoot(Entity entity)
     {
         _entities.Remove(entity);
-        _scriptCacheDirty = true;
+        MarkHierarchyChanged();
     }
 
     public int IndexOfRoot(Entity entity)
@@ -121,7 +141,7 @@ public class World
 
         _entities.RemoveAt(currentIndex);
         _entities.Insert(clampedIndex, entity);
-        _scriptCacheDirty = true;
+        MarkHierarchyChanged();
     }
 
     public void DestroyEntity(Entity entity)
@@ -129,7 +149,7 @@ public class World
         if (!_pendingDestroy.Contains(entity))
         {
             _pendingDestroy.Add(entity);
-            _scriptCacheDirty = true;
+            MarkHierarchyChanged();
         }
     }
 
@@ -145,7 +165,7 @@ public class World
                 entity.Transform.Parent = null;
         }
         _pendingDestroy.Clear();
-        _scriptCacheDirty = true;
+        MarkHierarchyChanged();
     }
 
     private static void DestroyEntityRecursive(Entity entity)
@@ -163,27 +183,35 @@ public class World
     {
         _entities.Clear();
         _pendingDestroy.Clear();
+        _allEntitiesCache.Clear();
         _cachedScripts.Clear();
+        _entityCacheDirty = true;
         _scriptCacheDirty = true;
+        MarkStateChanged();
     }
 
-    public IEnumerable<Entity> GetAllEntities()
+    public IReadOnlyList<Entity> GetAllEntities()
     {
+        if (_entityCacheDirty)
+            RebuildEntityCache();
+
+        return _allEntitiesCache;
+    }
+
+    private void RebuildEntityCache()
+    {
+        _allEntitiesCache.Clear();
         foreach (var entity in _entities)
-        {
-            foreach (var e in GetAllEntitiesRecursive(entity))
-                yield return e;
-        }
+            CollectEntitiesRecursive(entity, _allEntitiesCache);
+
+        _entityCacheDirty = false;
     }
 
-    private static IEnumerable<Entity> GetAllEntitiesRecursive(Entity entity)
+    private static void CollectEntitiesRecursive(Entity entity, List<Entity> result)
     {
-        yield return entity;
+        result.Add(entity);
         foreach (var child in entity.Transform.Children)
-        {
-            foreach (var e in GetAllEntitiesRecursive(child.Owner))
-                yield return e;
-        }
+            CollectEntitiesRecursive(child.Owner, result);
     }
 
     public IEnumerable<T> GetAllComponents<T>() where T : class

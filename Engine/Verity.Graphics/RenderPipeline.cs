@@ -69,6 +69,9 @@ public class RenderPipeline : IDisposable
     private readonly record struct GridPoint(int X, int Y);
 
     private readonly record struct GridEdge(GridPoint Start, GridPoint End);
+    private readonly record struct RendererSortItem(Component Renderer, int HierarchyOrder, int LayerIndex, int OrderInLayer, float SortAxisValue);
+    private readonly record struct OccluderCandidate(ShadowOccluder Occluder, float DistanceSquared);
+    private readonly record struct ResolvedAssetInfo(string Path, bool Exists);
 
     private readonly GraphicsDevice _device;
     private readonly Shader2D _shader;
@@ -82,6 +85,12 @@ public class RenderPipeline : IDisposable
     private readonly Dictionary<string, Shader2D> _shaderCache = new();
     private readonly Dictionary<string, StyleRuntime> _styleCache = new();
     private readonly Dictionary<string, Vector2[][]> _spriteShadowShapeCache = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, ResolvedAssetInfo> _resolvedAssetCache = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, SpriteSlice> _spriteSliceCache = new(StringComparer.OrdinalIgnoreCase);
+    private readonly List<Component> _sortedRenderers = new();
+    private readonly List<RendererSortItem> _rendererSortItems = new();
+    private readonly List<OccluderCandidate> _occluderCandidates = new();
+    private readonly List<Vector2[]> _shadowPolygonScratch = new();
 
     private FramebufferObject.Uploaded? _worldFbo, _screenFbo;
     private TextureObjectUploaded? _worldColorTex, _screenColorTex;
@@ -287,21 +296,15 @@ public class RenderPipeline : IDisposable
         {
             if (r is SpriteRenderer sr)
             {
-                string resolvedSpritePath = string.Empty;
-                if (sr.Texture == null && !string.IsNullOrWhiteSpace(sr.Sprite.Path)) {
-                    try { resolvedSpritePath = ResolveAssetPath(sr.Sprite.Path, sr.Sprite.Guid); if (File.Exists(resolvedSpritePath)) sr.Texture = LoadTexture(sr.Sprite); } catch { }
-                }
-                else if (!string.IsNullOrWhiteSpace(sr.Sprite.Path))
-                {
-                    try { resolvedSpritePath = ResolveAssetPath(sr.Sprite.Path, sr.Sprite.Guid); } catch { }
-                }
+                if (sr.Texture == null && !string.IsNullOrWhiteSpace(sr.Sprite.Path))
+                    sr.Texture = LoadTexture(sr.Sprite);
 
                 var tex = sr.Texture ?? DefaultSprites.Square;
                 if (tex == null) continue;
 
                 SpriteSlice spriteSlice = SpriteImportUtility.CreateDefaultSlice(tex.Width, tex.Height, new Vector2(0.5f, 0.5f));
-                if (!string.IsNullOrWhiteSpace(resolvedSpritePath) && File.Exists(resolvedSpritePath))
-                    spriteSlice = AssetPathUtility.ResolveSpriteSlice(resolvedSpritePath, sr.Sprite, tex.Width, tex.Height);
+                if (TryResolveSpriteSlice(sr.Sprite, tex.Width, tex.Height, out _, out var resolvedSlice))
+                    spriteSlice = resolvedSlice;
 
                 Vector2 resolvedPivot = sr.UseSpritePivot ? spriteSlice.Pivot : sr.Pivot;
                 var uvMin = new System.Numerics.Vector2(
@@ -807,15 +810,26 @@ public class RenderPipeline : IDisposable
     private void ApplyShadowOccluders(Shader2D shader, Entity owner)
     {
         Vector2 ownerPosition = owner.Transform.WorldPosition;
+        _occluderCandidates.Clear();
+        foreach (var occluder in _frameShadowOccluders)
+        {
+            if (occluder.Owner == owner && !occluder.AffectsOwner)
+                continue;
+
+            float distanceSquared = Vector2.DistanceSquared(ownerPosition, ClosestPointOnBounds(ownerPosition, occluder.Min, occluder.Max));
+            _occluderCandidates.Add(new OccluderCandidate(occluder, distanceSquared));
+        }
+
+        _occluderCandidates.Sort(static (a, b) => a.DistanceSquared.CompareTo(b.DistanceSquared));
+
         int occluderCount = 0;
         int vertexCount = 0;
-        foreach (var occluder in _frameShadowOccluders
-            .Where(occluder => occluder.Owner != owner || occluder.AffectsOwner)
-            .OrderBy(occluder => Vector2.DistanceSquared(ownerPosition, ClosestPointOnBounds(ownerPosition, occluder.Min, occluder.Max))))
+        foreach (var candidate in _occluderCandidates)
         {
             if (occluderCount >= MaxShaderOccluders)
                 break;
 
+            var occluder = candidate.Occluder;
             int clampedVertexCount = Math.Min(occluder.Vertices.Length, MaxVerticesPerOccluder);
             if (clampedVertexCount < 3 || vertexCount + clampedVertexCount > MaxShaderOccluderVertices)
                 continue;
@@ -887,30 +901,31 @@ public class RenderPipeline : IDisposable
 
     private void CollectShadowOccluders(Entity entity)
     {
-        List<Vector2[]> colliderPolygons = CollectColliderShadowPolygons(entity);
+        _shadowPolygonScratch.Clear();
+        CollectColliderShadowPolygons(entity, _shadowPolygonScratch);
         bool colliderAdded = false;
         bool hasRendererCaster = false;
 
         if (entity.GetComponent<SpriteRenderer>() is SpriteRenderer spriteRenderer && spriteRenderer.Enabled && spriteRenderer.CastShadows)
         {
             hasRendererCaster = true;
-            AppendRendererShadowOccluders(entity, spriteRenderer.ShadowSourceMode, colliderPolygons, ref colliderAdded, BuildSpriteOccluders(spriteRenderer), spriteRenderer.ShadowSelfMode == ShadowSelfMode.AffectSelf);
+            AppendRendererShadowOccluders(entity, spriteRenderer.ShadowSourceMode, _shadowPolygonScratch, ref colliderAdded, BuildSpriteOccluders(spriteRenderer), spriteRenderer.ShadowSelfMode == ShadowSelfMode.AffectSelf);
         }
 
         if (entity.GetComponent<PolygonRenderer>() is PolygonRenderer polygonRenderer && polygonRenderer.Enabled && polygonRenderer.CastShadows)
         {
             hasRendererCaster = true;
-            AppendRendererShadowOccluders(entity, polygonRenderer.ShadowSourceMode, colliderPolygons, ref colliderAdded, BuildPolygonOccluders(polygonRenderer), polygonRenderer.ShadowSelfMode == ShadowSelfMode.AffectSelf);
+            AppendRendererShadowOccluders(entity, polygonRenderer.ShadowSourceMode, _shadowPolygonScratch, ref colliderAdded, BuildPolygonOccluders(polygonRenderer), polygonRenderer.ShadowSelfMode == ShadowSelfMode.AffectSelf);
         }
 
         if (entity.GetComponent<TilemapRenderer>() is TilemapRenderer tilemapRenderer && tilemapRenderer.Enabled && tilemapRenderer.CastShadows)
         {
             hasRendererCaster = true;
-            AppendRendererShadowOccluders(entity, tilemapRenderer.ShadowSourceMode, colliderPolygons, ref colliderAdded, BuildTilemapOccluders(tilemapRenderer), tilemapRenderer.ShadowSelfMode == ShadowSelfMode.AffectSelf);
+            AppendRendererShadowOccluders(entity, tilemapRenderer.ShadowSourceMode, _shadowPolygonScratch, ref colliderAdded, BuildTilemapOccluders(tilemapRenderer), tilemapRenderer.ShadowSelfMode == ShadowSelfMode.AffectSelf);
         }
 
         if (!hasRendererCaster)
-            AddShadowOccluders(entity, colliderPolygons, colliderPolygons.Any() && AnyColliderAffectsSelf(entity));
+            AddShadowOccluders(entity, _shadowPolygonScratch, _shadowPolygonScratch.Count > 0 && AnyColliderAffectsSelf(entity));
     }
 
     private void AppendRendererShadowOccluders(Entity entity, ShadowCasterSourceMode sourceMode, List<Vector2[]> colliderPolygons, ref bool colliderAdded, Vector2[][] rendererPolygons, bool rendererAffectsSelf)
@@ -982,9 +997,8 @@ public class RenderPipeline : IDisposable
     private static bool AnyColliderAffectsSelf(Entity entity)
         => entity.GetComponents<PhysicalShape>().Any(shape => shape.Enabled && shape.CastShadows && shape.ShadowSelfMode == ShadowSelfMode.AffectSelf);
 
-    private static List<Vector2[]> CollectColliderShadowPolygons(Entity entity)
+    private static void CollectColliderShadowPolygons(Entity entity, List<Vector2[]> polygons)
     {
-        List<Vector2[]> polygons = new();
         foreach (var shape in entity.GetComponents<PhysicalShape>())
         {
             if (!shape.Enabled || !shape.CastShadows)
@@ -992,8 +1006,6 @@ public class RenderPipeline : IDisposable
 
             AppendShapeShadowPolygons(shape, polygons);
         }
-
-        return polygons;
     }
 
     private static void AppendShapeShadowPolygons(PhysicalShape shape, List<Vector2[]> polygons)
@@ -1031,12 +1043,13 @@ public class RenderPipeline : IDisposable
 
         try
         {
-            string resolvedPath = ResolveAssetPath(renderer.Sprite.Path, renderer.Sprite.Guid);
-            if (!File.Exists(resolvedPath))
+            if (!TryResolveAssetPath(renderer.Sprite.Path, renderer.Sprite.Guid, out string resolvedPath))
                 return BuildSpriteQuadOccluders(renderer, renderer.UseSpritePivot ? new Vector2(0.5f, 0.5f) : renderer.Pivot);
 
             var raw = _textureManager.GetRawPixels(resolvedPath);
-            SpriteSlice slice = AssetPathUtility.ResolveSpriteSlice(resolvedPath, renderer.Sprite, raw.Width, raw.Height);
+            SpriteSlice slice = TryResolveSpriteSlice(renderer.Sprite, raw.Width, raw.Height, out _, out var cachedSlice)
+                ? cachedSlice
+                : SpriteImportUtility.CreateDefaultSlice(raw.Width, raw.Height, new Vector2(0.5f, 0.5f));
             Vector2 resolvedPivot = renderer.UseSpritePivot ? slice.Pivot : renderer.Pivot;
             int alphaThresholdByte = Math.Clamp((int)MathF.Round(Math.Clamp(renderer.ShadowAlphaThreshold, 0.0f, 1.0f) * 255.0f), 0, 255);
             string cacheKey = $"{resolvedPath}|{renderer.Sprite.SpriteId}|{slice.X}|{slice.Y}|{slice.Width}|{slice.Height}|{alphaThresholdByte}";
@@ -1435,8 +1448,7 @@ public class RenderPipeline : IDisposable
         string key = $"{cacheScope}:{GetCacheKey(asset.Path)}";
         if (_styleCache.TryGetValue(key, out var cached)) return cached;
         
-        string fullPath = ResolveAssetPath(asset.Path, asset.Guid);
-        if (!File.Exists(fullPath)) return null;
+        if (!TryResolveAssetPath(asset.Path, asset.Guid, out string fullPath)) return null;
         try {
             string json = File.ReadAllText(fullPath);
             var data = StyleData.FromJson(json);
@@ -1449,8 +1461,7 @@ public class RenderPipeline : IDisposable
             foreach (var (k, v) in data.Vector4s) runtime.Vector4s[k] = v;
             foreach (var (k, v) in data.Colors) runtime.Colors[k] = v;
             foreach (var (k, v) in data.Textures) {
-                string texPath = ResolveAssetPath(v);
-                if (File.Exists(texPath)) runtime.Textures[k] = _textureManager.Load(texPath);
+                if (TryResolveAssetPath(v, null, out string texPath)) runtime.Textures[k] = _textureManager.Load(texPath);
             }
             _styleCache[key] = runtime;
             return runtime;
@@ -1463,8 +1474,7 @@ public class RenderPipeline : IDisposable
         string key = $"{cacheScope}:{GetCacheKey(asset.Path)}";
         if (_shaderCache.TryGetValue(key, out var cached)) return cached;
         
-        string fullPath = ResolveAssetPath(asset.Path, asset.Guid);
-        if (!File.Exists(fullPath)) return null;
+        if (!TryResolveAssetPath(asset.Path, asset.Guid, out string fullPath)) return null;
         try {
             string content = File.ReadAllText(fullPath);
             string? vert = null, frag = null;
@@ -1500,45 +1510,135 @@ public class RenderPipeline : IDisposable
 
     private string ResolveAssetPath(string p, string? guid = null) => AssetPathUtility.ResolvePath(BaseAssetsPath, p, guid);
 
-    private List<Component> CollectAllSortedRenderers(World w) {
-        var hierarchyOrder = w.GetAllEntities()
-            .Select((entity, index) => (entity, index))
-            .ToDictionary(pair => pair.entity, pair => pair.index);
+    private bool TryResolveAssetPath(string p, string? guid, out string fullPath)
+    {
+        fullPath = string.Empty;
+        if (string.IsNullOrWhiteSpace(p))
+            return false;
 
-        var sprites = new List<SpriteRenderer>(); 
-        var tilemaps = new List<TilemapRenderer>();
-        foreach (var e in w.RootEntities) CollectRenderersRecursive(e, sprites, tilemaps);
-        
-        var polys = w.GetAllEntities().Where(e => e.Active).Select(e => e.GetComponent<PolygonRenderer>()).Where(pr => pr != null && pr.Enabled).Select(pr => pr!).ToList();
-        
-        var all = new List<Component>(); 
-        all.AddRange(sprites); 
-        all.AddRange(tilemaps);
-        all.AddRange(polys);
-        
-        all.Sort((a, b) => {
-            int la = a is SpriteRenderer srA ? srA.ResolvedLayerIndex : (a is TilemapRenderer trA ? trA.ResolvedLayerIndex : (a is PolygonRenderer prA ? prA.ResolvedLayerIndex : 0));
-            int lb = b is SpriteRenderer srB ? srB.ResolvedLayerIndex : (b is TilemapRenderer trB ? trB.ResolvedLayerIndex : (b is PolygonRenderer prB ? prB.ResolvedLayerIndex : 0));
-            int lc = la.CompareTo(lb); if (lc != 0) return lc;
-            int oa = a is SpriteRenderer srA2 ? srA2.OrderInLayer : (a is TilemapRenderer trA2 ? trA2.OrderInLayer : (a is PolygonRenderer prA2 ? prA2.OrderInLayer : 0));
-            int ob = b is SpriteRenderer srB2 ? srB2.OrderInLayer : (b is TilemapRenderer trB2 ? trB2.OrderInLayer : (b is PolygonRenderer prB2 ? prB2.OrderInLayer : 0));
-            int oc = oa.CompareTo(ob); if (oc != 0) return oc;
+        string key = string.IsNullOrWhiteSpace(guid) ? GetCacheKey(p) : $"{guid}:{GetCacheKey(p)}";
+        if (!_resolvedAssetCache.TryGetValue(key, out var cached))
+        {
+            string resolved = ResolveAssetPath(p, guid);
+            cached = new ResolvedAssetInfo(resolved, File.Exists(resolved));
+            _resolvedAssetCache[key] = cached;
+        }
 
-            int ha = hierarchyOrder.GetValueOrDefault(a.Owner, int.MaxValue);
-            int hb = hierarchyOrder.GetValueOrDefault(b.Owner, int.MaxValue);
-            int hc = ha.CompareTo(hb); if (hc != 0) return hc;
-
-            float va = GetSortAxisValue(a.Owner.Transform), vb = GetSortAxisValue(b.Owner.Transform);
-            int vc = SortAxisAscending ? va.CompareTo(vb) : vb.CompareTo(va);
-            return vc != 0 ? vc : a.Owner.Id.CompareTo(b.Owner.Id);
-        });
-        return all;
+        fullPath = cached.Path;
+        return cached.Exists;
     }
-    private static void CollectRenderersRecursive(Entity e, List<SpriteRenderer> r, List<TilemapRenderer> t) { 
-        if (!e.Active) return; 
-        var sr = e.GetComponent<SpriteRenderer>(); if (sr != null && sr.Enabled) r.Add(sr); 
-        var tr = e.GetComponent<TilemapRenderer>(); if (tr != null && tr.Enabled) t.Add(tr);
-        foreach (var c in e.Transform.Children) CollectRenderersRecursive(c.Owner, r, t); 
+
+    private bool TryResolveSpriteSlice(Sprite sprite, int textureWidth, int textureHeight, out string resolvedPath, out SpriteSlice spriteSlice)
+    {
+        spriteSlice = SpriteImportUtility.CreateDefaultSlice(textureWidth, textureHeight, new Vector2(0.5f, 0.5f));
+        resolvedPath = string.Empty;
+        if (string.IsNullOrWhiteSpace(sprite.Path))
+            return false;
+
+        try
+        {
+            if (!TryResolveAssetPath(sprite.Path, sprite.Guid, out resolvedPath))
+                return false;
+
+            string cacheKey = $"{resolvedPath}|{sprite.SpriteId}|{textureWidth}|{textureHeight}";
+            if (_spriteSliceCache.TryGetValue(cacheKey, out var cachedSlice))
+            {
+                spriteSlice = cachedSlice;
+            }
+            else
+            {
+                spriteSlice = AssetPathUtility.ResolveSpriteSlice(resolvedPath, sprite, textureWidth, textureHeight);
+                _spriteSliceCache[cacheKey] = spriteSlice;
+            }
+
+            return true;
+        }
+        catch
+        {
+            resolvedPath = string.Empty;
+            spriteSlice = SpriteImportUtility.CreateDefaultSlice(textureWidth, textureHeight, new Vector2(0.5f, 0.5f));
+            return false;
+        }
+    }
+
+    public bool TryGetSpriteUv(Sprite sprite, TextureObjectUploaded texture, out System.Numerics.Vector2 uvMin, out System.Numerics.Vector2 uvMax)
+    {
+        uvMin = System.Numerics.Vector2.Zero;
+        uvMax = System.Numerics.Vector2.One;
+        if (!TryResolveSpriteSlice(sprite, texture.Width, texture.Height, out _, out var slice))
+            return false;
+
+        uvMin = new System.Numerics.Vector2(
+            slice.X / (float)Math.Max(1, texture.Width),
+            slice.Y / (float)Math.Max(1, texture.Height));
+        uvMax = new System.Numerics.Vector2(
+            (slice.X + slice.Width) / (float)Math.Max(1, texture.Width),
+            (slice.Y + slice.Height) / (float)Math.Max(1, texture.Height));
+        return true;
+    }
+
+    private List<Component> CollectAllSortedRenderers(World w)
+    {
+        _rendererSortItems.Clear();
+        _sortedRenderers.Clear();
+
+        var entities = w.GetAllEntities();
+        for (int i = 0; i < entities.Count; i++)
+        {
+            var entity = entities[i];
+            if (!entity.Active)
+                continue;
+
+            if (entity.GetComponent<SpriteRenderer>() is SpriteRenderer spriteRenderer && spriteRenderer.Enabled)
+            {
+                _rendererSortItems.Add(new RendererSortItem(
+                    spriteRenderer,
+                    i,
+                    spriteRenderer.ResolvedLayerIndex,
+                    spriteRenderer.OrderInLayer,
+                    GetSortAxisValue(entity.Transform)));
+            }
+
+            if (entity.GetComponent<TilemapRenderer>() is TilemapRenderer tilemapRenderer && tilemapRenderer.Enabled)
+            {
+                _rendererSortItems.Add(new RendererSortItem(
+                    tilemapRenderer,
+                    i,
+                    tilemapRenderer.ResolvedLayerIndex,
+                    tilemapRenderer.OrderInLayer,
+                    GetSortAxisValue(entity.Transform)));
+            }
+
+            if (entity.GetComponent<PolygonRenderer>() is PolygonRenderer polygonRenderer && polygonRenderer.Enabled)
+            {
+                _rendererSortItems.Add(new RendererSortItem(
+                    polygonRenderer,
+                    i,
+                    polygonRenderer.ResolvedLayerIndex,
+                    polygonRenderer.OrderInLayer,
+                    GetSortAxisValue(entity.Transform)));
+            }
+        }
+
+        _rendererSortItems.Sort((a, b) =>
+        {
+            int layerComparison = a.LayerIndex.CompareTo(b.LayerIndex);
+            if (layerComparison != 0) return layerComparison;
+
+            int orderComparison = a.OrderInLayer.CompareTo(b.OrderInLayer);
+            if (orderComparison != 0) return orderComparison;
+
+            int hierarchyComparison = a.HierarchyOrder.CompareTo(b.HierarchyOrder);
+            if (hierarchyComparison != 0) return hierarchyComparison;
+
+            int axisComparison = SortAxisAscending ? a.SortAxisValue.CompareTo(b.SortAxisValue) : b.SortAxisValue.CompareTo(a.SortAxisValue);
+            return axisComparison != 0 ? axisComparison : a.Renderer.Owner.Id.CompareTo(b.Renderer.Owner.Id);
+        });
+
+        foreach (var item in _rendererSortItems)
+            _sortedRenderers.Add(item.Renderer);
+
+        return _sortedRenderers;
     }
     private float GetSortAxisValue(Transform t) => CustomSortAxis switch { SortAxis.X => t.WorldPosition.X, SortAxis.Y => t.WorldPosition.Y, _ => 0f };
     private static Matrix4x4 BuildModelMatrix(Transform t, SpriteRenderer sr, Vector2 pivot) { 
@@ -1611,18 +1711,8 @@ public class RenderPipeline : IDisposable
         if (texture == null || string.IsNullOrWhiteSpace(sr.Sprite.Path))
             return sr.Pivot;
 
-        try
-        {
-            string resolvedSpritePath = ResolveAssetPath(sr.Sprite.Path, sr.Sprite.Guid);
-            if (File.Exists(resolvedSpritePath))
-            {
-                SpriteSlice spriteSlice = AssetPathUtility.ResolveSpriteSlice(resolvedSpritePath, sr.Sprite, texture.Width, texture.Height);
-                return spriteSlice.Pivot;
-            }
-        }
-        catch
-        {
-        }
+        if (TryResolveSpriteSlice(sr.Sprite, texture.Width, texture.Height, out _, out var spriteSlice))
+            return spriteSlice.Pivot;
 
         return sr.Pivot;
     }
@@ -1714,8 +1804,7 @@ public class RenderPipeline : IDisposable
     public TextureObjectUploaded? LoadTexture(string path, string? guid = null)
     {
         try {
-            string fp = ResolveAssetPath(path, guid);
-            if (File.Exists(fp))
+            if (TryResolveAssetPath(path, guid, out string fp))
             {
                 var settings = AssetPathUtility.TryGetSpriteImportSettings(fp);
                 return _textureManager.Load(fp, settings?.Filter ?? SpriteTextureFilter.Point);
@@ -1758,7 +1847,7 @@ public class RenderPipeline : IDisposable
         RenderPolygonFill(vertices, indices, color, cam, fbo, owner, sortingLayerName);
     }
 
-    public void ClearCache() { _shaderCache.Clear(); _styleCache.Clear(); _spriteShadowShapeCache.Clear(); }
+    public void ClearCache() { _shaderCache.Clear(); _styleCache.Clear(); _spriteShadowShapeCache.Clear(); _resolvedAssetCache.Clear(); _spriteSliceCache.Clear(); }
     public void ClearStyleCache(string path)
     {
         string key = GetCacheKey(path);

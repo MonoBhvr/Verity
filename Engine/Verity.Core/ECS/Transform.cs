@@ -4,14 +4,49 @@ namespace Verity.Core.ECS;
 [Verity.Core.NonDisableable]
 public sealed class Transform : Component
 {
+    private Vector2 _position;
     private float _rotation;
-    public Vector2 Position { get; set; }
+    private Vector2 _scale = Vector2.One;
+    private Matrix4x4 _localMatrixCache;
+    private Matrix4x4 _worldMatrixCache;
+    private Vector2 _worldScaleCache = Vector2.One;
+    private float _worldRotationCache;
+    private bool _localMatrixDirty = true;
+    private bool _worldMatrixDirty = true;
+    private bool _worldScaleDirty = true;
+    private bool _worldRotationDirty = true;
+
+    public Vector2 Position
+    {
+        get => _position;
+        set
+        {
+            if (_position == value) return;
+            _position = value;
+            InvalidateLocalCache();
+        }
+    }
     public float Rotation 
     { 
         get => _rotation; 
-        set => _rotation = value % 360f; 
+        set
+        {
+            float normalized = value % 360f;
+            if (_rotation == normalized) return;
+            _rotation = normalized;
+            InvalidateLocalCache();
+        }
     }
-    public Vector2 Scale { get; set; } = Vector2.One;
+    public Vector2 Scale
+    {
+        get => _scale;
+        set
+        {
+            if (_scale == value) return;
+            _scale = value;
+            InvalidateLocalCache();
+        }
+    }
 
     private Transform? _parent;
     private readonly List<Transform> _children = [];
@@ -88,6 +123,8 @@ public sealed class Transform : Component
             _parent._children.Insert(insertIndex, this);
         }
 
+        InvalidateWorldCacheRecursive();
+
         if (worldPos.HasValue)
         {
             WorldPosition = worldPos.Value;
@@ -95,7 +132,7 @@ public sealed class Transform : Component
             WorldScale = worldScale!.Value;
         }
 
-        Owner.World?.InvalidateScriptCache();
+        Owner.World?.MarkHierarchyChanged();
     }
 
     public int GetSiblingIndex()
@@ -124,24 +161,35 @@ public sealed class Transform : Component
 
         _parent._children.RemoveAt(currentIndex);
         _parent._children.Insert(clampedIndex, this);
-        Owner.World?.InvalidateScriptCache();
+        Owner.World?.MarkHierarchyChanged();
     }
 
     public IReadOnlyList<Transform> Children => _children;
 
     public Matrix4x4 GetLocalMatrix()
     {
-        var scale = Matrix4x4.CreateScale(new Vector3(Scale.X, Scale.Y, 1f));
-        var rotation = Matrix4x4.CreateRotationZ(Rotation * MathF.PI / 180f);
-        var translation = Matrix4x4.CreateTranslation(new Vector3(Position.X, Position.Y, 0f));
-        return scale * rotation * translation;
+        if (_localMatrixDirty)
+        {
+            var scale = Matrix4x4.CreateScale(new Vector3(_scale.X, _scale.Y, 1f));
+            var rotation = Matrix4x4.CreateRotationZ(_rotation * MathF.PI / 180f);
+            var translation = Matrix4x4.CreateTranslation(new Vector3(_position.X, _position.Y, 0f));
+            _localMatrixCache = scale * rotation * translation;
+            _localMatrixDirty = false;
+        }
+
+        return _localMatrixCache;
     }
 
     public Matrix4x4 GetWorldMatrix()
     {
-        var local = GetLocalMatrix();
-        if (_parent == null) return local;
-        return local * _parent.GetWorldMatrix();
+        if (_worldMatrixDirty)
+        {
+            var local = GetLocalMatrix();
+            _worldMatrixCache = _parent == null ? local : local * _parent.GetWorldMatrix();
+            _worldMatrixDirty = false;
+        }
+
+        return _worldMatrixCache;
     }
 
     public Vector2 WorldPosition
@@ -168,7 +216,13 @@ public sealed class Transform : Component
         get
         {
             if (_parent == null) return Rotation;
-            return Rotation + _parent.WorldRotation;
+            if (_worldRotationDirty)
+            {
+                _worldRotationCache = Rotation + _parent.WorldRotation;
+                _worldRotationDirty = false;
+            }
+
+            return _worldRotationCache;
         }
         set
         {
@@ -182,7 +236,13 @@ public sealed class Transform : Component
         get
         {
             if (_parent == null) return Scale;
-            return Scale * _parent.WorldScale;
+            if (_worldScaleDirty)
+            {
+                _worldScaleCache = Scale * _parent.WorldScale;
+                _worldScaleDirty = false;
+            }
+
+            return _worldScaleCache;
         }
         set
         {
@@ -196,5 +256,21 @@ public sealed class Transform : Component
                 );
             }
         }
+    }
+
+    private void InvalidateLocalCache()
+    {
+        _localMatrixDirty = true;
+        InvalidateWorldCacheRecursive();
+    }
+
+    private void InvalidateWorldCacheRecursive()
+    {
+        _worldMatrixDirty = true;
+        _worldScaleDirty = true;
+        _worldRotationDirty = true;
+
+        foreach (var child in _children)
+            child.InvalidateWorldCacheRecursive();
     }
 }

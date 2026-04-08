@@ -2,7 +2,11 @@
   <ItemGroup>
     <Compile Remove="obj/**/*.cs" />
     <Compile Remove="obj_codex/**/*.cs" />
+    <Compile Remove="obj_verify/**/*.cs" />
+    <Compile Remove="obj_*/**/*.cs" />
     <Compile Remove="bin/**/*.cs" />
     <Compile Remove="bin_codex/**/*.cs" />
+    <Compile Remove="bin_verify/**/*.cs" />
+    <Compile Remove="bin_*/**/*.cs" />
   </ItemGroup>
 </Project>

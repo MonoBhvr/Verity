@@ -2,9 +2,10 @@ using System.IO;
 using System.Numerics;
 using System.Text.Json.Nodes;
 using Hexa.NET.ImGui;
+using Verity.Core.Audio;
 using Verity.Core.ECS;
-using Verity.Core.World;
 using Verity.Core.Physics;
+using Verity.Core.World;
 using Verity.Graphics;
 
 namespace Verity.Editor.Windows;
@@ -103,42 +104,81 @@ public unsafe class HierarchyWindow : EditorWindow
             {
                 if (ImGui.MenuItem(L10n.Tr("CreationType_Sprite")))
                 {
-                    _app.RecordUndo();
-                    var sprite = world.CreateEntity(L10n.Tr("CreationType_Sprite"));
-                    sprite.AddComponent<SpriteRenderer>();
-                    _app.AttachToBlueprintDefaultParent(sprite);
-                    EditorSelection.SelectedEntity = sprite;
+                    CreateEntityPreset(world, L10n.Tr("CreationType_Sprite"), entity => entity.AddComponent<SpriteRenderer>());
                 }
 
                 if (ImGui.MenuItem(L10n.Tr("btn_add_tilemap_with_shape")))
                 {
-                    _app.RecordUndo();
-                    var tm = world.CreateEntity(L10n.Tr("CreationType_Tilemap"));
-                    tm.AddComponent<TilemapRenderer>();
-                    tm.AddComponent<TilemapShape>();
-                    _app.AttachToBlueprintDefaultParent(tm);
-                    EditorSelection.SelectedEntity = tm;
+                    CreateEntityPreset(world, L10n.Tr("CreationType_Tilemap"), entity =>
+                    {
+                        entity.AddComponent<TilemapRenderer>();
+                        entity.AddComponent<TilemapShape>();
+                    });
                 }
 
                 if (ImGui.MenuItem(L10n.Tr("btn_add_tilemap_no_shape")))
                 {
-                    _app.RecordUndo();
-                    var tm = world.CreateEntity(L10n.Tr("CreationType_Tilemap"));
-                    tm.AddComponent<TilemapRenderer>();
-                    _app.AttachToBlueprintDefaultParent(tm);
-                    EditorSelection.SelectedEntity = tm;
+                    CreateEntityPreset(world, L10n.Tr("CreationType_Tilemap"), entity => entity.AddComponent<TilemapRenderer>());
                 }
-                if (!WorldHasCamera(world))
 
+                if (ImGui.BeginMenu(L10n.Tr("menu_create_light")))
                 {
-                    if (ImGui.MenuItem(L10n.Tr("CreationType_Camera")))
+                    if (ImGui.MenuItem(L10n.Tr("menu_create_light_spot")))
                     {
-                        _app.RecordUndo();
-                        var camera = world.CreateEntity(L10n.Tr("CreationType_Camera"));
-                        camera.AddComponent<Camera>();
-                        _app.AttachToBlueprintDefaultParent(camera);
-                        EditorSelection.SelectedEntity = camera;
+                        CreateEntityPreset(world, L10n.Tr("menu_create_light_spot"), entity =>
+                        {
+                            var light = entity.AddComponent<Light2D>();
+                            light.Type = Light2DType.Spot;
+                        });
                     }
+
+                    if (ImGui.MenuItem(L10n.Tr("menu_create_light_directional")))
+                    {
+                        CreateEntityPreset(world, L10n.Tr("menu_create_light_directional"), entity =>
+                        {
+                            var light = entity.AddComponent<Light2D>();
+                            light.Type = Light2DType.Direction;
+                            light.Distance = 10.0f;
+                            light.Spread = 0.0f;
+                        });
+                    }
+
+                    if (ImGui.MenuItem(L10n.Tr("menu_create_light_global")))
+                    {
+                        CreateEntityPreset(world, L10n.Tr("menu_create_light_global"), entity =>
+                        {
+                            var light = entity.AddComponent<Light2D>();
+                            light.Type = Light2DType.World;
+                            light.AffectsCameraBackground = true;
+                            light.CastShadows = false;
+                        });
+                    }
+
+                    ImGui.EndMenu();
+                }
+
+                if (ImGui.BeginMenu(L10n.Tr("menu_create_audio")))
+                {
+                    if (!WorldHasComponent<AudioListener>(world) && ImGui.MenuItem(L10n.Tr("type_AudioListener")))
+                    {
+                        CreateEntityPreset(world, L10n.Tr("type_AudioListener"), entity => entity.AddComponent<AudioListener>());
+                    }
+
+                    if (ImGui.MenuItem(L10n.Tr("type_AudioSource")))
+                    {
+                        CreateEntityPreset(world, L10n.Tr("type_AudioSource"), entity =>
+                        {
+                            var audioSource = entity.AddComponent<AudioSource>();
+                            audioSource.PlayOnStart = false;
+                        });
+                    }
+
+                    ImGui.EndMenu();
+                }
+
+                if (!WorldHasComponent<Camera>(world) && ImGui.MenuItem(L10n.Tr("CreationType_Camera")))
+                {
+                    CreateEntityPreset(world, L10n.Tr("CreationType_Camera"), entity => entity.AddComponent<Camera>());
                 }
 
                 ImGui.EndMenu();
@@ -162,7 +202,40 @@ public unsafe class HierarchyWindow : EditorWindow
         }
     }
 
+    private void CreateEntityPreset(World world, string name, Action<Entity>? configure = null)
+    {
+        _app.RecordUndo();
+        var entity = world.CreateEntity(name);
+        configure?.Invoke(entity);
+        _app.AttachToBlueprintDefaultParent(entity);
+        EditorSelection.SelectedEntity = entity;
+    }
+
     public override void RefreshTitle() { Title = L10n.Tr("window_hierarchy"); }
+
+    private static bool WorldHasComponent<T>(World world) where T : class
+    {
+        foreach (var entity in world.RootEntities)
+        {
+            if (HasComponentRecursive<T>(entity))
+                return true;
+        }
+        return false;
+    }
+
+    private static bool HasComponentRecursive<T>(Entity entity) where T : class
+    {
+        if (entity.GetComponent<T>() != null)
+            return true;
+
+        foreach (var child in entity.Transform.Children)
+        {
+            if (HasComponentRecursive<T>(child.Owner))
+                return true;
+        }
+
+        return false;
+    }
 
     private void HandleShortcuts(World world)
     {
@@ -437,29 +510,6 @@ public unsafe class HierarchyWindow : EditorWindow
             }
             ImGui.EndDragDropTarget();
         }
-    }
-
-    private static bool WorldHasCamera(World world)
-    {
-        foreach (var entity in world.RootEntities)
-        {
-            if (HasCameraRecursive(entity))
-                return true;
-        }
-        return false;
-    }
-
-    private static bool HasCameraRecursive(Entity entity)
-    {
-        if (entity.GetComponent<Camera>() != null)
-            return true;
-
-        foreach (var child in entity.Transform.Children)
-        {
-            if (HasCameraRecursive(child.Owner))
-                return true;
-        }
-        return false;
     }
 
     private void DrawEntityNode(Entity entity)

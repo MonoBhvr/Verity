@@ -1,32 +1,184 @@
-# Verity Audio API Reference
+# Verity 오디오 문서
 
-## 1. AudioSource (`Verity.Core.Audio.AudioSource`)
+이 문서는 오디오 시스템의 구조와 공개 API를 설명합니다.
 
-### Properties
-| Name | Type | Description |
-| :--- | :--- | :--- |
-| `Clip` | `AudioClip` | 재생할 오디오 클립 에셋입니다. |
-| `GroupName` | `string` | 오디오 그룹 (SFX, BGM 등) 이름입니다. |
-| `Volume / Pitch` | `float` | 볼륨(0~1) 및 재생 속도 배율입니다. |
-| `Loop / PlayOnStart` | `bool` | 반복 여부 및 활성화 시 자동 재생 여부입니다. |
-| `IsSpatial / Mute` | `bool` | 3D 공간 음향 적용 여부 및 음소거 여부입니다. |
-| `Min / Max Pitch` | `float` | 재생 시마다 적용될 무작위 피치 범위입니다. |
-| `Min / Max Volume` | `float` | 재생 시마다 적용될 무작위 볼륨 범위입니다. |
-| `Min / Max Distance` | `float` | 공간 음향의 볼륨 감쇄가 시작/종료되는 거리입니다. |
+범위는 다음과 같습니다.
 
-### Methods
-- `Play()`: 소리 재생 시작.
-- `Stop()`: 소리 재생 중단.
-- `Pause / Resume()`: 일시 정지 및 재개.
-- `PlayOneShot(clip, scale)`: 지정된 클립을 현재 소스의 위치에서 중첩 재생.
+- `AudioClip`
+- `AudioSource`
+- `AudioGroup`
+- `AudioListener`
+- `AudioSystem`
+- `AudioManager`
 
 ---
 
-## 2. AudioManager (Static)
-전역 오디오 엔진 제어 및 그룹 관리를 수행합니다.
+## 1. 오디오 시스템 개요
 
-### Static Methods
-- `PlayOneShot(clip, group, scale, pos, min, max)`: 특정 위치나 그룹 설정으로 클립을 즉시 재생.
-- `SetGroupVolume / Pitch(name, val)`: 그룹 내 모든 소리의 볼륨/피치를 일괄 조절.
-- `StopGroup(name)`: 특정 그룹의 모든 소리를 즉시 정지.
-- `MuteGroup(name, mute)`: 특정 그룹을 음소거하거나 해제.
+현재 오디오 시스템은 SDL_mixer 기반이며, 월드당 하나의 `AudioManager`가 그룹과 공간 음향 갱신을 담당합니다.
+
+### 존재 이유
+
+- 간단한 효과음과 음악 재생을 빠르게 지원하기 위해
+- 그룹 단위 볼륨 조절과 공간 음향을 제공하기 위해
+
+---
+
+## 2. `AudioType`
+
+| 값 | 의미 |
+| :--- | :--- |
+| `Effect` | 일반 효과음 |
+| `Music` | 배경 음악 |
+
+---
+
+## 3. `AudioClip`
+
+`AudioClip`은 오디오 파일 참조와 로드 핸들을 함께 보관합니다.
+
+### 프로퍼티
+
+| 이름 | 형식 | 설명 |
+| :--- | :--- | :--- |
+| `Name` | `string` | 표시 이름 |
+| `Path` | `string` | 에셋 경로 |
+| `Guid` | `string` | 에셋 GUID |
+| `Handle` | `IntPtr` | SDL 로드 핸들 |
+| `Type` | `AudioType` | 음악/효과음 구분 |
+| `DefaultVolume` | `float` | 기본 볼륨 |
+| `DefaultPitch` | `float` | 기본 피치 |
+| `IsLooping` | `bool` | 루프 기본값 |
+
+### 생성자와 정적 메서드
+
+- `AudioClip()`
+- `AudioClip(string name, string path, AudioType type)`
+- `static AudioClip FromPath(string path, AudioType? type = null)`
+- `static AudioType GuessType(string? path)`
+
+### 인스턴스 메서드
+
+- `void PostLoad(string? resolvedPath = null)`
+- `void Preview()`
+- `void Dispose()`
+
+### 존재 이유
+
+- 에셋 참조와 런타임 핸들을 하나의 타입으로 묶어야 하기 때문입니다.
+
+---
+
+## 4. `AudioGroup`
+
+`AudioGroup`은 여러 source를 논리적으로 묶는 그룹입니다.
+
+### 프로퍼티
+
+- `string Name`
+- `float Volume`
+- `float Pitch`
+- `bool IsMuted`
+- `int MaxVoices`
+- `Queue<int> ActiveChannels`
+
+### 메서드
+
+- `float GetFinalVolume(float masterVolume)`
+
+### 존재 이유
+
+- SFX, BGM, UI 같은 그룹별로 볼륨과 voice 제한을 따로 두기 위해
+
+---
+
+## 5. `AudioSource`
+
+`AudioSource`는 엔티티에 붙어 실제 재생 요청을 내리는 컴포넌트입니다.
+
+### 프로퍼티
+
+- `AudioClip? Clip`
+- `string GroupName`
+- `bool Loop`
+- `bool PlayOnStart`
+- `bool IsSpatial`
+- `bool Mute`
+- `float Volume`
+- `float Pitch`
+- `float MinPitch`
+- `float MaxPitch`
+- `float MinVolume`
+- `float MaxVolume`
+- `float MinDistance`
+- `float MaxDistance`
+- `int CurrentChannel`
+
+### 메서드
+
+- `void Play()`
+- `void Stop()`
+- `void PlayOneShot(AudioClip clip, float volumeScale = 1.0f)`
+
+### 존재 이유
+
+- 엔티티 위치와 연결된 오디오 재생 단위를 제공하기 위해
+
+---
+
+## 6. `AudioListener`
+
+`AudioListener`는 공간 음향 기준점입니다.
+
+### 존재 이유
+
+- 2D 위치 기반 감쇠와 panning 계산의 기준점이 필요하기 때문입니다.
+
+---
+
+## 7. `AudioSystem`
+
+`AudioSystem`은 SDL 오디오 서브시스템 초기화와 종료를 담당합니다.
+
+### 메서드
+
+- `void Initialize()`
+- `void Shutdown()`
+
+### 존재 이유
+
+- 오디오 백엔드 초기화/종료를 게임 로직과 분리하기 위해
+
+---
+
+## 8. `AudioManager`
+
+`AudioManager`는 월드당 하나만 존재하는 오디오 관리 스크립트입니다.
+
+### 정적 프로퍼티
+
+- `AudioManager Instance`
+
+### 프로퍼티
+
+- `List<AudioGroup> Groups`
+- `float MasterVolume`
+
+### 메서드
+
+- `override void Awake()`
+- `void SyncGroupMap()`
+- `void EnsureDefaultGroups()`
+- `AudioGroup GetGroup(string name)`
+- `void RemoveGroup(string name)`
+- `void Play(AudioSource source)`
+- `void Stop(AudioSource source)`
+- `void StopGroup(string groupName)`
+- `void PlayOneShot(AudioClip clip, string groupName = "SFX", float volumeScale = 1.0f, Vector2? position = null, float minDistance = 1.0f, float maxDistance = 10.0f)`
+- `override void Update()`
+- `override void OnDestroy()`
+
+### 존재 이유
+
+- 그룹별 볼륨, active listener, 공간 음향 보정을 중앙에서 관리해야 하기 때문입니다.
+

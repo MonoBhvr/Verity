@@ -2,6 +2,8 @@ namespace Verity.Core.ECS;
 
 public class Entity
 {
+    private static readonly object MissingComponentSentinel = new();
+
     public Guid Id { get; internal set; } = Guid.NewGuid();
     public string Name { get; set; }
     public string Tag { get; set; } = "Untagged";
@@ -14,6 +16,7 @@ public class Entity
             if (_active == value) return;
             _active = value;
             World?.InvalidateScriptCache();
+            World?.MarkStateChanged();
         }
     }
     public Transform Transform { get; }
@@ -33,6 +36,8 @@ public class Entity
     internal Verity.Core.World.World? World { get; set; }
 
     private readonly List<Component> _components = [];
+    private readonly Dictionary<Type, object?> _componentLookupCache = [];
+    private readonly Dictionary<Type, object> _componentCollectionCache = [];
 
     public Entity(string name)
     {
@@ -52,21 +57,41 @@ public class Entity
     {
         var world = Verity.Core.World.WorldManager.ActiveWorld;
         if (world == null) return null;
-        return world.GetAllEntities().FirstOrDefault(e => e.Name == name);
+        foreach (var entity in world.GetAllEntities())
+        {
+            if (entity.Name == name)
+                return entity;
+        }
+
+        return null;
     }
 
     public static Entity? FindWithTag(string tag)
     {
         var world = Verity.Core.World.WorldManager.ActiveWorld;
         if (world == null) return null;
-        return world.GetAllEntities().FirstOrDefault(e => e.Tag == tag);
+        foreach (var entity in world.GetAllEntities())
+        {
+            if (entity.Tag == tag)
+                return entity;
+        }
+
+        return null;
     }
 
     public static Entity[] FindEntitiesWithTag(string tag)
     {
         var world = Verity.Core.World.WorldManager.ActiveWorld;
         if (world == null) return Array.Empty<Entity>();
-        return world.GetAllEntities().Where(e => e.Tag == tag).ToArray();
+
+        var matches = new List<Entity>();
+        foreach (var entity in world.GetAllEntities())
+        {
+            if (entity.Tag == tag)
+                matches.Add(entity);
+        }
+
+        return matches.ToArray();
     }
 
     public static T? FindObjectOfType<T>(bool includeInactive = false) where T : class
@@ -152,9 +177,12 @@ public class Entity
 
         var component = new T { Owner = this };
         _components.Add(component);
+        InvalidateComponentCaches();
 
         if (component is Script)
             World?.InvalidateScriptCache();
+        else
+            World?.MarkStateChanged();
 
         CheckRequiredComponents(typeof(T));
 
@@ -183,9 +211,12 @@ public class Entity
         var component = (Component)Activator.CreateInstance(componentType)!;
         component.Owner = this;
         _components.Add(component);
+        InvalidateComponentCaches();
 
         if (component is Script)
             World?.InvalidateScriptCache();
+        else
+            World?.MarkStateChanged();
 
         CheckRequiredComponents(componentType);
 
@@ -251,31 +282,60 @@ public class Entity
 
     public T? GetComponent<T>() where T : class
     {
+        var type = typeof(T);
+        if (_componentLookupCache.TryGetValue(type, out var cached))
+            return ReferenceEquals(cached, MissingComponentSentinel) ? default : (T?)cached;
+
         foreach (var component in _components)
         {
             if (component is T typed)
+            {
+                _componentLookupCache[type] = typed;
                 return typed;
+            }
         }
+
+        _componentLookupCache[type] = MissingComponentSentinel;
         return default;
     }
 
     public Component? GetComponent(Type type)
     {
+        if (_componentLookupCache.TryGetValue(type, out var cached))
+            return ReferenceEquals(cached, MissingComponentSentinel) ? null : (Component?)cached;
+
         foreach (var component in _components)
         {
             if (type.IsAssignableFrom(component.GetType()))
+            {
+                _componentLookupCache[type] = component;
                 return component;
+            }
         }
+
+        _componentLookupCache[type] = MissingComponentSentinel;
         return null;
     }
 
     public IEnumerable<T> GetComponents<T>() where T : class
     {
+        var type = typeof(T);
+        if (_componentCollectionCache.TryGetValue(type, out var cached))
+            return (T[])cached;
+
+        List<T>? matches = null;
         foreach (var component in _components)
         {
             if (component is T typed)
-                yield return typed;
+            {
+                matches ??= [];
+                matches.Add(typed);
+            }
         }
+
+        var result = matches?.ToArray() ?? Array.Empty<T>();
+        _componentCollectionCache[type] = result;
+        return result;
     }
 
     public T? GetComponentInChildren<T>(bool includeInactive = false) where T : class
@@ -350,7 +410,9 @@ public class Entity
                 bool wasScript = _components[i] is Script;
                 _components[i].OnDestroy();
                 _components.RemoveAt(i);
+                InvalidateComponentCaches();
                 if (wasScript) World?.InvalidateScriptCache();
+                else World?.MarkStateChanged();
                 return true;
             }
         }
@@ -366,7 +428,9 @@ public class Entity
         {
             bool wasScript = component is Script;
             component.OnDestroy();
+            InvalidateComponentCaches();
             if (wasScript) World?.InvalidateScriptCache();
+            else World?.MarkStateChanged();
             return true;
         }
         return false;
@@ -376,13 +440,12 @@ public class Entity
 
     internal IReadOnlyList<Component> Components => _components;
 
-    internal IEnumerable<Script> GetScripts()
+    internal IEnumerable<Script> GetScripts() => GetComponents<Script>();
+
+    private void InvalidateComponentCaches()
     {
-        foreach (var component in _components)
-        {
-            if (component is Script script)
-                yield return script;
-        }
+        _componentLookupCache.Clear();
+        _componentCollectionCache.Clear();
     }
 }
 

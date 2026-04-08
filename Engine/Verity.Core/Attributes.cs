@@ -32,7 +32,12 @@ public class NonDisableableAttribute : Attribute { }
 public class ButtonAttribute : Attribute
 {
     public string? Label { get; }
-    public ButtonAttribute(string? label = null) => Label = label;
+    public bool Undoable { get; }
+    public ButtonAttribute(string? label = null, bool undoable = false)
+    {
+        Label = label;
+        Undoable = undoable;
+    }
 }
 
 // 용도별 선택기 어트리뷰트

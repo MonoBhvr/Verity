@@ -34,7 +34,7 @@ public unsafe class InspectorWindow : EditorWindow
     private static readonly ConcurrentDictionary<Type, MemberInfo[]> MultiInspectorMembersCache = new();
     private static readonly ConcurrentDictionary<Type, MemberInfo[]> NestedInspectorMembersCache = new();
     private static readonly ConcurrentDictionary<MemberInfo, HashSet<string>> MemberAttributeCache = new();
-    private static readonly ConcurrentDictionary<MethodInfo, string?> ButtonLabelCache = new();
+    private static readonly ConcurrentDictionary<MethodInfo, ButtonMetadata?> ButtonMetadataCache = new();
     private static readonly ConcurrentDictionary<MemberInfo, AssetReferenceAttribute?> AssetReferenceAttributeCache = new();
 
     private readonly EditorApp _app;
@@ -64,6 +64,8 @@ public unsafe class InspectorWindow : EditorWindow
     private string? _cachedBlueprintPath;
     private DateTime _cachedBlueprintWriteTimeUtc;
     private BlueprintPreviewData? _cachedBlueprintPreview;
+    private readonly Dictionary<string, List<AssetPickerEntry>> _assetPickerCache = new(StringComparer.OrdinalIgnoreCase);
+    private string? _assetPickerCacheRoot;
 
     public InspectorWindow(EditorApp app) : base(L10n.Tr("window_inspector")) { _app = app; }
 
@@ -94,6 +96,18 @@ public unsafe class InspectorWindow : EditorWindow
         public string Name { get; init; } = "";
         public JsonObject? Fields { get; init; }
     }
+
+    private sealed class AssetPickerEntry
+    {
+        public string FullPath { get; init; } = "";
+        public string RelativePath { get; init; } = "";
+    }
+
+    private sealed class ButtonMetadata
+    {
+        public string Label { get; init; } = "";
+        public bool Undoable { get; init; }
+    }
     
     public override void OnGui()
     {
@@ -113,6 +127,38 @@ public unsafe class InspectorWindow : EditorWindow
     }
 
     public override void RefreshTitle() { Title = L10n.Tr("window_inspector"); }
+
+    private IEnumerable<AssetPickerEntry> GetAssetPickerEntries(string cacheKey, Func<string, bool> predicate)
+    {
+        if (string.IsNullOrWhiteSpace(_app.AssetsPath) || !Directory.Exists(_app.AssetsPath))
+            return Array.Empty<AssetPickerEntry>();
+
+        string assetsPath = Path.GetFullPath(_app.AssetsPath);
+        if (!string.Equals(_assetPickerCacheRoot, assetsPath, StringComparison.OrdinalIgnoreCase))
+        {
+            _assetPickerCacheRoot = assetsPath;
+            _assetPickerCache.Clear();
+        }
+
+        if (_assetPickerCache.TryGetValue(cacheKey, out var cached))
+            return cached;
+
+        var entries = new List<AssetPickerEntry>();
+        foreach (string path in Directory.EnumerateFiles(assetsPath, "*", SearchOption.AllDirectories))
+        {
+            if (!predicate(path))
+                continue;
+
+            entries.Add(new AssetPickerEntry
+            {
+                FullPath = path,
+                RelativePath = Path.GetRelativePath(assetsPath, path).Replace("\\", "/")
+            });
+        }
+
+        _assetPickerCache[cacheKey] = entries;
+        return entries;
+    }
 
     private void DrawMultiEntityInspector(List<Entity> entities)
     {
@@ -152,10 +198,27 @@ public unsafe class InspectorWindow : EditorWindow
             if (member is FieldInfo field && ShouldShowMember(field, target)) ProcessMember(localizedName, field.FieldType, field.GetValue(target), val => { field.SetValue(target, val); onUpdate?.Invoke(); }, field, target);
             else if (member is PropertyInfo prop && prop.CanRead && prop.CanWrite && prop.GetIndexParameters().Length == 0 && ShouldShowMember(prop, target)) ProcessMember(localizedName, prop.PropertyType, prop.GetValue(target), val => { prop.SetValue(target, val); onUpdate?.Invoke(); }, prop, target);
             else if (member is MethodInfo method) {
-                string? label = GetButtonLabel(method);
-                if (label != null) {
-                    string localizedLabel = L10n.Tr($"btn_{label}") ?? label;
-                    if (ImGui.Button($"{localizedLabel}##{method.Name}", new Vector2(-1, 25))) { try { method.Invoke(target, null); } catch (Exception e) { Verity.Core.Debug.LogError($"Button Error: {e.Message}"); } }
+                ButtonMetadata? metadata = GetButtonMetadata(method);
+                if (metadata != null) {
+                    string localizedLabel = L10n.Tr($"btn_{metadata.Label}") ?? metadata.Label;
+                    if (ImGui.Button($"{localizedLabel}##{method.Name}", new Vector2(-1, 25))) {
+                        try
+                        {
+                            if (metadata.Undoable)
+                                _app.BeginUndoAction();
+
+                            method.Invoke(target, null);
+                        }
+                        catch (Exception e)
+                        {
+                            Verity.Core.Debug.LogError($"Button Error: {e.Message}");
+                        }
+                        finally
+                        {
+                            if (metadata.Undoable)
+                                _app.EndUndoAction();
+                        }
+                    }
                 }
             }
         }
@@ -1440,20 +1503,22 @@ public unsafe class InspectorWindow : EditorWindow
                 .ToArray());
     }
 
-    private static string? GetButtonLabel(MethodInfo method)
+    private static ButtonMetadata? GetButtonMetadata(MethodInfo method)
     {
-        return ButtonLabelCache.GetOrAdd(method, static currentMethod =>
+        return ButtonMetadataCache.GetOrAdd(method, static currentMethod =>
         {
             if (currentMethod.GetParameters().Length != 0)
                 return null;
 
-            object? attribute = currentMethod.GetCustomAttributes(true).FirstOrDefault(attr => attr.GetType().Name == "ButtonAttribute");
+            ButtonAttribute? attribute = currentMethod.GetCustomAttribute<ButtonAttribute>();
             if (attribute == null)
                 return null;
 
-            var attributeType = attribute.GetType();
-            var labelProperty = attributeType.GetProperty("Label") ?? attributeType.GetProperties().FirstOrDefault(property => property.Name == "Label");
-            return labelProperty?.GetValue(attribute) as string ?? currentMethod.Name;
+            return new ButtonMetadata
+            {
+                Label = attribute.Label ?? currentMethod.Name,
+                Undoable = attribute.Undoable
+            };
         });
     }
 
@@ -2651,18 +2716,13 @@ public unsafe class InspectorWindow : EditorWindow
         {
             ImGui.InputText(L10n.Tr("label_search"), ref _searchFilter, 64);
             if (ImGui.MenuItem(L10n.Tr("msg_none"))) onUpdate(null);
-            if (_app.AssetsPath != null)
+            foreach (var entry in GetAssetPickerEntries("audio", IsAudioExtension))
             {
-                foreach (var f in Directory.GetFiles(_app.AssetsPath, "*.*", SearchOption.AllDirectories))
-                {
-                    if (!IsAudioExtension(f)) continue;
-                    var rel = Path.GetRelativePath(_app.AssetsPath, f).Replace("\\", "/");
-                    if (string.IsNullOrEmpty(_searchFilter) || rel.Contains(_searchFilter, StringComparison.OrdinalIgnoreCase))
-                    {
-                        if (ImGui.MenuItem(rel))
-                            onUpdate(AudioClip.FromPath(f));
-                    }
-                }
+                if (!string.IsNullOrEmpty(_searchFilter) && !entry.RelativePath.Contains(_searchFilter, StringComparison.OrdinalIgnoreCase))
+                    continue;
+
+                if (ImGui.MenuItem(entry.RelativePath))
+                    onUpdate(AudioClip.FromPath(entry.FullPath));
             }
             ImGui.EndPopup();
         }
@@ -2730,13 +2790,13 @@ public unsafe class InspectorWindow : EditorWindow
         if (ImGui.BeginPopup("Picker")) {
             ImGui.InputText(L10n.Tr("label_search"), ref _searchFilter, 64);
             if (ImGui.MenuItem(L10n.Tr("msg_none"))) onUpdate(default(Sprite));
-            if (_app.AssetsPath != null) foreach (var f in Directory.GetFiles(_app.AssetsPath, "*.*", SearchOption.AllDirectories)) {
-                var ext = Path.GetExtension(f).ToLower();
-                if (ext is ".png" or ".jpg" or ".jpeg") {
-                    var rel = Path.GetRelativePath(_app.AssetsPath, f).Replace("\\", "/");
-                    if (string.IsNullOrEmpty(_searchFilter) || rel.Contains(_searchFilter, StringComparison.OrdinalIgnoreCase))
-                        DrawSpritePickerEntry(f, rel, onUpdate);
-                }
+            foreach (var entry in GetAssetPickerEntries("sprites", static path =>
+            {
+                string ext = Path.GetExtension(path).ToLowerInvariant();
+                return ext is ".png" or ".jpg" or ".jpeg";
+            })) {
+                if (string.IsNullOrEmpty(_searchFilter) || entry.RelativePath.Contains(_searchFilter, StringComparison.OrdinalIgnoreCase))
+                    DrawSpritePickerEntry(entry.FullPath, entry.RelativePath, onUpdate);
             }
             ImGui.EndPopup();
         }
@@ -2808,9 +2868,8 @@ public unsafe class InspectorWindow : EditorWindow
         if (ImGui.BeginPopup("Picker")) {
             ImGui.InputText(L10n.Tr("label_search"), ref _searchFilter, 64);
             if (ImGui.MenuItem(L10n.Tr("msg_none"))) onUpdate(default(StyleAsset));
-            if (_app.AssetsPath != null) foreach (var f in Directory.GetFiles(_app.AssetsPath, "*.style", SearchOption.AllDirectories)) {
-                var rel = Path.GetRelativePath(_app.AssetsPath, f).Replace("\\", "/");
-                if (string.IsNullOrEmpty(_searchFilter) || rel.Contains(_searchFilter, StringComparison.OrdinalIgnoreCase)) if (ImGui.MenuItem(rel)) onUpdate((StyleAsset)f);
+            foreach (var entry in GetAssetPickerEntries("style", static path => Path.GetExtension(path).Equals(".style", StringComparison.OrdinalIgnoreCase))) {
+                if ((string.IsNullOrEmpty(_searchFilter) || entry.RelativePath.Contains(_searchFilter, StringComparison.OrdinalIgnoreCase)) && ImGui.MenuItem(entry.RelativePath)) onUpdate((StyleAsset)entry.FullPath);
             }
             ImGui.EndPopup();
         }
@@ -2828,9 +2887,8 @@ public unsafe class InspectorWindow : EditorWindow
         if (ImGui.BeginPopup("Picker")) {
             ImGui.InputText(L10n.Tr("label_search"), ref _searchFilter, 64);
             if (ImGui.MenuItem(L10n.Tr("msg_none"))) onUpdate(default(ShaderAsset));
-            if (_app.AssetsPath != null) foreach (var f in Directory.GetFiles(_app.AssetsPath, "*.shader", SearchOption.AllDirectories)) {
-                var rel = Path.GetRelativePath(_app.AssetsPath, f).Replace("\\", "/");
-                if (string.IsNullOrEmpty(_searchFilter) || rel.Contains(_searchFilter, StringComparison.OrdinalIgnoreCase)) if (ImGui.MenuItem(rel)) onUpdate((ShaderAsset)f);
+            foreach (var entry in GetAssetPickerEntries("shader", static path => Path.GetExtension(path).Equals(".shader", StringComparison.OrdinalIgnoreCase))) {
+                if ((string.IsNullOrEmpty(_searchFilter) || entry.RelativePath.Contains(_searchFilter, StringComparison.OrdinalIgnoreCase)) && ImGui.MenuItem(entry.RelativePath)) onUpdate((ShaderAsset)entry.FullPath);
             }
             ImGui.EndPopup();
         }
@@ -2848,12 +2906,13 @@ public unsafe class InspectorWindow : EditorWindow
         if (ImGui.BeginPopup("Picker")) {
             ImGui.InputText(L10n.Tr("label_search"), ref _searchFilter, 64);
             if (ImGui.MenuItem(L10n.Tr("msg_none"))) onUpdate(null);
-            if (_app.AssetsPath != null) {
-                var eList = exts.Split(';').Select(e => e.Trim().ToLower()).ToArray();
-                foreach (var f in Directory.GetFiles(_app.AssetsPath, "*.*", SearchOption.AllDirectories)) if (eList.Contains(Path.GetExtension(f).ToLower())) {
-                    var rel = Path.GetRelativePath(_app.AssetsPath, f).Replace("\\", "/");
-                    if (string.IsNullOrEmpty(_searchFilter) || rel.Contains(_searchFilter, StringComparison.OrdinalIgnoreCase)) if (ImGui.MenuItem(rel)) onUpdate(f);
-                }
+            var normalizedExtensions = exts.Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                .Select(static ext => ext.StartsWith('.') ? ext.ToLowerInvariant() : "." + ext.ToLowerInvariant())
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToArray();
+            string cacheKey = "ext:" + string.Join(';', normalizedExtensions);
+            foreach (var entry in GetAssetPickerEntries(cacheKey, path => normalizedExtensions.Contains(Path.GetExtension(path), StringComparer.OrdinalIgnoreCase))) {
+                if ((string.IsNullOrEmpty(_searchFilter) || entry.RelativePath.Contains(_searchFilter, StringComparison.OrdinalIgnoreCase)) && ImGui.MenuItem(entry.RelativePath)) onUpdate(entry.FullPath);
             }
             ImGui.EndPopup();
         }

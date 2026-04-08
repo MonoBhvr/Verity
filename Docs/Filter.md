@@ -1,40 +1,151 @@
-# Filter System Architecture
+# Verity 필터 시스템 문서
 
-Verity의 필터 시스템은 수많은 객체 그룹을 나노초 단위로 분류하고 판별하기 위해 **64비트 정수 연산**을 기반으로 설계된 고성능 아키텍처입니다.
+이 문서는 입력, 물리 그룹, sorting layer 등에서 공용으로 쓰는 filter 시스템을 설명합니다.
 
----
+범위는 다음과 같습니다.
 
-## 🏗️ System Architecture
-
-### 1. 64-bit Bitmask Mapping
-전통적인 문자열 비교(`tag == "Player"`)나 리스트 순회는 비용이 큽니다. Verity는 모든 분류 값을 비트 공간에 매핑합니다.
-
-- **Unique Bit Index**: 엔진 시작 시 모든 열거형(Enum) 값과 등록된 문자열 태그에 대해 0부터 63 사이의 고유한 비트 인덱스를 할당합니다.
-- **Ulong Representation**: 하나의 필터는 64비트 `ulong` 숫자로 표현됩니다. 특정 값이 필터에 포함되어 있다면 해당 비트가 1로 켜진 상태입니다.
-- **Bitwise Logic**: `(FilterMask & ObjectMask) != 0` 연산 하나만으로 객체가 특정 그룹에 속하는지 즉시 판별할 수 있습니다.
-
-### 2. Mixed Type Unification (`MixedFilter`)
-서로 다른 데이터 타입을 하나의 논리 그룹으로 묶기 위해 추상화 레이어를 제공합니다.
-
-- **Type Agnostic**: `KeyCode`와 같은 입력 데이터와 `PhysicsGroup`과 같은 물리 데이터를 하나의 비트마스크 필드 내에서 병합할 수 있습니다.
-- **Global Registry**: `FilterRegistry`는 프로젝트 전역에서 이 비트 인덱스들이 겹치지 않도록 관리하는 중앙 통제소 역할을 합니다.
-
-### 3. Whitelist & Blacklist Logic
-단순한 포함 관계를 넘어 필터의 동작 모드를 지원합니다.
-
-- **Whitelist**: 마스크에 비트가 켜진 값들**만** 통과시킵니다.
-- **Blacklist**: 마스크에 비트가 켜진 값들**을 제외한** 모든 값을 통과시킵니다. 이는 `~Mask` 연산을 통해 비트 수준에서 반전 처리되어 동일한 성능을 유지합니다.
+- `FilterMode`
+- `FilterValue`
+- `Filter`
+- `MixedFilter`
+- `FilterRegistry`
 
 ---
 
-## 📚 Filter API Reference
+## 1. 필터 시스템 개요
 
-(기존 필터 API 명세 유지...)
+Verity의 filter 시스템은 64비트 비트마스크 기반입니다.
 
-### Filter (`Verity.Input.Filter`)
-| Name | Type | Description |
+### 왜 이런 구조가 필요한가
+
+문자열 비교나 리스트 탐색으로 그룹을 검사하면 반복 연산 비용이 커집니다. 반면 비트마스크는 다음처럼 매우 싸게 판정할 수 있습니다.
+
+- `maskA & maskB`
+- `(filterMask & objectMask) != 0`
+
+즉, 입력 그룹, 물리 그룹, sorting layer 그룹을 공통 비트마스크 모델로 통합해 처리하는 것이 이 시스템의 핵심 목적입니다.
+
+---
+
+## 2. `FilterMode`
+
+| 값 | 의미 |
+| :--- | :--- |
+| `Whitelist` | 등록된 값만 허용 |
+| `Blacklist` | 등록된 값을 제외한 나머지 허용 |
+
+### 존재 이유
+
+- 단순 포함 규칙뿐 아니라 제외 규칙도 같은 시스템 안에서 처리하기 위해
+
+---
+
+## 3. `FilterValue`
+
+`FilterValue`는 mixed filter에서 타입과 값을 함께 들고 다니는 데이터 조각입니다.
+
+### 프로퍼티
+
+- `string TypeName`
+- `string Value`
+
+### 생성자
+
+- `FilterValue()`
+- `FilterValue(Type type, string value)`
+
+### 존재 이유
+
+- 서로 다른 enum 도메인을 하나의 filter에 함께 넣기 위해
+
+---
+
+## 4. `Filter`
+
+`Filter`는 하나 이상의 값 집합을 비트마스크로 캐시하는 기본 타입입니다.
+
+### 프로퍼티
+
+| 이름 | 형식 | 설명 |
 | :--- | :--- | :--- |
-| `Name` | `string` | 필터 식별자. |
-| `Mask` | `ulong` | 64비트 결과 마스크. |
+| `Name` | `string` | 필터 이름 |
+| `EnumTypeName` | `string` | 단일 타입 필터의 enum 타입명 |
+| `Values` | `List<string>` | 단일 타입 값 목록 |
+| `MixedValues` | `List<FilterValue>` | mixed 값 목록 |
+| `Mode` | `FilterMode` | whitelist / blacklist |
+| `Mask` | `ulong` | 계산된 비트마스크 |
+| `WhiteList` | `const FilterMode` | 호환용 상수 |
+| `BlackList` | `const FilterMode` | 호환용 상수 |
 
-(이하 생략 - 이전 API 명세와 동일하게 유지)
+### 정적 메서드
+
+- `static Filter? Get(string name)`
+- `static void Register(Filter filter)`
+
+### 생성자
+
+- `Filter()`
+- `Filter(string name, Type enumType, Array values, FilterMode mode)`
+
+### 인스턴스 메서드
+
+- `virtual bool Check<T>(T value) where T : struct, Enum`
+- `virtual IEnumerable<T> GetValues<T>() where T : struct, Enum`
+- `void UpdateCache()`
+
+### 존재 이유
+
+- 입력, 물리 그룹, sorting layer 등에서 같은 판정 방식을 공유하기 위해
+
+### 구현상 중요한 규칙
+
+- `UpdateCache()`는 문자열/타입 정보를 읽어 실제 `Mask`를 다시 계산합니다.
+- blacklist 모드에서도 내부적으로는 bitmask를 사용하고, 판정 시 논리 반전만 적용합니다.
+
+---
+
+## 5. `MixedFilter`
+
+`MixedFilter`는 서로 다른 enum 타입 값을 하나의 필터에 넣기 위한 특수 필터입니다.
+
+### 생성자
+
+- `MixedFilter()`
+- `MixedFilter(string name, FilterMode mode)`
+
+### 메서드
+
+- `void AddValue<T>(T value) where T : struct, Enum`
+
+### 존재 이유
+
+- 예를 들어 입력 필터에서 `KeyCode`와 `MouseButton`을 함께 다뤄야 할 수 있기 때문입니다.
+
+---
+
+## 6. `FilterRegistry`
+
+`FilterRegistry`는 값과 비트 인덱스 사이의 전역 매핑을 관리합니다.
+
+### 메서드
+
+| 시그니처 | 설명 |
+| :--- | :--- |
+| `int GetBitIndex<T>(T value) where T : struct, Enum` | 값의 비트 인덱스 조회 |
+| `int GetBitIndex(Type enumType, string valueName)` | 타입/이름 기준 인덱스 조회 |
+| `int GetBitIndex(string typeName, string valueName)` | 문자열 기준 인덱스 조회 |
+| `IEnumerable<T> GetValuesFromMask<T>(ulong mask) where T : struct, Enum` | 마스크에서 값 복원 |
+| `ulong GetMask<T>(T value) where T : struct, Enum` | 값 하나의 마스크 |
+| `ulong GetMask(Type enumType, string valueName)` | 타입/이름 기준 마스크 |
+| `ulong GetMask(string typeName, string valueName)` | 문자열 기준 마스크 |
+| `ulong GetGroupMask(string groupName)` | physics group 관용 마스크 |
+| `void Clear()` | 전체 레지스트리 초기화 |
+
+### 존재 이유
+
+- 프로젝트 전역에서 같은 값이 항상 같은 비트 위치를 갖도록 보장해야 하기 때문입니다.
+
+### 중요한 제약
+
+- 현재 설계는 64비트 기반이므로 동시에 표현할 수 있는 전체 고유 값 수가 제한됩니다.
+

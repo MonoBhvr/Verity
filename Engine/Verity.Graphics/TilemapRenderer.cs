@@ -1,6 +1,5 @@
 using System.Numerics;
 using SystemNumericsVector3 = System.Numerics.Vector3;
-using System.IO;
 using Irodori.Framebuffer;
 using Irodori.Texture;
 using Verity.Core.ECS;
@@ -128,26 +127,7 @@ public class TilemapRenderer : Component
                                   worldMatrix;
             System.Numerics.Vector2 uvMin = System.Numerics.Vector2.Zero;
             System.Numerics.Vector2 uvMax = System.Numerics.Vector2.One;
-            if (!string.IsNullOrWhiteSpace(sprite.Path))
-            {
-                try
-                {
-                    string resolvedPath = AssetPathUtility.ResolvePath(RenderPipeline.BaseAssetsPath, sprite.Path, sprite.Guid);
-                    if (File.Exists(resolvedPath))
-                    {
-                        var slice = AssetPathUtility.ResolveSpriteSlice(resolvedPath, sprite, tex.Width, tex.Height);
-                        uvMin = new System.Numerics.Vector2(
-                            slice.X / (float)Math.Max(1, tex.Width),
-                            slice.Y / (float)Math.Max(1, tex.Height));
-                        uvMax = new System.Numerics.Vector2(
-                            (slice.X + slice.Width) / (float)Math.Max(1, tex.Width),
-                            (slice.Y + slice.Height) / (float)Math.Max(1, tex.Height));
-                    }
-                }
-                catch
-                {
-                }
-            }
+            pipeline.TryGetSpriteUv(sprite, tex, out uvMin, out uvMax);
 
             pipeline.DrawTile(tex, tileMatrix, tile.Color, projection, view, targetFbo, Owner, SortingLayerName, uvMin, uvMax);
         }

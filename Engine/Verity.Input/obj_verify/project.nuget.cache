@@ -1,0 +1,11 @@
+{
+  "version": 2,
+  "dgSpecHash": "f63afL325HU=",
+  "success": true,
+  "projectFilePath": "D:\\Verity\\Engine\\Verity.Input\\Verity.Input.csproj",
+  "expectedPackageFiles": [
+    "C:\\Users\\dlgus\\.nuget\\packages\\ppy.sdl2-cs\\1.0.82\\ppy.sdl2-cs.1.0.82.nupkg.sha512",
+    "C:\\Users\\dlgus\\.nuget\\packages\\system.text.json\\9.0.2\\system.text.json.9.0.2.nupkg.sha512"
+  ],
+  "logs": []
+}

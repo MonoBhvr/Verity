@@ -18,6 +18,8 @@ public abstract class Component
             _enabled = value;
             if (this is Script)
                 Owner?.World?.InvalidateScriptCache();
+            else
+                Owner?.World?.MarkStateChanged();
             if (_enabled)
                 OnEnable();
             else

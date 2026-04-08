@@ -1,33 +1,122 @@
-# Verity Input API Reference
+# Verity 입력 문서
 
-## 1. Static Methods (Keyboard & Mouse)
+이 문서는 입력 폴링 API를 설명합니다.
 
-### Key State
-| Method | Return | Description |
-| :--- | :--- | :--- |
-| `GetKey(KeyCode / filterName)` | `bool` | 키가 눌려 있는 상태인지 확인합니다. |
-| `GetKeyDown(KeyCode / filterName)`| `bool` | 이번 프레임에 키가 눌렸는지 확인합니다. |
-| `GetKeyUp(KeyCode / filterName)` | `bool` | 이번 프레임에 키가 떨어졌는지 확인합니다. |
+범위는 다음과 같습니다.
 
-### Mouse State
-| Method | Return | Description |
-| :--- | :--- | :--- |
-| `GetMouseButton(MouseButton / filterName)` | `bool` | 마우스 버튼이 눌려 있는지 확인합니다. |
-| `GetMouseButtonDown(MouseButton / filterName)`| `bool` | 이번 프레임에 버튼이 눌렸는지 확인합니다. |
-| `GetMouseButtonUp(MouseButton / filterName)` | `bool` | 이번 프레임에 버튼이 떨어졌는지 확인합니다. |
+- `Input`
+- `KeyCode`
+- `MouseButton`
+
+Filter 기반 입력 묶음은 [Filter 문서](D:/Verity/Docs/Filter.md)에서 상세히 설명합니다.
 
 ---
 
-## 2. Static Properties
-- `MousePosition`: 화면 공간의 현재 마우스 좌표.
-- `MouseDelta`: 이전 프레임 대비 마우스 이동량.
-- `ScrollDelta`: 이번 프레임의 휠 스크롤 량.
-- `AnyKeyDown`: 아무 키나 새로 눌렸는지 여부.
-- `AnyKey`: 현재 눌려 있는 키 중 하나를 반환.
-- `Enabled`: 입력 시스템 활성화 여부.
+## 1. 입력 시스템 개요
+
+Verity 입력 시스템은 render frame이 아니라 logic tick 기준으로 입력 상태를 정리합니다.
+
+### 존재 이유
+
+- 입력 의미를 스크립트 루프와 일치시키기 위해
+- `GetKeyDown`, `GetKeyUp` 같은 edge-trigger 상태를 안정적으로 제공하기 위해
+
+입력 이벤트는 SDL 이벤트로 수집되고, `NewLogicTick()` 시점에 “이번 tick에서 눌렸는지/떼졌는지” 상태로 고정됩니다.
 
 ---
 
-## 3. KeyCode & MouseButton
-- **KeyCode**: 마우스 버튼을 포함한 통합 열거형. (`MouseLeft`, `MouseRight`, `A`~`Z`, `Escape` 등)
-- **MouseButton**: 마우스 전용 타입. (`Left`, `Right`, `Middle`, `X1`, `X2`)
+## 2. `Input`
+
+`Input`은 정적 입력 상태 접근점입니다.
+
+### 프로퍼티
+
+| 이름 | 형식 | 설명 |
+| :--- | :--- | :--- |
+| `Enabled` | `bool` | 입력 시스템 활성 여부 |
+| `MousePosition` | `Vector2` | 현재 마우스 위치 |
+| `MouseDelta` | `Vector2` | 이전 logic tick 대비 이동량 |
+| `ScrollDelta` | `float` | 이번 tick의 휠 delta |
+| `AnyKey` | `KeyCode` | 현재 눌린 키 중 하나 |
+| `AnyMouseButton` | `MouseButton` | 현재 눌린 마우스 버튼 중 하나 |
+| `AnyKeyDown` | `bool` | 이번 tick에 아무 키나 눌렸는지 |
+
+### 키 관련 메서드
+
+| 시그니처 | 설명 |
+| :--- | :--- |
+| `bool GetKey(KeyCode key)` | 현재 눌림 상태 |
+| `bool GetKeyDown(KeyCode key)` | 이번 tick에 눌렸는지 |
+| `bool GetKeyUp(KeyCode key)` | 이번 tick에 떼졌는지 |
+| `bool GetKey(Filter? filter)` | filter 기준 눌림 검사 |
+| `bool GetKeyDown(Filter? filter)` | filter 기준 down 검사 |
+| `bool GetKeyUp(Filter? filter)` | filter 기준 up 검사 |
+| `bool GetKey(string filterName)` | 이름으로 등록된 filter 기준 검사 |
+| `bool GetKeyDown(string filterName)` | 이름 기반 down 검사 |
+| `bool GetKeyUp(string filterName)` | 이름 기반 up 검사 |
+
+### 마우스 관련 메서드
+
+| 시그니처 | 설명 |
+| :--- | :--- |
+| `bool GetMouseButton(MouseButton button)` | 현재 눌림 상태 |
+| `bool GetMouseButtonDown(MouseButton button)` | 이번 tick down 검사 |
+| `bool GetMouseButtonUp(MouseButton button)` | 이번 tick up 검사 |
+| `bool GetMouseButton(Filter? filter)` | filter 기준 검사 |
+| `bool GetMouseButtonDown(Filter? filter)` | filter 기준 down 검사 |
+| `bool GetMouseButtonUp(Filter? filter)` | filter 기준 up 검사 |
+| `bool GetMouseButton(string filterName)` | 이름 기반 검사 |
+| `bool GetMouseButtonDown(string filterName)` | 이름 기반 down 검사 |
+| `bool GetMouseButtonUp(string filterName)` | 이름 기반 up 검사 |
+
+### 시스템 메서드
+
+| 시그니처 | 설명 |
+| :--- | :--- |
+| `void NewLogicTick()` | 버퍼를 이번 tick 상태로 확정 |
+| `void ProcessEvent(SDL.SDL_Event evt)` | SDL 이벤트 입력 |
+| `void Reset()` | 입력 상태 초기화 |
+| `void BeginFrame()` | obsolete |
+| `void EndFrame()` | obsolete |
+
+### 구현상 중요한 규칙
+
+- `Enabled`가 false가 되면 눌림/버퍼 상태가 초기화됩니다.
+- 마우스 버튼은 `KeyCode.MouseLeft` 같은 통합 키코드로도 반영됩니다.
+
+---
+
+## 3. `KeyCode`
+
+`KeyCode`는 키보드와 일부 마우스 입력을 통합해서 표현하는 enum입니다.
+
+### 주요 범주
+
+- `A` ~ `Z`
+- `Alpha0` ~ `Alpha9`
+- `F1` ~ `F12`
+- `Space`, `Return`, `Escape`, `Backspace`, `Tab`, `Delete`
+- `UpArrow`, `DownArrow`, `LeftArrow`, `RightArrow`
+- `LeftShift`, `RightShift`, `LeftCtrl`, `RightCtrl`, `LeftAlt`, `RightAlt`
+- `MouseLeft`, `MouseRight`, `MouseMiddle`, `MouseX1`, `MouseX2`
+
+### 존재 이유
+
+- 키보드와 마우스 버튼을 하나의 입력 도메인으로 다루는 filter를 만들 수 있게 하기 위해
+
+---
+
+## 4. `MouseButton`
+
+| 값 | 의미 |
+| :--- | :--- |
+| `Left` | 좌클릭 |
+| `Middle` | 휠 클릭 |
+| `Right` | 우클릭 |
+| `X1` | 추가 버튼 1 |
+| `X2` | 추가 버튼 2 |
+
+### 존재 이유
+
+- 마우스 전용 API에서는 키보드와 분리된 명시적 타입이 더 읽기 쉽기 때문입니다.
+

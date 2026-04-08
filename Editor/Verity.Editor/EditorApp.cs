@@ -59,9 +59,11 @@ internal sealed class EditingPolygonUndoState
 public class EditorApp : IDisposable
 {
     private const long AssetRefreshDebounceMs = 250;
+    private const long LauncherProjectRefreshIntervalMs = 2000;
 
     private readonly record struct WindowPlacement(Vector2 Position, Vector2 Size);
     private readonly record struct BlueprintInstanceRefreshState(Entity Root, JsonArray Overrides);
+    private readonly record struct LauncherProjectInfo(string Name, string FullPath, DateTime LastModified);
 
     private readonly GraphicsDevice _device;
     private readonly ImGuiController _imgui;
@@ -85,6 +87,7 @@ public class EditorApp : IDisposable
     private readonly Dictionary<string, long> _processedTileRefreshSignatures = new(StringComparer.OrdinalIgnoreCase);
 
     private readonly List<(string text, float duration)> _overlayMessages = new();
+    private readonly List<LauncherProjectInfo> _launcherProjectCache = [];
     private Filter? _filterToDelete;
     private bool _triggerDeletePopup;
 
@@ -104,14 +107,14 @@ public class EditorApp : IDisposable
     public EditorAssetKind ActiveAssetKind { get; private set; } = EditorAssetKind.World;
     public bool IsEditingBlueprint => ActiveAssetKind == EditorAssetKind.Blueprint;
 
+    private string? _cachedEditorLogoPath;
+    private bool _launcherProjectCacheDirty = true;
+    private long _launcherProjectCacheNextRefreshMs;
+
     public string EditorLogoPath {
         get {
-            string[] searchPaths = {
-                Path.Combine(AppContext.BaseDirectory, "EditorResources", "EditorLogo.png"),
-                Path.Combine(AppContext.BaseDirectory, "..", "EditorResources", "EditorLogo.png"),
-                Path.Combine(Directory.GetCurrentDirectory(), "EditorResources", "EditorLogo.png")
-            };
-            return searchPaths.FirstOrDefault(File.Exists) ?? Path.Combine(AppContext.BaseDirectory, "EditorLogo.png");
+            _cachedEditorLogoPath ??= ResolveEditorLogoPath();
+            return _cachedEditorLogoPath;
         }
     }
 
@@ -126,7 +129,6 @@ public class EditorApp : IDisposable
     public ScriptCompiler? ScriptCompiler => _scriptCompiler;
 
     private bool _isScreenFocused;
-    private string _targetPathChangeBuffer = "";
     private string _newProjectName = "";
 
     private Vector2 _targetCameraPosition;
@@ -138,6 +140,62 @@ public class EditorApp : IDisposable
     private bool _dockLayoutPersistenceReady;
     private EditorWindowMode _windowMode = EditorWindowMode.Docked;
     private EditorWindow? _pendingFocusedWindow;
+
+    private string ResolveEditorLogoPath()
+    {
+        string[] searchPaths = {
+            Path.Combine(AppContext.BaseDirectory, "EditorResources", "EditorLogo.png"),
+            Path.Combine(AppContext.BaseDirectory, "..", "EditorResources", "EditorLogo.png"),
+            Path.Combine(Directory.GetCurrentDirectory(), "EditorResources", "EditorLogo.png")
+        };
+
+        return searchPaths.FirstOrDefault(File.Exists) ?? Path.Combine(AppContext.BaseDirectory, "EditorLogo.png");
+    }
+
+    private void InvalidateLauncherProjectCache()
+    {
+        _launcherProjectCacheDirty = true;
+        _launcherProjectCacheNextRefreshMs = 0;
+    }
+
+    private IReadOnlyList<LauncherProjectInfo> GetLauncherProjectInfos()
+    {
+        long nowMs = Environment.TickCount64;
+        if (!_launcherProjectCacheDirty && nowMs < _launcherProjectCacheNextRefreshMs)
+            return _launcherProjectCache;
+
+        _launcherProjectCache.Clear();
+        if (!Directory.Exists(ProjectsRoot))
+        {
+            _launcherProjectCacheDirty = false;
+            _launcherProjectCacheNextRefreshMs = nowMs + LauncherProjectRefreshIntervalMs;
+            return _launcherProjectCache;
+        }
+
+        foreach (string projectDirectory in Directory.GetDirectories(ProjectsRoot))
+        {
+            var projectInfo = new DirectoryInfo(projectDirectory);
+            string assetsDir = Path.Combine(projectDirectory, "Assets");
+            DateTime lastModified = projectInfo.LastWriteTimeUtc;
+
+            if (Directory.Exists(assetsDir))
+            {
+                foreach (string assetPath in Directory.EnumerateFiles(assetsDir, "*", SearchOption.AllDirectories))
+                {
+                    DateTime assetWriteTime = File.GetLastWriteTimeUtc(assetPath);
+                    if (assetWriteTime > lastModified)
+                        lastModified = assetWriteTime;
+                }
+            }
+
+            _launcherProjectCache.Add(new LauncherProjectInfo(projectInfo.Name, projectInfo.FullName, lastModified.ToLocalTime()));
+        }
+
+        _launcherProjectCache.Sort(static (a, b) => b.LastModified.CompareTo(a.LastModified));
+        _launcherProjectCacheDirty = false;
+        _launcherProjectCacheNextRefreshMs = nowMs + LauncherProjectRefreshIntervalMs;
+        return _launcherProjectCache;
+    }
     private bool _triggerSaveLayoutPresetPopup;
     private string _layoutPresetNameBuffer = "";
     private readonly Dictionary<string, WindowPlacement> _dockedWindowPlacements = new(StringComparer.Ordinal);
@@ -324,6 +382,7 @@ public class EditorApp : IDisposable
         _projectLock = null;
         CurrentProjectName = null;
         LastWorldAssetPath = null;
+        InvalidateLauncherProjectCache();
         SceneSerializer.AssetRootPath = null;
         SetActiveAssetContext(null, EditorAssetKind.World);
         _dockLayoutPersistenceReady = false;
@@ -390,7 +449,11 @@ public class EditorApp : IDisposable
                 var settings = System.Text.Json.JsonSerializer.Deserialize<EditorGlobalSettings>(json);
                 if (settings != null)
                 {
-                    if (!string.IsNullOrWhiteSpace(settings.ProjectsRoot)) ProjectsRoot = settings.ProjectsRoot;
+                    if (!string.IsNullOrWhiteSpace(settings.ProjectsRoot))
+                    {
+                        ProjectsRoot = settings.ProjectsRoot;
+                        InvalidateLauncherProjectCache();
+                    }
                     L10n.LoadLanguage(settings.Language ?? "ko");
                 }
             } 
@@ -1390,8 +1453,9 @@ public class EditorApp : IDisposable
             ImGui.GetColorU32(new Vector4(0.12f, 0.12f, 0.16f, 1.0f)), ImGui.GetColorU32(new Vector4(0.12f, 0.12f, 0.16f, 1.0f)),
             ImGui.GetColorU32(new Vector4(0.06f, 0.06f, 0.08f, 1.0f)), ImGui.GetColorU32(new Vector4(0.06f, 0.06f, 0.08f, 1.0f)));
         ImGui.SetCursorPosY(50);
-        if (File.Exists(EditorLogoPath)) {
-            var tex = _textureManager.Load(EditorLogoPath);
+        string editorLogoPath = EditorLogoPath;
+        if (File.Exists(editorLogoPath)) {
+            var tex = _textureManager.Load(editorLogoPath);
             if (tex is OpenGlTexture glTex) {
                 float aspect = (float)glTex.Width / glTex.Height; float drawH = 100; float drawW = drawH * aspect;
                 ImGui.SetCursorPosX((winSize.X - drawW) * 0.5f);
@@ -1408,14 +1472,7 @@ public class EditorApp : IDisposable
             ImGui.Dummy(new Vector2(0, 10));
             if (Directory.Exists(ProjectsRoot)) {
                 if (ImGui.BeginChild("ProjectList", new Vector2(-10, -1), (ImGuiChildFlags)0, ImGuiWindowFlags.NoBackground)) {
-                    var projectInfos = Directory.GetDirectories(ProjectsRoot).Select(d => {
-                        var di = new DirectoryInfo(d); var assetsDir = Path.Combine(d, "Assets"); DateTime lastMod = di.LastWriteTime;
-                        if (Directory.Exists(assetsDir)) {
-                            var files = Directory.GetFiles(assetsDir, "*", SearchOption.AllDirectories);
-                            if (files.Length > 0) { var latestFileMod = files.Select(f => File.GetLastWriteTime(f)).Max(); if (latestFileMod > lastMod) lastMod = latestFileMod; }
-                        }
-                        return new { Name = di.Name, FullPath = di.FullName, LastModified = lastMod };
-                    }).OrderByDescending(p => p.LastModified).ToList();
+                    var projectInfos = GetLauncherProjectInfos();
                     foreach (var proj in projectInfos) {
                         ImGui.PushID(proj.FullPath); ImGui.PushStyleVar(ImGuiStyleVar.ChildRounding, 8f); ImGui.PushStyleColor(ImGuiCol.ChildBg, new Vector4(1, 1, 1, 0.03f));
                         if (ImGui.BeginChild("Card", new Vector2(-1, 80), (ImGuiChildFlags)1, ImGuiWindowFlags.NoScrollbar)) {
@@ -1453,6 +1510,7 @@ public class EditorApp : IDisposable
                     var newPath = SelectFolderNative(ProjectsRoot);
                     if (newPath != null && Directory.Exists(newPath)) {
                         ProjectsRoot = newPath;
+                        InvalidateLauncherProjectCache();
                         SaveGlobalSettings();
                     }
                 }

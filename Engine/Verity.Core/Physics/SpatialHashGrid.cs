@@ -70,6 +70,13 @@ public class SpatialHashGrid
     public IEnumerable<Physical> GetPotentialCollisions(Physical physical, List<PhysicalShape> shapes)
     {
         var potentials = new HashSet<Physical>();
+        GetPotentialCollisions(physical, shapes, potentials);
+        return potentials;
+    }
+
+    public void GetPotentialCollisions(Physical physical, List<PhysicalShape> shapes, HashSet<Physical> potentials)
+    {
+        potentials.Clear();
         foreach (var shape in shapes)
         {
             if (shape is TilemapShape ts)
@@ -84,7 +91,6 @@ public class SpatialHashGrid
                 GetPotentialFromAABB(potentials, shape.GetAABB(), physical);
             }
         }
-        return potentials;
     }
 
     private void GetPotentialFromAABB(HashSet<Physical> potentials, AABB aabb, Physical physical)
