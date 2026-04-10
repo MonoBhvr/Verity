@@ -35,6 +35,8 @@ internal class Program
         var renderPipeline = new RenderPipeline(device, shader, textureManager);
         RenderPipeline.BaseAssetsPath = baseDir;
         UiSystem.AssetsRoot = baseDir;
+        UiRenderer.DefaultFontPath = string.Empty;
+        UiRenderer.DefaultFontFamily = FindRuntimeUiFontFamily();
         renderPipeline.SetWhitePixel(textureManager.CreateWhitePixel());
         DefaultSprites.Initialize(textureManager);
         
@@ -93,6 +95,11 @@ internal class Program
         }
         projectSettings ??= new ProjectSettings();
         Verity.Graphics.SortingLayer.SyncWithSettings(projectSettings.SortingLayers);
+        UiSystem.ProjectSettings = projectSettings;
+        UiRenderer.DefaultFontPath = projectSettings.DefaultUiFontPath;
+        UiRenderer.DefaultFontFamily = string.IsNullOrWhiteSpace(projectSettings.DefaultUiFontPath)
+            ? FindRuntimeUiFontFamily()
+            : string.Empty;
 
         string? worldRelPath = (buildSettings.Worlds.Count > 0) 
             ? buildSettings.Worlds[Math.Clamp(buildSettings.StartWorldIndex, 0, buildSettings.Worlds.Count - 1)] 
@@ -200,6 +207,33 @@ internal class Program
         if (stream == null) return null;
         using var reader = new StreamReader(stream);
         return reader.ReadToEnd();
+    }
+
+    private static string FindRuntimeUiFontFamily()
+    {
+        string[] candidates =
+        [
+            "Malgun Gothic",
+            "Noto Sans KR",
+            "Noto Sans CJK KR",
+            "Gulim",
+            "Batang",
+            "Segoe UI"
+        ];
+
+        foreach (string candidate in candidates)
+        {
+            try
+            {
+                using var family = new System.Drawing.FontFamily(candidate);
+                return family.Name;
+            }
+            catch
+            {
+            }
+        }
+
+        return string.Empty;
     }
     private static void BindAssetsRecursive(Entity entity, TextureManager tm, Assembly asm, string asmName)
     {

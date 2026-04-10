@@ -1,4 +1,7 @@
+using Verity.Core;
 using Verity.Core.ECS;
+using Verity.Core.Engine;
+using Verity.Core.UI;
 
 namespace Verity.Core.World;
 
@@ -16,6 +19,8 @@ public class World
     public float CustomLinearDamping { get; set; } = 0.1f;
     public float CustomAngularDamping { get; set; } = 0.1f;
     public float CustomPhysicsThreshold { get; set; } = 0.05f;
+    [HideInInspector]
+    public List<UiRoleBinding> UiRoleOverrides { get; set; } = new();
 
     private readonly List<Entity> _entities = [];
     private readonly List<Entity> _pendingDestroy = [];
@@ -30,10 +35,12 @@ public class World
     public World(string name)
     {
         Name = name;
+        Ui = new WorldUi(this);
     }
 
     public IReadOnlyList<Entity> RootEntities => _entities;
     public int StateVersion => _stateVersion;
+    public WorldUi Ui { get; }
 
     internal void InvalidateScriptCache()
     {

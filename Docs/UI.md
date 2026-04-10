@@ -8,6 +8,7 @@
 - `UiNode` 계층
 - `Canvas`
 - binding / layout / runtime system
+- 현재 구현된 스크린 UI 구조
 
 ---
 
@@ -66,6 +67,7 @@ Verity UI는 retained tree 기반입니다. 즉, 즉시 그릴 명령만 나열�
 - `Tabs`
 - `Tooltip`
 - `Spacer`
+- `DynamicArea`
 
 ### `UiLayoutMode`
 
@@ -74,6 +76,7 @@ Verity UI는 retained tree 기반입니다. 즉, 즉시 그릴 명령만 나열�
 - `VerticalStack`
 - `Grid`
 - `Wrap`
+- `Circle`
 - `ScrollContent`
 
 ### `UiNavigationMode`
@@ -168,6 +171,9 @@ Verity UI는 retained tree 기반입니다. 즉, 즉시 그릴 명령만 나열�
   - `Vector2 Spacing`
   - `Vector4 Padding`
   - `bool FitChildren`
+  - `float CircleRadius`
+  - `float CircleStartAngle`
+  - `bool CircleClockwise`
 
 ## 3.6 `UiNavigation`
 
@@ -274,6 +280,7 @@ Verity UI는 retained tree 기반입니다. 즉, 즉시 그릴 명령만 나열�
 | `Tabs` | 탭 컨테이너 |
 | `Tooltip` | 툴팁 |
 | `Spacer` | 레이아웃 간격용 노드 |
+| `DynamicArea` | 데이터 목록을 기반으로 자식 노드를 생성하는 동적 영역 |
 
 파생 타입별 세부 프로퍼티는 코드상 public 멤버 기준으로 존재합니다. 예를 들어:
 
@@ -314,6 +321,8 @@ Verity UI는 retained tree 기반입니다. 즉, 즉시 그릴 명령만 나열�
 - `Vector2 ReferenceResolution`
 - `float MatchWidthOrHeight`
 - `int SortingOrder`
+- `string UiScriptType`
+- `List<UiScreenVariableDefinition> Variables`
 - `UiNode Root`
 - `void RebindTree()`
 
@@ -330,16 +339,22 @@ Verity UI는 retained tree 기반입니다. 즉, 즉시 그릴 명령만 나열�
 ### 프로퍼티
 
 - `Entity? OwnerEntity`
+- `World? World`
 - `UIScreenAsset Screen`
+- `UiScript? UiScript`
 - `bool Visible`
+- `string OpenedRole`
 
 ### 메서드
 
 - `T? Query<T>(string nameOrId) where T : UiNode`
 - `UiNode? Query(string nameOrId)`
-- `void Bind(string path, object source)`
+- `IReadOnlyDictionary<string, object?> GetVariables()`
+- `bool TryGetVariable(string name, out object? value)`
+- `void Set(string name, object? value)`
+- `void Send(string command, object? payload = null)`
 - `void Update(float viewportWidth, float viewportHeight)`
-- `UiNode? HitTest(Vector2 point)`
+- `void Close()`
 
 ### 존재 이유
 
@@ -392,11 +407,16 @@ Verity UI는 retained tree 기반입니다. 즉, 즉시 그릴 명령만 나열�
 - `void HideScreen(string id)`
 - `void HideCanvas(Canvas canvas)`
 - `Canvas? FindCanvas(string screenNameOrId)`
+- `Canvas? OpenRole(string role)`
+- `Canvas? FindRole(string role)`
+- `void CloseRole(string role)`
 - `T? Query<T>(string nameOrId) where T : UiNode`
 - `UiNode? Query(string nameOrId)`
 - `void Bind(string path, object source)`
 - `void Unbind(string path)`
 - `bool TryResolveBindingSource(string key, out object source)`
+- `Vector2 ViewportToCanvas(Vector2 viewportPosition, UIScreenAsset screen)`
+- `Vector2 CanvasToViewport(Vector2 canvasPosition, UIScreenAsset screen)`
 - `void Update(float viewportWidth, float viewportHeight)`
 - `void Clear()`
 
@@ -406,8 +426,63 @@ Verity UI는 retained tree 기반입니다. 즉, 즉시 그릴 명령만 나열�
 
 ---
 
-## 8. 현재 주의점
+## 8. 현재 구현된 스크린 UI 구조
+
+현재 구현은 기획 단계에서 정리했던 단순 모델을 따라가되, 내부적으로는 `UiNode` 트리를 유지하는 구조입니다.
+
+사용자 관점에서 중요한 개념은 다음과 같습니다.
+
+- 화면
+- Element
+- 화면 변수
+- 동적 영역
+- UiScript
+
+### 8.1 화면 변수
+
+실제 값은 `UIScreenAsset`이 아니라 `Canvas`에 저장됩니다.
+따라서 같은 화면 에셋을 여러 번 띄워도 각 인스턴스가 별도 상태를 가질 수 있습니다.
+
+### 8.2 DynamicArea
+
+`DynamicArea`는 `ItemsSource`와 `ItemTemplate`를 사용하여 자식 Element를 동적으로 생성합니다.
+
+현재 동작은 다음과 같습니다.
+
+1. `ItemsSource`를 평가
+2. `IEnumerable`이면 항목 순회
+3. `ItemTemplate`를 항목 수만큼 복제
+4. 각 복제 노드에 `BindingItem` 연결
+
+현재는 변경 diff 기반이 아니라 매 갱신 시 재구성에 가까운 방식입니다.
+
+### 8.3 UiScript
+
+`UiScript`는 화면 내부 동작을 담당합니다.
+외부에서는 임의 메서드 직접 호출 대신 다음 경로를 사용합니다.
+
+- `Set(name, value)`
+- `Send(command)`
+- `Send(command, payload)`
+
+즉, 월드 스크립트는 UI 내부 노드를 직접 만지기보다 화면 변수와 command를 통해 상호작용하는 편이 맞습니다.
+
+### 8.4 역할 기반 화면 접근
+
+현재 UI 시스템은 프로젝트 기본 UI와 역할 기반 화면 열기를 지원합니다.
+
+예:
+
+- `Ui.OpenRole("Hud")`
+- `Ui.OpenRole("Inventory")`
+
+이 구조 덕분에 스크립트가 구체적인 `.ui` 파일 이름보다 역할 중심으로 화면을 열 수 있습니다.
+
+---
+
+## 9. 현재 주의점
 
 - UI binding과 action 호출은 reflection 기반이므로 빈번한 대규모 갱신에서 비용이 있습니다.
 - retained UI이므로 상태 변경과 레이아웃 변경이 누적되면 트리 순회 비용이 커질 수 있습니다.
-
+- `DynamicArea`는 아직 부분 갱신이 아니라 전체 재구성 성격이 강합니다.
+- `WorldToCanvas` 계열 helper는 아직 정식 API로 정리되지 않았습니다.

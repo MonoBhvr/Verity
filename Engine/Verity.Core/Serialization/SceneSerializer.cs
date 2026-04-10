@@ -4,6 +4,7 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using Verity.Core.Audio;
 using Verity.Core.ECS;
+using Verity.Core.Engine;
 using Verity.Core.World;
 
 namespace Verity.Core.Serialization;
@@ -49,7 +50,8 @@ public static class SceneSerializer
             ["CustomBounciness"] = world.CustomBounciness,
             ["CustomLinearDamping"] = world.CustomLinearDamping,
             ["CustomAngularDamping"] = world.CustomAngularDamping,
-            ["CustomPhysicsThreshold"] = world.CustomPhysicsThreshold
+            ["CustomPhysicsThreshold"] = world.CustomPhysicsThreshold,
+            ["UiRoleOverrides"] = SerializeUiRoleBindings(world.UiRoleOverrides)
         };
         root["WorldSettings"] = settings;
 
@@ -694,6 +696,7 @@ public static class SceneSerializer
                 world.CustomLinearDamping = (float?)settings["CustomLinearDamping"] ?? 0.1f;
                 world.CustomAngularDamping = (float?)settings["CustomAngularDamping"] ?? 0.1f;
                 world.CustomPhysicsThreshold = (float?)settings["CustomPhysicsThreshold"] ?? 0.05f;
+                world.UiRoleOverrides = DeserializeUiRoleBindings(settings["UiRoleOverrides"]);
             }
             array = root["Entities"]?.AsArray();
         }
@@ -1193,4 +1196,42 @@ public static class SceneSerializer
 
     private static JsonObject SerializeVector2(Vector2 v) => new JsonObject { ["X"] = v.X, ["Y"] = v.Y };
     private static Vector2 DeserializeVector2(JsonNode? n) => new((float?)n?["X"] ?? 0, (float?)n?["Y"] ?? 0);
+
+    private static JsonArray SerializeUiRoleBindings(IEnumerable<UiRoleBinding> bindings)
+    {
+        var array = new JsonArray();
+        foreach (UiRoleBinding binding in bindings)
+        {
+            array.Add(new JsonObject
+            {
+                ["Role"] = binding.Role,
+                ["Path"] = binding.Path,
+                ["Guid"] = binding.Guid
+            });
+        }
+
+        return array;
+    }
+
+    private static List<UiRoleBinding> DeserializeUiRoleBindings(JsonNode? node)
+    {
+        var bindings = new List<UiRoleBinding>();
+        if (node is not JsonArray array)
+            return bindings;
+
+        foreach (JsonNode? item in array)
+        {
+            if (item == null)
+                continue;
+
+            bindings.Add(new UiRoleBinding
+            {
+                Role = (string?)item["Role"] ?? string.Empty,
+                Path = (string?)item["Path"] ?? string.Empty,
+                Guid = (string?)item["Guid"] ?? string.Empty
+            });
+        }
+
+        return bindings;
+    }
 }

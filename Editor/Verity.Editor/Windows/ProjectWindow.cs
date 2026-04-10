@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Numerics;
 using System.Reflection;
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using Hexa.NET.ImGui;
@@ -27,10 +28,20 @@ public unsafe class ProjectWindow : EditorWindow
     private string? _targetSpriteAssetPath;
     private string? _targetSpriteId;
     private string? _creationShaderPath;
+    private string? _targetSdfFontSourcePath;
     private string _pathBarBuffer = "";
     private ModalMode _activeMode = ModalMode.None;
     private CreationType _creationType = CreationType.Folder;
     private bool _shouldOpenPopup = false;
+    private bool _shouldOpenSdfFontPopup = false;
+    private string _sdfFontOutputName = "";
+    private string _sdfCharacterSet = "";
+    private float _sdfPointSize = 48f;
+    private int _sdfAtlasWidth = 1024;
+    private int _sdfAtlasHeight = 1024;
+    private int _sdfPadding = 12;
+    private int _sdfSpread = 8;
+    private int _sdfSupersample = 4;
 
     private float _thumbnailSize = 52f;
     private float _leftPanelWidth = 240f;
@@ -147,7 +158,14 @@ public unsafe class ProjectWindow : EditorWindow
             _shouldOpenPopup = false;
         }
 
+        if (_shouldOpenSdfFontPopup)
+        {
+            ImGui.OpenPopup("GenerateSdfFontModal");
+            _shouldOpenSdfFontPopup = false;
+        }
+
         DrawInputModal();
+        DrawSdfFontGenerationModal();
 
         ImGui.TextDisabled($"{L10n.Tr("window_project")}: {_app.CurrentProjectName}");
         ImGui.Separator();
@@ -554,22 +572,7 @@ public unsafe class ProjectWindow : EditorWindow
         if (ImGui.BeginPopupContextItem("FileBrowserContext"))
         {
             EnsureBrowserItemSelected(item);
-            string parentDir = NormalizePath(Path.GetDirectoryName(path)!);
-            _contextDirectory = parentDir;
-            _creationShaderPath = path.EndsWith(".shader", StringComparison.OrdinalIgnoreCase) && _app.ProjectPath != null
-                ? Path.GetRelativePath(_app.ProjectPath, path).Replace("\\", "/")
-                : null;
-
-            if (ImGui.MenuItem(L10n.Tr("menu_show_in_explorer")))
-                Process.Start("explorer.exe", $"/select,\"{path.Replace("/", "\\")}\"");
-            if (ImGui.MenuItem(L10n.Tr("btn_reload")))
-                ReloadProjectBrowser();
-            if (ImGui.MenuItem(L10n.Tr("btn_rename")))
-                OpenRenamePopup(normalized);
-            if (ImGui.MenuItem(L10n.Tr("btn_delete")))
-                DeleteAsset(normalized);
-            ImGui.Separator();
-            DrawCreateMenu(parentDir);
+            DrawFileAssetContextMenu(normalized);
             ImGui.EndPopup();
         }
 
@@ -1068,21 +1071,7 @@ public unsafe class ProjectWindow : EditorWindow
                 DrawCreateMenu(item.AssetPath);
                 break;
             case BrowserItemKind.File:
-                string parentDir = NormalizePath(Path.GetDirectoryName(item.AssetPath)!);
-                _contextDirectory = parentDir;
-                _creationShaderPath = item.AssetPath.EndsWith(".shader", StringComparison.OrdinalIgnoreCase) && _app.ProjectPath != null
-                    ? Path.GetRelativePath(_app.ProjectPath, item.AssetPath).Replace("\\", "/")
-                    : null;
-                if (ImGui.MenuItem(L10n.Tr("menu_show_in_explorer")))
-                    Process.Start("explorer.exe", $"/select,\"{item.AssetPath.Replace("/", "\\")}\"");
-                if (ImGui.MenuItem(L10n.Tr("btn_reload")))
-                    ReloadProjectBrowser();
-                if (ImGui.MenuItem(L10n.Tr("btn_rename")))
-                    OpenRenamePopup(item.AssetPath);
-                if (ImGui.MenuItem(L10n.Tr("btn_delete")))
-                    DeleteAsset(item.AssetPath);
-                ImGui.Separator();
-                DrawCreateMenu(parentDir);
+                DrawFileAssetContextMenu(item.AssetPath);
                 break;
             case BrowserItemKind.Sprite:
                 if (ImGui.MenuItem(L10n.Tr("btn_rename")))
@@ -1450,6 +1439,101 @@ public unsafe class ProjectWindow : EditorWindow
         if (ImGui.MenuItem(L10n.Tr("CreationType_RuleTile")))
             OpenCreatePopup(target, CreationType.RuleTile);
         ImGui.EndMenu();
+    }
+
+    private void DrawFileAssetContextMenu(string assetPath)
+    {
+        string normalized = NormalizePath(assetPath);
+        string parentDir = NormalizePath(Path.GetDirectoryName(normalized)!);
+        _contextDirectory = parentDir;
+        _creationShaderPath = normalized.EndsWith(".shader", StringComparison.OrdinalIgnoreCase) && _app.ProjectPath != null
+            ? Path.GetRelativePath(_app.ProjectPath, normalized).Replace("\\", "/")
+            : null;
+
+        if (ImGui.MenuItem(L10n.Tr("menu_show_in_explorer")))
+            Process.Start("explorer.exe", $"/select,\"{normalized.Replace("/", "\\")}\"");
+        if (ImGui.MenuItem(L10n.Tr("btn_reload")))
+            ReloadProjectBrowser();
+        if (ImGui.MenuItem(L10n.Tr("btn_rename")))
+            OpenRenamePopup(normalized);
+        if (ImGui.MenuItem(L10n.Tr("btn_delete")))
+            DeleteAsset(normalized);
+
+        if (IsFontSourceAsset(normalized))
+        {
+            ImGui.Separator();
+            if (ImGui.MenuItem(L10n.Tr("menu_generate_sdf_font")))
+                OpenGenerateSdfFontPopup(normalized);
+        }
+
+        ImGui.Separator();
+        DrawCreateMenu(parentDir);
+    }
+
+    private void OpenGenerateSdfFontPopup(string assetPath)
+    {
+        string normalized = NormalizePath(assetPath);
+        _targetSdfFontSourcePath = normalized;
+        _sdfFontOutputName = Path.GetFileNameWithoutExtension(normalized);
+        _sdfPointSize = 48f;
+        _sdfAtlasWidth = 1024;
+        _sdfAtlasHeight = 1024;
+        _sdfSpread = 8;
+        _sdfPadding = 12;
+        _sdfSupersample = 4;
+        _sdfCharacterSet = BuildEditorLocalizedCharacterSet();
+        _shouldOpenSdfFontPopup = true;
+    }
+
+    private unsafe void DrawSdfFontGenerationModal()
+    {
+        var viewport = ImGui.GetMainViewport();
+        var center = new Vector2(viewport.Pos.X + viewport.Size.X * 0.5f, viewport.Pos.Y + viewport.Size.Y * 0.5f);
+        ImGui.SetNextWindowPos(center, ImGuiCond.Appearing, new Vector2(0.5f, 0.5f));
+        ImGui.SetNextWindowSize(new Vector2(620f, 0f), ImGuiCond.Appearing);
+        if (!ImGui.BeginPopupModal("GenerateSdfFontModal", null, ImGuiWindowFlags.AlwaysAutoResize))
+            return;
+
+        ImGui.Text(L10n.Tr("msg_generate_sdf_font"));
+        ImGui.Separator();
+
+        string sourceDisplay = string.IsNullOrWhiteSpace(_targetSdfFontSourcePath) ? L10n.Tr("msg_none") : ToProjectDisplayPath(_targetSdfFontSourcePath);
+        ImGui.Text($"{L10n.Tr("label_source_font")}: {sourceDisplay}");
+        ImGui.InputText(L10n.Tr("label_output_name"), ref _sdfFontOutputName, 128);
+        ImGui.InputFloat(L10n.Tr("label_point_size"), ref _sdfPointSize, 1f, 8f, "%.0f");
+        ImGui.InputInt(L10n.Tr("label_atlas_width"), ref _sdfAtlasWidth);
+        ImGui.InputInt(L10n.Tr("label_atlas_height"), ref _sdfAtlasHeight);
+        ImGui.InputInt(L10n.Tr("label_padding"), ref _sdfPadding);
+        ImGui.InputInt(L10n.Tr("label_spread"), ref _sdfSpread);
+        ImGui.InputInt(L10n.Tr("label_supersample"), ref _sdfSupersample);
+
+        ImGui.Text(L10n.Tr("label_charset_presets"));
+        if (ImGui.Button(L10n.Tr("btn_charset_basic_latin")))
+            _sdfCharacterSet = SdfFontGenerationOptions.DefaultCharacterSet;
+        ImGui.SameLine();
+        if (ImGui.Button(L10n.Tr("btn_charset_editor_ko")))
+            _sdfCharacterSet = BuildEditorLocalizedCharacterSet();
+        ImGui.SameLine();
+        if (ImGui.Button(L10n.Tr("btn_charset_full_hangul")))
+            _sdfCharacterSet = BuildFullHangulCharacterSet();
+
+        string glyphCountText = _sdfCharacterSet.EnumerateRunes().Count().ToString();
+        ImGui.Text($"{L10n.Tr("label_glyph_count")}: {glyphCountText}");
+        ImGui.InputTextMultiline(L10n.Tr("label_characters"), ref _sdfCharacterSet, 65536, new Vector2(560f, 180f));
+
+        var buttonSize = new Vector2(140f, 0f);
+        bool closePopup = false;
+        if (ImGui.Button(L10n.Tr("btn_generate"), buttonSize))
+            closePopup = TryGenerateSdfFontAsset();
+
+        ImGui.SameLine();
+        if (ImGui.Button(L10n.Tr("btn_cancel"), buttonSize) || ImGui.IsKeyPressed(ImGuiKey.Escape))
+            closePopup = true;
+
+        if (closePopup)
+            ImGui.CloseCurrentPopup();
+
+        ImGui.EndPopup();
     }
 
     private void HandleShortcuts()
@@ -1845,6 +1929,75 @@ public unsafe class ProjectWindow : EditorWindow
         catch (Exception e)
         {
             Verity.Core.Debug.LogError(e.Message);
+        }
+    }
+
+    private bool TryGenerateSdfFontAsset()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            Verity.Core.Debug.LogError("[Font] SDF font generation is only supported on Windows.");
+            return false;
+        }
+
+        if (string.IsNullOrWhiteSpace(_targetSdfFontSourcePath) || !File.Exists(_targetSdfFontSourcePath))
+        {
+            Verity.Core.Debug.LogError("[Font] Missing source font file.");
+            return false;
+        }
+
+        string outputName = (_sdfFontOutputName ?? string.Empty).Trim();
+        if (string.IsNullOrWhiteSpace(outputName))
+        {
+            Verity.Core.Debug.LogError("[Font] Output name is required.");
+            return false;
+        }
+
+        if (outputName.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0)
+        {
+            Verity.Core.Debug.LogError("[Font] Output name contains invalid characters.");
+            return false;
+        }
+
+        try
+        {
+            string sourcePath = NormalizePath(_targetSdfFontSourcePath);
+            string directory = NormalizePath(Path.GetDirectoryName(sourcePath)!);
+            string outputPath = NormalizePath(Path.Combine(directory, outputName + SdfFontAsset.PrimaryExtension));
+
+            var options = new SdfFontGenerationOptions
+            {
+                PointSize = _sdfPointSize,
+                AtlasWidth = _sdfAtlasWidth,
+                AtlasHeight = _sdfAtlasHeight,
+                Padding = _sdfPadding,
+                Spread = _sdfSpread,
+                Supersample = _sdfSupersample,
+                Characters = _sdfCharacterSet,
+                OverwriteExistingFiles = true
+            };
+
+            var asset = SdfFontAssetGenerator.Generate(sourcePath, outputPath, options);
+            AssetPathUtility.EnsureMetaAndGetGuid(outputPath);
+
+            foreach (var atlasPage in asset.AtlasPages)
+            {
+                string atlasPath = Path.IsPathRooted(atlasPage.Path)
+                    ? NormalizePath(atlasPage.Path)
+                    : NormalizePath(Path.Combine(directory, atlasPage.Path));
+                AssetPathUtility.EnsureMetaAndGetGuid(atlasPath);
+            }
+
+            AssetPathUtility.InvalidateCache(_app.ProjectPath);
+            InvalidateBrowserCache();
+            SelectAsset(outputPath);
+            Verity.Core.Debug.Log($"[Font] Generated SDF font asset: {ToProjectDisplayPath(outputPath)}");
+            return true;
+        }
+        catch (Exception e)
+        {
+            Verity.Core.Debug.LogError($"[Font] SDF generation failed: {e.Message}");
+            return false;
         }
     }
 
@@ -2396,6 +2549,64 @@ public unsafe class ProjectWindow : EditorWindow
     {
         string ext = Path.GetExtension(path).ToLowerInvariant();
         return ext is ".png" or ".jpg" or ".jpeg";
+    }
+
+    private static bool IsFontSourceAsset(string path)
+    {
+        string ext = Path.GetExtension(path).ToLowerInvariant();
+        return ext is ".ttf" or ".otf";
+    }
+
+    private string BuildEditorLocalizedCharacterSet()
+    {
+        var builder = new StringBuilder(SdfFontGenerationOptions.DefaultCharacterSet);
+        AppendLocaleCharacters(builder, Path.Combine(AppContext.BaseDirectory, "Locales", "en.json"));
+        AppendLocaleCharacters(builder, Path.Combine(AppContext.BaseDirectory, "Locales", "ko.json"));
+        AppendLocaleCharacters(builder, Path.Combine(Directory.GetCurrentDirectory(), "Editor", "Verity.Editor", "Locales", "en.json"));
+        AppendLocaleCharacters(builder, Path.Combine(Directory.GetCurrentDirectory(), "Editor", "Verity.Editor", "Locales", "ko.json"));
+        return string.Concat(EnumerateDistinctRunes(builder.ToString()));
+    }
+
+    private static string BuildFullHangulCharacterSet()
+    {
+        var builder = new StringBuilder(SdfFontGenerationOptions.DefaultCharacterSet.Length + 12000);
+        builder.Append(SdfFontGenerationOptions.DefaultCharacterSet);
+        for (int codepoint = 0xAC00; codepoint <= 0xD7A3; codepoint++)
+            builder.Append(char.ConvertFromUtf32(codepoint));
+        return string.Concat(EnumerateDistinctRunes(builder.ToString()));
+    }
+
+    private static void AppendLocaleCharacters(StringBuilder builder, string path)
+    {
+        if (!File.Exists(path))
+            return;
+
+        try
+        {
+            string json = File.ReadAllText(path);
+            var strings = JsonSerializer.Deserialize<Dictionary<string, string>>(json);
+            if (strings == null)
+                return;
+
+            foreach ((string _, string value) in strings)
+            {
+                if (!string.IsNullOrWhiteSpace(value))
+                    builder.Append(value);
+            }
+        }
+        catch
+        {
+        }
+    }
+
+    private static IEnumerable<string> EnumerateDistinctRunes(string text)
+    {
+        var seen = new HashSet<int>();
+        foreach (var rune in text.EnumerateRunes())
+        {
+            if (seen.Add(rune.Value))
+                yield return rune.ToString();
+        }
     }
 
     private IEnumerable<string> GetBrowserDirectories(string directory)

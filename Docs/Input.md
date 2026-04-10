@@ -19,7 +19,7 @@ Verity 입력 시스템은 render frame이 아니라 logic tick 기준으로 입
 ### 존재 이유
 
 - 입력 의미를 스크립트 루프와 일치시키기 위해
-- `GetKeyDown`, `GetKeyUp` 같은 edge-trigger 상태를 안정적으로 제공하기 위해
+- `Pressed`, `Released` 같은 edge-trigger 상태를 안정적으로 제공하기 위해
 
 입력 이벤트는 SDL 이벤트로 수집되고, `NewLogicTick()` 시점에 “이번 tick에서 눌렸는지/떼졌는지” 상태로 고정됩니다.
 
@@ -45,29 +45,29 @@ Verity 입력 시스템은 render frame이 아니라 logic tick 기준으로 입
 
 | 시그니처 | 설명 |
 | :--- | :--- |
-| `bool GetKey(KeyCode key)` | 현재 눌림 상태 |
-| `bool GetKeyDown(KeyCode key)` | 이번 tick에 눌렸는지 |
-| `bool GetKeyUp(KeyCode key)` | 이번 tick에 떼졌는지 |
-| `bool GetKey(Filter? filter)` | filter 기준 눌림 검사 |
-| `bool GetKeyDown(Filter? filter)` | filter 기준 down 검사 |
-| `bool GetKeyUp(Filter? filter)` | filter 기준 up 검사 |
-| `bool GetKey(string filterName)` | 이름으로 등록된 filter 기준 검사 |
-| `bool GetKeyDown(string filterName)` | 이름 기반 down 검사 |
-| `bool GetKeyUp(string filterName)` | 이름 기반 up 검사 |
+| `bool Down(KeyCode key)` | 현재 눌림 상태 |
+| `bool Pressed(KeyCode key)` | 이번 tick에 눌렸는지 |
+| `bool Released(KeyCode key)` | 이번 tick에 떼졌는지 |
+| `bool Down(Filter? filter)` | filter 기준 눌림 검사 |
+| `bool Pressed(Filter? filter)` | filter 기준 눌림 검사 |
+| `bool Released(Filter? filter)` | filter 기준 떼짐 검사 |
+| `bool Down(string filterName)` | 이름으로 등록된 filter 기준 검사 |
+| `bool Pressed(string filterName)` | 이름 기반 눌림 검사 |
+| `bool Released(string filterName)` | 이름 기반 떼짐 검사 |
 
 ### 마우스 관련 메서드
 
 | 시그니처 | 설명 |
 | :--- | :--- |
-| `bool GetMouseButton(MouseButton button)` | 현재 눌림 상태 |
-| `bool GetMouseButtonDown(MouseButton button)` | 이번 tick down 검사 |
-| `bool GetMouseButtonUp(MouseButton button)` | 이번 tick up 검사 |
-| `bool GetMouseButton(Filter? filter)` | filter 기준 검사 |
-| `bool GetMouseButtonDown(Filter? filter)` | filter 기준 down 검사 |
-| `bool GetMouseButtonUp(Filter? filter)` | filter 기준 up 검사 |
-| `bool GetMouseButton(string filterName)` | 이름 기반 검사 |
-| `bool GetMouseButtonDown(string filterName)` | 이름 기반 down 검사 |
-| `bool GetMouseButtonUp(string filterName)` | 이름 기반 up 검사 |
+| `bool MouseDown(MouseButton button)` | 현재 눌림 상태 |
+| `bool MousePressed(MouseButton button)` | 이번 tick에 눌렸는지 |
+| `bool MouseReleased(MouseButton button)` | 이번 tick에 떼졌는지 |
+| `bool MouseDown(Filter? filter)` | filter 기준 눌림 검사 |
+| `bool MousePressed(Filter? filter)` | filter 기준 눌림 검사 |
+| `bool MouseReleased(Filter? filter)` | filter 기준 떼짐 검사 |
+| `bool MouseDown(string filterName)` | 이름 기반 검사 |
+| `bool MousePressed(string filterName)` | 이름 기반 눌림 검사 |
+| `bool MouseReleased(string filterName)` | 이름 기반 떼짐 검사 |
 
 ### 시스템 메서드
 
@@ -119,4 +119,3 @@ Verity 입력 시스템은 render frame이 아니라 logic tick 기준으로 입
 ### 존재 이유
 
 - 마우스 전용 API에서는 키보드와 분리된 명시적 타입이 더 읽기 쉽기 때문입니다.
-

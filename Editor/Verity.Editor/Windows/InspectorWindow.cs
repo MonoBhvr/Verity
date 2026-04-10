@@ -512,7 +512,7 @@ public unsafe class InspectorWindow : EditorWindow
         {
             var prefab = GetCachedUiPrefab(path);
             ImGui.Text($"{L10n.Tr("label_name")}: {prefab.Name}");
-            ImGui.Text($"{L10n.Tr("ui_label_root")}: {prefab.Root.Name} ({prefab.Root.Kind})");
+            ImGui.Text($"{L10n.Tr("ui_label_root")}: {prefab.Root.Name} ({GetUiNodeKindLabel(prefab.Root.Kind)})");
             ImGui.Text($"{L10n.Tr("ui_label_nodes")}: {prefab.Root.DescendantsAndSelf().Count()}");
         }
         catch (Exception e)
@@ -678,12 +678,21 @@ public unsafe class InspectorWindow : EditorWindow
     private void DrawProjectSettingsInspector()
     {
         var settings = _app.ProjectSettings;
+        settings.UiCatalog ??= new List<UiAssetReference>();
+        settings.UiRoleDefaults ??= new List<UiRoleBinding>();
         bool changed = false;
         if (ImGui.CollapsingHeader(L10n.Tr("header_general"), ImGuiTreeNodeFlags.DefaultOpen)) {
             float fontSize = settings.EditorFontSize; if (ImGui.DragFloat(L10n.Tr("field_EditorFontSize"), ref fontSize, 0.5f, 8f, 72f)) { settings.EditorFontSize = fontSize; changed = true; }
             int targetTps = settings.TargetTPS; if (ImGui.DragInt(L10n.Tr("field_TargetTPS"), ref targetTps, 1, 1, 1000)) { settings.TargetTPS = targetTps; changed = true; }
             int targetPtps = settings.TargetPTPS; if (ImGui.DragInt(L10n.Tr("field_TargetPTPS"), ref targetPtps, 1, 1, 1000)) { settings.TargetPTPS = targetPtps; changed = true; }
             var bgColor = (Vector4)settings.EditorWorldBackgroundColor; if (ImGui.ColorEdit4(L10n.Tr("field_EditorWorldBackgroundColor"), ref bgColor)) { settings.EditorWorldBackgroundColor = (Color)bgColor; changed = true; }
+            DrawAssetReferenceField(L10n.Tr("ui_field_default_ui_font"), settings.DefaultUiFontPath, ".fontasset;.sdfont", value =>
+            {
+                string path = value as string ?? string.Empty;
+                settings.DefaultUiFontPath = AssetPathUtility.Normalize(path);
+                settings.DefaultUiFontGuid = string.IsNullOrWhiteSpace(path) ? string.Empty : AssetPathUtility.EnsureMetaAndGetGuid(path);
+                changed = true;
+            });
         }
         if (ImGui.CollapsingHeader(L10n.Tr("header_physics"), ImGuiTreeNodeFlags.DefaultOpen)) {
             Vector2 gravity = settings.DefaultGravity; if (ImGui.DragFloat2(L10n.Tr("field_DefaultGravity"), (float*)&gravity, 0.1f)) { settings.DefaultGravity = gravity; changed = true; }
@@ -698,6 +707,8 @@ public unsafe class InspectorWindow : EditorWindow
         changed |= DrawProjectSettingsList(L10n.Tr("header_tags"), settings.Tags, "Tag", false);
         changed |= DrawProjectSettingsList(L10n.Tr("header_sorting_layers"), settings.SortingLayers, "Layer", true);
         changed |= DrawProjectSettingsList(L10n.Tr("header_physics_groups"), settings.PhysicsGroups, "Group", false);
+        changed |= DrawUiAssetReferenceList(L10n.Tr("ui_header_catalog"), settings.UiCatalog);
+        changed |= DrawUiRoleBindingList(L10n.Tr("ui_header_role_defaults"), settings.UiRoleDefaults);
         if (changed) _app.SaveProjectSettings();
     }
 
@@ -913,6 +924,144 @@ public unsafe class InspectorWindow : EditorWindow
         return changed;
     }
 
+    private bool DrawUiAssetReferenceList(string header, List<UiAssetReference> list)
+    {
+        bool changed = false;
+        if (!ImGui.CollapsingHeader(header, ImGuiTreeNodeFlags.DefaultOpen))
+            return false;
+
+        for (int i = 0; i < list.Count; i++)
+        {
+            UiAssetReference entry = list[i];
+            ImGui.PushID($"ui-catalog-{i}");
+
+            string name = entry.Name ?? string.Empty;
+            if (ImGui.InputText(L10n.Tr("label_name"), ref name, 128))
+            {
+                entry.Name = name;
+                changed = true;
+            }
+
+            string path = entry.Path ?? string.Empty;
+            if (ImGui.InputText(L10n.Tr("label_path"), ref path, 260))
+            {
+                entry.Path = AssetPathUtility.Normalize(path);
+                changed = true;
+            }
+
+            string guid = entry.Guid ?? string.Empty;
+            if (ImGui.InputText(L10n.Tr("label_guid"), ref guid, 128))
+            {
+                entry.Guid = guid;
+                changed = true;
+            }
+
+            if (ImGui.Button(L10n.Tr("ui_btn_use_selected_ui"), new Vector2(120f, 0f)) && TryGetSelectedUiAsset(out string selectedPath, out string selectedGuid))
+            {
+                entry.Path = selectedPath;
+                entry.Guid = selectedGuid;
+                if (string.IsNullOrWhiteSpace(entry.Name))
+                    entry.Name = Path.GetFileNameWithoutExtension(selectedPath);
+                changed = true;
+            }
+
+            ImGui.SameLine();
+            if (ImGui.Button(L10n.Tr("ctx_remove"), new Vector2(80f, 0f)))
+            {
+                list.RemoveAt(i);
+                changed = true;
+                ImGui.PopID();
+                break;
+            }
+
+            ImGui.Separator();
+            ImGui.PopID();
+        }
+
+        if (ImGui.Button(L10n.Tr("ui_btn_add_ui_asset"), new Vector2(-1, 0)))
+        {
+            list.Add(new UiAssetReference());
+            changed = true;
+        }
+
+        return changed;
+    }
+
+    private bool DrawUiRoleBindingList(string header, List<UiRoleBinding> list)
+    {
+        bool changed = false;
+        if (!ImGui.CollapsingHeader(header, ImGuiTreeNodeFlags.DefaultOpen))
+            return false;
+
+        for (int i = 0; i < list.Count; i++)
+        {
+            UiRoleBinding binding = list[i];
+            ImGui.PushID($"ui-role-{i}");
+
+            string role = binding.Role ?? string.Empty;
+            if (ImGui.InputText(L10n.Tr("ui_field_role"), ref role, 128))
+            {
+                binding.Role = role;
+                changed = true;
+            }
+
+            string path = binding.Path ?? string.Empty;
+            if (ImGui.InputText(L10n.Tr("label_path"), ref path, 260))
+            {
+                binding.Path = AssetPathUtility.Normalize(path);
+                changed = true;
+            }
+
+            string guid = binding.Guid ?? string.Empty;
+            if (ImGui.InputText(L10n.Tr("label_guid"), ref guid, 128))
+            {
+                binding.Guid = guid;
+                changed = true;
+            }
+
+            if (ImGui.Button(L10n.Tr("ui_btn_use_selected_ui"), new Vector2(120f, 0f)) && TryGetSelectedUiAsset(out string selectedPath, out string selectedGuid))
+            {
+                binding.Path = selectedPath;
+                binding.Guid = selectedGuid;
+                changed = true;
+            }
+
+            ImGui.SameLine();
+            if (ImGui.Button(L10n.Tr("ctx_remove"), new Vector2(80f, 0f)))
+            {
+                list.RemoveAt(i);
+                changed = true;
+                ImGui.PopID();
+                break;
+            }
+
+            ImGui.Separator();
+            ImGui.PopID();
+        }
+
+        if (ImGui.Button(L10n.Tr("ui_btn_add_ui_role"), new Vector2(-1, 0)))
+        {
+            list.Add(new UiRoleBinding());
+            changed = true;
+        }
+
+        return changed;
+    }
+
+    private static bool TryGetSelectedUiAsset(out string path, out string guid)
+    {
+        path = string.Empty;
+        guid = string.Empty;
+
+        string? selectedPath = EditorSelection.SelectedAssetPath;
+        if (string.IsNullOrWhiteSpace(selectedPath) || !selectedPath.EndsWith(".ui", StringComparison.OrdinalIgnoreCase))
+            return false;
+
+        path = AssetPathUtility.Normalize(selectedPath);
+        guid = AssetPathUtility.TryGetGuid(selectedPath);
+        return true;
+    }
+
     private void DrawStyleAssetInspector(string path)
     {
         try {
@@ -963,8 +1112,21 @@ public unsafe class InspectorWindow : EditorWindow
 
     private void DrawWorldSettingsInspector(string path) {
         var world = WorldManager.ActiveWorld;
-        if (world != null && string.Equals(world.Name, Path.GetFileNameWithoutExtension(path), StringComparison.OrdinalIgnoreCase)) { ImGui.Text(L10n.Tr("msg_active_world_settings")); ImGui.Separator(); DrawGenericInspector(world); if (ImGui.Button(L10n.Tr("btn_save_world"), new Vector2(-1, 30))) _app.GetWindow<ProjectWindow>()?.SaveActiveWorldAsAsset(); }
-        else { ImGui.Text(L10n.Tr("msg_selected_world_not_active")); if (ImGui.Button(L10n.Tr("btn_load_world"), new Vector2(-1, 40))) _app.GetWindow<ProjectWindow>()?.LoadWorldByPath(path); }
+        if (world != null && string.Equals(world.Name, Path.GetFileNameWithoutExtension(path), StringComparison.OrdinalIgnoreCase)) {
+            world.UiRoleOverrides ??= new List<UiRoleBinding>();
+            ImGui.Text(L10n.Tr("msg_active_world_settings"));
+            ImGui.Separator();
+            DrawGenericInspector(world);
+            if (DrawUiRoleBindingList("UI Role Overrides", world.UiRoleOverrides))
+                _app.RecordUndo();
+            if (ImGui.Button(L10n.Tr("btn_save_world"), new Vector2(-1, 30)))
+                _app.GetWindow<ProjectWindow>()?.SaveActiveWorldAsAsset();
+        }
+        else {
+            ImGui.Text(L10n.Tr("msg_selected_world_not_active"));
+            if (ImGui.Button(L10n.Tr("btn_load_world"), new Vector2(-1, 40)))
+                _app.GetWindow<ProjectWindow>()?.LoadWorldByPath(path);
+        }
     }
 
     private void DrawScriptPreview(string path) { try { string code = GetCachedTextFile(path); ImGui.Text(L10n.Tr("msg_source")); ImGui.InputTextMultiline("##code", ref code, (uint)code.Length + 1024, new Vector2(-1, -1), ImGuiInputTextFlags.ReadOnly); } catch { ImGui.Text(L10n.Tr("msg_error_reading_file")); } }
@@ -2248,6 +2410,38 @@ public unsafe class InspectorWindow : EditorWindow
         string key = $"enum_{enumType.Name}_{enumName}";
         string localized = L10n.Tr(key);
         return localized == key ? enumName : localized;
+    }
+
+    private static string GetUiNodeKindLabel(UiNodeKind kind)
+    {
+        return kind switch
+        {
+            UiNodeKind.Container => L10n.Tr("ui_node_container"),
+            UiNodeKind.Panel => L10n.Tr("ui_node_panel"),
+            UiNodeKind.Label => L10n.Tr("ui_node_label"),
+            UiNodeKind.RichText => L10n.Tr("ui_node_rich_text"),
+            UiNodeKind.Image => L10n.Tr("ui_node_image"),
+            UiNodeKind.Button => L10n.Tr("ui_node_button"),
+            UiNodeKind.IconButton => L10n.Tr("ui_node_icon_button"),
+            UiNodeKind.Toggle => L10n.Tr("ui_node_toggle"),
+            UiNodeKind.ToggleGroup => L10n.Tr("ui_node_toggle_group"),
+            UiNodeKind.Dropdown => L10n.Tr("ui_node_dropdown"),
+            UiNodeKind.InputField => L10n.Tr("ui_node_input_field"),
+            UiNodeKind.TextArea => L10n.Tr("ui_node_text_area"),
+            UiNodeKind.Slider => L10n.Tr("ui_node_slider"),
+            UiNodeKind.ProgressBar => L10n.Tr("ui_node_progress_bar"),
+            UiNodeKind.Scrollbar => L10n.Tr("ui_node_scrollbar"),
+            UiNodeKind.ScrollView => L10n.Tr("ui_node_scroll_view"),
+            UiNodeKind.ListView => L10n.Tr("ui_node_list_view"),
+            UiNodeKind.GridView => L10n.Tr("ui_node_grid_view"),
+            UiNodeKind.Window => L10n.Tr("ui_node_window"),
+            UiNodeKind.Modal => L10n.Tr("ui_node_modal"),
+            UiNodeKind.Tabs => L10n.Tr("ui_node_tabs"),
+            UiNodeKind.Tooltip => L10n.Tr("ui_node_tooltip"),
+            UiNodeKind.Spacer => L10n.Tr("ui_node_spacer"),
+            UiNodeKind.DynamicArea => L10n.Tr("ui_node_dynamic_area"),
+            _ => kind.ToString()
+        };
     }
 
     private void DrawNestedObject(string name, object value, Action onChanged)

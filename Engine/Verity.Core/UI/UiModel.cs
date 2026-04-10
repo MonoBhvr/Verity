@@ -1,3 +1,4 @@
+using System.Collections;
 using System.Reflection;
 using System.Text.Json.Serialization;
 using Verity.Core.Serialization;
@@ -48,17 +49,22 @@ public enum UiNodeKind
     Modal,
     Tabs,
     Tooltip,
-    Spacer
+    Spacer,
+    DynamicArea
 }
 
 public enum UiLayoutMode
 {
-    None,
-    HorizontalStack,
-    VerticalStack,
-    Grid,
-    Wrap,
-    ScrollContent
+    Free = 0,
+    None = 0,
+    Horizontal = 1,
+    HorizontalStack = 1,
+    Vertical = 2,
+    VerticalStack = 2,
+    Grid = 3,
+    Wrap = 4,
+    Circle = 5,
+    ScrollContent = 6
 }
 
 public enum UiNavigationMode
@@ -184,7 +190,7 @@ public sealed class UiVisualStyle
 
 public sealed class UiLayoutGroup
 {
-    public UiLayoutMode Mode { get; set; } = UiLayoutMode.None;
+    public UiLayoutMode Mode { get; set; } = UiLayoutMode.Free;
     public int Columns { get; set; } = 2;
 
     [JsonConverter(typeof(Vector2Converter))]
@@ -194,6 +200,9 @@ public sealed class UiLayoutGroup
     public System.Numerics.Vector4 Padding { get; set; } = new(8, 8, 8, 8);
 
     public bool FitChildren { get; set; } = true;
+    public float CircleRadius { get; set; } = 120f;
+    public float CircleStartAngle { get; set; } = -90f;
+    public bool CircleClockwise { get; set; } = true;
 }
 
 public sealed class UiNavigation
@@ -225,6 +234,12 @@ public sealed class UiEventAction
     public string Method { get; set; } = string.Empty;
 }
 
+public sealed class UiScreenVariableDefinition
+{
+    public string Name { get; set; } = string.Empty;
+    public string TypeName { get; set; } = "object";
+}
+
 [JsonPolymorphic(TypeDiscriminatorPropertyName = "$type")]
 [JsonDerivedType(typeof(UiContainer), "container")]
 [JsonDerivedType(typeof(Panel), "panel")]
@@ -249,10 +264,11 @@ public sealed class UiEventAction
 [JsonDerivedType(typeof(Tabs), "tabs")]
 [JsonDerivedType(typeof(Tooltip), "tooltip")]
 [JsonDerivedType(typeof(Spacer), "spacer")]
+[JsonDerivedType(typeof(DynamicArea), "dynamicarea")]
 public abstract class UiNode
 {
     public string Id { get; set; } = Guid.NewGuid().ToString("N");
-    public string Name { get; set; } = "Node";
+    public string Name { get; set; } = "Element";
     public string Tag { get; set; } = string.Empty;
     public bool Active { get; set; } = true;
     public UiNodeKind Kind { get; protected init; }
@@ -274,6 +290,13 @@ public abstract class UiNode
 
     [JsonIgnore]
     public UiStateFlags RuntimeState { get; set; }
+
+    [JsonIgnore]
+    internal object? BindingItem { get; set; }
+
+    [JsonIgnore]
+    internal bool IsRuntimeGenerated { get; set; }
+
     public event Action<UiEvent>? OnEvent;
     public event Action<UiEvent>? OnClick;
     public event Action<UiEvent>? OnValueChanged;
@@ -343,6 +366,13 @@ public abstract class UiNode
         }
     }
 
+    internal void SetBindingItemRecursive(object? item)
+    {
+        BindingItem = item;
+        foreach (var child in Children)
+            child.SetBindingItemRecursive(item);
+    }
+
     internal void RaiseEvent(UiEvent evt)
     {
         OnEvent?.Invoke(evt);
@@ -369,6 +399,18 @@ public sealed class Panel : UiContainer
     {
         Kind = UiNodeKind.Panel;
     }
+}
+
+public sealed class DynamicArea : UiContainer
+{
+    public DynamicArea()
+    {
+        Kind = UiNodeKind.DynamicArea;
+        Name = "DynamicArea";
+    }
+
+    public string ItemsSource { get; set; } = string.Empty;
+    public UiNode? ItemTemplate { get; set; }
 }
 
 public class TextNode : UiNode
@@ -672,7 +714,13 @@ public sealed class UIScreenAsset
 
     public float MatchWidthOrHeight { get; set; } = 0.5f;
     public int SortingOrder { get; set; }
-    public UiNode Root { get; set; } = new Panel { Name = "Root", Transform = new UiTransform { AnchorMin = Vector2.Zero, AnchorMax = Vector2.One, Size = Vector2.Zero } };
+    public string UiScriptType { get; set; } = string.Empty;
+    public List<UiScreenVariableDefinition> Variables { get; set; } = [];
+    public UiNode Root { get; set; } = new Panel
+    {
+        Name = "Root",
+        Transform = new UiTransform { AnchorMin = Vector2.Zero, AnchorMax = Vector2.One, Size = Vector2.Zero }
+    };
 
     public void RebindTree()
     {
@@ -707,6 +755,7 @@ public static class UiNodeFactory
         UiNodeKind.Tabs => new Tabs(),
         UiNodeKind.Tooltip => new Tooltip(),
         UiNodeKind.Spacer => new Spacer(),
+        UiNodeKind.DynamicArea => new DynamicArea(),
         _ => new Panel()
     };
 }
@@ -715,7 +764,10 @@ public static class UiBindingRuntime
 {
     public static object? ResolvePath(object? source, string memberPath)
     {
-        if (source == null || string.IsNullOrWhiteSpace(memberPath))
+        if (source == null)
+            return null;
+
+        if (string.IsNullOrWhiteSpace(memberPath))
             return source;
 
         object? current = source;
@@ -723,6 +775,12 @@ public static class UiBindingRuntime
         {
             if (current == null)
                 return null;
+
+            if (current is IDictionary dictionary && dictionary.Contains(segment))
+            {
+                current = dictionary[segment];
+                continue;
+            }
 
             var type = current.GetType();
             var property = type.GetProperty(segment, BindingFlags.Instance | BindingFlags.Public | BindingFlags.IgnoreCase);
@@ -786,11 +844,20 @@ public static class UiBindingRuntime
         if (current == null)
             return false;
 
+        if (current is IDictionary dictionary)
+        {
+            dictionary[segments[^1]] = value;
+            return true;
+        }
+
         return TrySetValue(current, segments[^1], value);
     }
 
     private static object? ResolveSingleMember(object current, string segment)
     {
+        if (current is IDictionary dictionary && dictionary.Contains(segment))
+            return dictionary[segment];
+
         var type = current.GetType();
         var property = type.GetProperty(segment, BindingFlags.Instance | BindingFlags.Public | BindingFlags.IgnoreCase);
         if (property != null)
@@ -807,11 +874,22 @@ public static class UiBindingRuntime
     {
         if (value == null)
             return null;
-        if (targetType.IsInstanceOfType(value))
+
+        Type nonNullable = Nullable.GetUnderlyingType(targetType) ?? targetType;
+        if (nonNullable.IsInstanceOfType(value))
             return value;
-        if (targetType.IsEnum && value is string enumText)
-            return Enum.Parse(targetType, enumText, true);
-        return Convert.ChangeType(value, targetType);
+
+        if (nonNullable.IsEnum)
+        {
+            if (value is string enumText)
+                return Enum.Parse(nonNullable, enumText, true);
+
+            return Enum.ToObject(nonNullable, value);
+        }
+
+        if (nonNullable == typeof(string))
+            return Convert.ToString(value);
+
+        return Convert.ChangeType(value, nonNullable);
     }
 }
-

@@ -10,6 +10,7 @@
 - sorting layer
 - 후처리 설정
 - 현재 렌더링 구조의 제약
+- 현재 UI 텍스트 렌더링 구조
 
 ---
 
@@ -386,3 +387,82 @@
 - 텍스트 렌더링 경로 중 일부는 무겁습니다.
 - lighting/shadow uniform 전송은 여전히 draw call 수에 민감합니다.
 
+---
+
+## 10. 현재 UI 텍스트 렌더링 구조
+
+현재 UI 텍스트 렌더링은 일반 월드 렌더링과 분리된 전용 경로를 사용합니다.
+
+### 10.1 진입점
+
+스크린 UI 텍스트는 [UiRenderer.cs](D:\Verity\Engine\Verity.Graphics\UiRenderer.cs)에서 각 노드의 텍스트를 추출한 뒤, `RenderPipeline.DrawText(...)`를 통해 [GlyphAtlasTextRenderer.cs](D:\Verity\Engine\Verity.Graphics\GlyphAtlasTextRenderer.cs)로 전달됩니다.
+
+### 10.2 텍스트를 직접 그리는 노드
+
+현재 텍스트를 직접 렌더할 수 있는 대표 노드는 다음과 같습니다.
+
+- `Label`
+- `RichText`
+- `Button`
+- `Toggle`
+- `InputField`
+- `TextArea`
+- `Dropdown`
+- `Tabs`
+- `Tooltip`
+- `Window`
+
+### 10.3 폰트 경로
+
+현재 텍스트 렌더러는 두 경로를 가집니다.
+
+1. `.fontasset`를 사용하는 SDF 경로
+2. 일반 폰트 파일이나 시스템 폰트를 사용하는 비트맵 fallback 경로
+
+기본 UI는 현재 `.fontasset` 기반 SDF를 우선 사용합니다.
+
+### 10.4 기본 UI 폰트
+
+기본 UI 폰트는 엔진 내부에 번들된 자산을 사용합니다.
+
+- [DefaultUI.fontasset](D:\Verity\Editor\Verity.Editor\EditorResources\Fonts\DefaultUI.fontasset)
+- [DefaultUI_0.png](D:\Verity\Editor\Verity.Editor\EditorResources\Fonts\DefaultUI_0.png)
+- [DefaultUI_1.png](D:\Verity\Editor\Verity.Editor\EditorResources\Fonts\DefaultUI_1.png)
+- [DefaultUI_2.png](D:\Verity\Editor\Verity.Editor\EditorResources\Fonts\DefaultUI_2.png)
+
+에디터가 프로젝트를 열 때 이 자산을 프로젝트 기본 UI 폰트로 연결하는 방식입니다.
+
+### 10.5 SDF 처리 규칙
+
+현재 SDF 셰이더는 단일 채널 distance field를 사용합니다.
+
+핵심 처리 흐름은 다음과 같습니다.
+
+1. atlas에서 거리값을 읽음
+2. `0.5`를 기준으로 안쪽/바깥쪽을 해석
+3. `uScreenPxRange`를 이용해 화면 픽셀 기준으로 알파를 계산
+
+즉 단순 threshold 방식이 아니라, 화면 크기에 따라 range를 조정하는 구조입니다.
+
+### 10.6 픽셀 스냅
+
+현재 글리프 위치는 layout 단계에서 픽셀 스냅을 수행합니다.
+이는 작은 글씨에서 반픽셀 배치로 생기는 흐림을 줄이기 위한 보정입니다.
+
+### 10.7 atlas와 UV 규칙
+
+최근 문제를 통해 확인된 현재 규칙은 다음과 같습니다.
+
+- SDF atlas는 일반 텍스처처럼 무조건 Y-flip해서 로드하면 안 됩니다.
+- glyph metadata는 top-origin 기준으로 해석해야 합니다.
+
+이 규칙이 틀어지면 글자의 형상이 아예 다른 문자처럼 깨져 보일 수 있습니다.
+
+---
+
+## 11. 현재 텍스트 렌더링 한계
+
+- 현재는 MSDF가 아니라 단일 채널 SDF입니다.
+- 따라서 작은 글씨나 획이 복잡한 한글에서는 모서리 품질이 아주 날카롭지는 않습니다.
+- 비트맵 fallback 경로도 여전히 존재합니다.
+- locale별 폰트 fallback 체계는 아직 정식 기능으로 정리되지 않았습니다.

@@ -72,6 +72,15 @@ public static class UiSerializer
         return clone;
     }
 
+    public static UIScreenAsset CloneScreen(UIScreenAsset screen)
+    {
+        string json = JsonSerializer.Serialize(screen, Options);
+        var clone = JsonSerializer.Deserialize<UIScreenAsset>(json, Options) ?? new UIScreenAsset();
+        SanitizeScreen(clone);
+        clone.RebindTree();
+        return clone;
+    }
+
     public static UIScreenAsset CreateDefaultScreen(string name)
     {
         var root = new Panel
@@ -190,6 +199,8 @@ public static class UiSerializer
     {
         asset.Id = string.IsNullOrWhiteSpace(asset.Id) ? Guid.NewGuid().ToString("N") : asset.Id;
         asset.Name ??= "NewScreen";
+        asset.UiScriptType ??= string.Empty;
+        asset.Variables ??= [];
         asset.Root ??= new Panel
         {
             Name = "Root",
@@ -254,6 +265,13 @@ public static class UiSerializer
 
         if (node is UiContainer container)
             container.Layout ??= new UiLayoutGroup();
+
+        if (node is DynamicArea dynamicArea)
+        {
+            dynamicArea.ItemsSource ??= string.Empty;
+            dynamicArea.ItemTemplate ??= new Panel { Name = "ItemTemplate" };
+            SanitizeNode(dynamicArea.ItemTemplate);
+        }
 
         switch (node)
         {

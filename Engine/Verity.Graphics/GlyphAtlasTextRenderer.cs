@@ -1,9 +1,10 @@
-using System.Numerics;
-using System.Text;
 using System.Drawing.Drawing2D;
 using System.Drawing.Imaging;
 using System.Drawing.Text;
+using System.Numerics;
 using System.Runtime.InteropServices;
+using System.Runtime.Versioning;
+using System.Text;
 using Irodori.Framebuffer;
 using Irodori.Texture;
 using DrawingRectangle = System.Drawing.Rectangle;
@@ -38,24 +39,44 @@ public readonly record struct TextRenderOptions(
     TextHorizontalAlignment HorizontalAlignment,
     TextVerticalAlignment VerticalAlignment);
 
+[SupportedOSPlatform("windows")]
 public sealed class GlyphAtlasTextRenderer : IDisposable
 {
-    private const int AtlasPageSize = 1024;
-    private const int GlyphPadding = 2;
+    private const int DynamicAtlasPageSize = 1024;
+    private const int DynamicGlyphPadding = 2;
+
+    private const string SdfFragmentSource = @"#version 330 core
+in vec2 vTexCoord;
+uniform sampler2D uTexture;
+uniform vec4 uColor;
+uniform float uScreenPxRange;
+out vec4 FragColor;
+
+void main()
+{
+    float distanceValue = texture(uTexture, vTexCoord).r;
+    float screenPxDistance = uScreenPxRange * (distanceValue - 0.5);
+    float alpha = clamp(screenPxDistance + 0.5, 0.0, 1.0);
+    FragColor = vec4(uColor.rgb, uColor.a * alpha);
+}";
 
     private readonly GraphicsDevice _device;
     private readonly TextureManager _textureManager;
     private readonly Shader2D _shader;
+    private readonly Shader2D _sdfShader;
     private readonly Func<string, string?, string> _resolveAssetPath;
     private readonly Irodori.Buffer.VertexBuffer.Unuploaded _dynamicBuffer;
-    private readonly Dictionary<FontKey, FontFace> _fontCache = new();
-    private readonly List<AtlasPage> _atlasPages = [];
+    private readonly Dictionary<BitmapFontKey, BitmapFontFace> _bitmapFontCache = new();
+    private readonly Dictionary<string, CachedSdfFontFace> _sdfFontCache = new(StringComparer.OrdinalIgnoreCase);
+    private readonly List<DynamicAtlasPage> _dynamicAtlasPages = [];
+    private string? _cachedDefaultBitmapFontSource;
 
     public GlyphAtlasTextRenderer(GraphicsDevice device, TextureManager textureManager, Shader2D shader, Func<string, string?, string> resolveAssetPath)
     {
         _device = device;
         _textureManager = textureManager;
         _shader = shader;
+        _sdfShader = Shader2D.Create(device, fragmentSource: SdfFragmentSource);
         _resolveAssetPath = resolveAssetPath;
 
         var format = Irodori.Buffer.VertexBufferFormat.Create()
@@ -69,17 +90,45 @@ public sealed class GlyphAtlasTextRenderer : IDisposable
         if (string.IsNullOrEmpty(options.Text))
             return;
 
-        var font = GetFontFace(options);
-        if (font == null)
+        if (TryGetSdfFontFace(options.FontPath, out var sdfFont))
+        {
+            DrawTextInternal(options, sdfFont, _sdfShader, projection, view, targetFbo);
+            return;
+        }
+
+        var bitmapFont = GetBitmapFontFace(options);
+        if (bitmapFont == null)
             return;
 
+        DrawTextInternal(options, bitmapFont, _shader, projection, view, targetFbo);
+    }
+
+    public void Dispose()
+    {
+        foreach (var font in _bitmapFontCache.Values)
+            font.Dispose();
+
+        foreach (var font in _sdfFontCache.Values)
+            font.Face.Dispose();
+
+        foreach (var atlas in _dynamicAtlasPages)
+            atlas.Dispose();
+
+        _bitmapFontCache.Clear();
+        _sdfFontCache.Clear();
+        _dynamicAtlasPages.Clear();
+        _sdfShader.Dispose();
+    }
+
+    private void DrawTextInternal(TextRenderOptions options, ITextFontFace font, Shader2D shader, Matrix4x4 projection, Matrix4x4 view, FramebufferObject.Uploaded? targetFbo)
+    {
         var layout = LayoutText(options, font);
         if (layout.TotalGlyphCount == 0)
             return;
 
         foreach (var atlasGroup in layout.Glyphs.GroupBy(static glyph => glyph.AtlasIndex))
         {
-            if (atlasGroup.Key < 0 || atlasGroup.Key >= _atlasPages.Count)
+            if (atlasGroup.Key < 0 || atlasGroup.Key >= font.AtlasTextures.Count)
                 continue;
 
             var data = Irodori.Buffer.IVertexData.Create<System.Numerics.Vector2, System.Numerics.Vector2>();
@@ -105,35 +154,27 @@ public sealed class GlyphAtlasTextRenderer : IDisposable
             if (vertexBase == 0)
                 continue;
 
-            _shader.SetProjection(projection);
-            _shader.SetView(view);
-            _shader.SetModel(Matrix4x4.Identity);
-            _shader.SetUvRect(System.Numerics.Vector2.Zero, System.Numerics.Vector2.One);
-            _shader.SetTexture(_atlasPages[atlasGroup.Key].Texture);
-            _shader.SetColor(options.Color);
+            shader.SetProjection(projection);
+            shader.SetView(view);
+            shader.SetModel(Matrix4x4.Identity);
+            shader.SetUvRect(System.Numerics.Vector2.Zero, System.Numerics.Vector2.One);
+            shader.SetTexture(font.AtlasTextures[atlasGroup.Key]);
+            shader.SetColor(options.Color);
+            if (ReferenceEquals(shader, _sdfShader) && font is SdfFontFace sdfFont)
+                shader.SetFloat("uScreenPxRange", ComputeScreenPxRange(options.FontSize, sdfFont));
 
             using var uploaded = _dynamicBuffer.Upload(data, indices.ToArray()).Unwrap();
-            uploaded.Draw(_shader.Program, targetFbo).Unwrap();
+            uploaded.Draw(shader.Program, targetFbo).Unwrap();
         }
     }
 
-    public void Dispose()
-    {
-        foreach (var font in _fontCache.Values)
-            font.Dispose();
-
-        foreach (var atlas in _atlasPages)
-            atlas.Dispose();
-
-        _fontCache.Clear();
-        _atlasPages.Clear();
-    }
-
-    private TextLayoutResult LayoutText(TextRenderOptions options, FontFace font)
+    private TextLayoutResult LayoutText(TextRenderOptions options, ITextFontFace font)
     {
         float maxWidth = options.MaxSize.X > 0f ? options.MaxSize.X : float.PositiveInfinity;
         float maxHeight = options.MaxSize.Y > 0f ? options.MaxSize.Y : float.PositiveInfinity;
-        float lineHeight = font.LineHeight;
+        float requestedFontSize = options.FontSize > 0f ? options.FontSize : font.ReferenceFontSize;
+        float scale = requestedFontSize / MathF.Max(1f, font.ReferenceFontSize);
+        float lineHeight = font.LineHeight * scale;
         float penX = 0f;
         int lineStartGlyphIndex = 0;
 
@@ -155,15 +196,14 @@ public sealed class GlyphAtlasTextRenderer : IDisposable
 
             if (rune.Value == '\t')
             {
-                penX += font.SpaceAdvance * 4f;
+                penX += font.SpaceAdvance * scale * 4f;
                 continue;
             }
 
-            var glyph = GetGlyph(font, rune);
-            if (glyph == null)
+            if (!font.TryGetGlyph(rune, out var glyph))
                 continue;
 
-            float advance = glyph.Advance <= 0f ? font.SpaceAdvance : glyph.Advance;
+            float advance = (glyph.Advance <= 0f ? font.SpaceAdvance : glyph.Advance) * scale;
             if (options.WordWrap && !float.IsInfinity(maxWidth) && penX > 0f && penX + advance > maxWidth)
             {
                 lines.Add(new LayoutLine(lineStartGlyphIndex, glyphs.Count, penX));
@@ -176,8 +216,8 @@ public sealed class GlyphAtlasTextRenderer : IDisposable
             {
                 glyphs.Add(new PositionedGlyph(
                     glyph.AtlasIndex,
-                    new System.Numerics.Vector2(penX + glyph.OffsetX, lineY + glyph.OffsetY),
-                    new System.Numerics.Vector2(glyph.Width, glyph.Height),
+                    new System.Numerics.Vector2(penX + (glyph.OffsetX * scale), lineY + (glyph.OffsetY * scale)),
+                    new System.Numerics.Vector2(glyph.Width * scale, glyph.Height * scale),
                     glyph.UvMin,
                     glyph.UvMax));
             }
@@ -199,7 +239,7 @@ public sealed class GlyphAtlasTextRenderer : IDisposable
                 var positioned = glyphs[i];
                 glyphs[i] = positioned with
                 {
-                    Position = positioned.Position + new System.Numerics.Vector2(options.Position.X + xOffset, options.Position.Y + yOffset)
+                    Position = SnapToPixel(positioned.Position + new System.Numerics.Vector2(options.Position.X + xOffset, options.Position.Y + yOffset))
                 };
             }
         }
@@ -233,65 +273,165 @@ public sealed class GlyphAtlasTextRenderer : IDisposable
         };
     }
 
-    private FontFace? GetFontFace(TextRenderOptions options)
+    private static System.Numerics.Vector2 SnapToPixel(System.Numerics.Vector2 position)
+    {
+        return new System.Numerics.Vector2(MathF.Round(position.X), MathF.Round(position.Y));
+    }
+
+    private static float ComputeScreenPxRange(float requestedFontSize, SdfFontFace font)
+    {
+        float fontSize = MathF.Max(1f, requestedFontSize);
+        float scale = fontSize / MathF.Max(1f, font.ReferenceFontSize);
+        return MathF.Max(1f, font.Spread * scale);
+    }
+
+    private BitmapFontFace? GetBitmapFontFace(TextRenderOptions options)
     {
         float fontSize = MathF.Max(1f, options.FontSize);
-        string resolvedSource = ResolveFontSource(options.FontPath, options.FontFamily);
-        var key = new FontKey(resolvedSource, fontSize);
+        string resolvedSource = ResolveBitmapFontSource(options.FontPath, options.FontFamily);
+        var key = new BitmapFontKey(resolvedSource, fontSize);
 
-        if (_fontCache.TryGetValue(key, out var cached))
+        if (_bitmapFontCache.TryGetValue(key, out var cached))
             return cached;
 
-        FontFace? created = FontFace.Create(resolvedSource, fontSize);
+        BitmapFontFace? created = BitmapFontFace.Create(this, resolvedSource, fontSize);
         if (created == null)
             return null;
 
-        _fontCache[key] = created;
+        _bitmapFontCache[key] = created;
         return created;
     }
 
-    private string ResolveFontSource(string fontPath, string fontFamily)
+    private bool TryGetSdfFontFace(string fontPath, out SdfFontFace face)
+    {
+        face = null!;
+
+        string resolvedAssetPath = ResolveSdfFontAssetPath(fontPath);
+        if (string.IsNullOrWhiteSpace(resolvedAssetPath))
+            return false;
+
+        long versionToken = File.GetLastWriteTimeUtc(resolvedAssetPath).Ticks;
+        if (_sdfFontCache.TryGetValue(resolvedAssetPath, out var cached))
+        {
+            if (cached.VersionToken == versionToken)
+            {
+                face = cached.Face;
+                return true;
+            }
+
+            cached.Face.Dispose();
+            _sdfFontCache.Remove(resolvedAssetPath);
+        }
+
+        var created = SdfFontFace.Create(resolvedAssetPath, _resolveAssetPath, _textureManager);
+        if (created == null)
+            return false;
+
+        _sdfFontCache[resolvedAssetPath] = new CachedSdfFontFace(created, versionToken);
+        face = created;
+        return true;
+    }
+
+    private string ResolveBitmapFontSource(string fontPath, string fontFamily)
     {
         if (!string.IsNullOrWhiteSpace(fontPath))
         {
             try
             {
                 string resolved = _resolveAssetPath(fontPath, null);
-                if (File.Exists(resolved))
+                if (File.Exists(resolved) && !SdfFontAsset.IsFontAssetPath(resolved))
                     return resolved;
             }
             catch
             {
             }
 
-            if (Path.IsPathRooted(fontPath) && File.Exists(fontPath))
+            if (Path.IsPathRooted(fontPath) && File.Exists(fontPath) && !SdfFontAsset.IsFontAssetPath(fontPath))
                 return Path.GetFullPath(fontPath);
         }
 
         if (!string.IsNullOrWhiteSpace(fontFamily))
             return $"family:{fontFamily}";
 
+        return _cachedDefaultBitmapFontSource ??= FindDefaultBitmapFontSource();
+    }
+
+    private string FindDefaultBitmapFontSource()
+    {
+        foreach (string candidateFamily in GetCandidateFontFamilies())
+        {
+            try
+            {
+                using var family = new System.Drawing.FontFamily(candidateFamily);
+                return $"family:{family.Name}";
+            }
+            catch
+            {
+            }
+        }
+
+        foreach (string candidatePath in GetCandidateFontPaths())
+        {
+            if (File.Exists(candidatePath))
+                return Path.GetFullPath(candidatePath);
+        }
+
         return $"family:{System.Drawing.SystemFonts.MessageBoxFont?.FontFamily.Name ?? "Arial"}";
     }
 
-    private GlyphEntry? GetGlyph(FontFace font, Rune rune)
+    private IEnumerable<string> GetCandidateFontPaths()
     {
-        if (font.Glyphs.TryGetValue(rune.Value, out var cached))
-            return cached;
-
-        var rendered = RasterizeGlyph(font, rune);
-        font.Glyphs[rune.Value] = rendered;
-        return rendered;
+        string windowsFonts = Environment.GetFolderPath(Environment.SpecialFolder.Fonts);
+        if (!string.IsNullOrWhiteSpace(windowsFonts))
+        {
+            yield return Path.Combine(windowsFonts, "malgun.ttf");
+            yield return Path.Combine(windowsFonts, "malgunbd.ttf");
+            yield return Path.Combine(windowsFonts, "arialuni.ttf");
+        }
     }
 
-    private GlyphEntry RasterizeGlyph(FontFace font, Rune rune)
+    private static IEnumerable<string> GetCandidateFontFamilies()
+    {
+        yield return "Malgun Gothic";
+        yield return "Noto Sans KR";
+        yield return "Noto Sans CJK KR";
+        yield return "Microsoft YaHei UI";
+        yield return "Gulim";
+        yield return "Batang";
+        yield return "Segoe UI";
+        yield return "Arial Unicode MS";
+        yield return "Arial";
+    }
+
+    private string ResolveSdfFontAssetPath(string fontPath)
+    {
+        if (string.IsNullOrWhiteSpace(fontPath))
+            return string.Empty;
+
+        try
+        {
+            string resolved = _resolveAssetPath(fontPath, null);
+            if (File.Exists(resolved) && SdfFontAsset.IsFontAssetPath(resolved))
+                return Path.GetFullPath(resolved);
+        }
+        catch
+        {
+        }
+
+        if (Path.IsPathRooted(fontPath) && File.Exists(fontPath) && SdfFontAsset.IsFontAssetPath(fontPath))
+            return Path.GetFullPath(fontPath);
+
+        return string.Empty;
+    }
+
+    private GlyphEntry RasterizeGlyph(BitmapFontFace font, Rune rune)
     {
         string glyphText = rune.ToString();
         float advance = MeasureAdvance(font, glyphText);
         advance = advance <= 0f && rune.Value == ' ' ? font.SpaceAdvance : advance;
 
-        int canvasWidth = Math.Max(4, (int)MathF.Ceiling(MathF.Max(advance, font.SpaceAdvance)) + GlyphPadding * 4);
-        int canvasHeight = Math.Max(4, (int)MathF.Ceiling(font.LineHeight) + GlyphPadding * 4);
+        int canvasWidth = Math.Max(4, (int)MathF.Ceiling(MathF.Max(advance, font.SpaceAdvance)) + DynamicGlyphPadding * 4);
+        int canvasHeight = Math.Max(4, (int)MathF.Ceiling(font.LineHeight) + DynamicGlyphPadding * 4);
 
         using var bitmap = new System.Drawing.Bitmap(canvasWidth, canvasHeight, PixelFormat.Format32bppArgb);
         using var graphics = System.Drawing.Graphics.FromImage(bitmap);
@@ -300,31 +440,31 @@ public sealed class GlyphAtlasTextRenderer : IDisposable
 
         using var drawFont = font.CreateFont();
         using var format = CreateMeasureFormat();
-        graphics.DrawString(glyphText, drawFont, System.Drawing.Brushes.White, new System.Drawing.PointF(GlyphPadding, GlyphPadding), format);
+        graphics.DrawString(glyphText, drawFont, System.Drawing.Brushes.White, new System.Drawing.PointF(DynamicGlyphPadding, DynamicGlyphPadding), format);
 
         if (!TryExtractGlyphPixels(bitmap, out var bounds, out var pixels))
             return GlyphEntry.Empty(advance);
 
-        var atlasRect = AllocateGlyph(bounds.Width, bounds.Height, out int atlasIndex);
-        _atlasPages[atlasIndex].UploadGlyph(atlasRect, pixels);
+        var atlasRect = AllocateDynamicGlyph(bounds.Width, bounds.Height, out int atlasIndex);
+        _dynamicAtlasPages[atlasIndex].UploadGlyph(atlasRect, pixels);
 
-        float uvMinX = atlasRect.X / (float)_atlasPages[atlasIndex].Width;
-        float uvMaxX = (atlasRect.X + atlasRect.Width) / (float)_atlasPages[atlasIndex].Width;
-        float uvTop = atlasRect.Y / (float)_atlasPages[atlasIndex].Height;
-        float uvBottom = (atlasRect.Y + atlasRect.Height) / (float)_atlasPages[atlasIndex].Height;
+        float uvMinX = atlasRect.X / (float)_dynamicAtlasPages[atlasIndex].Width;
+        float uvMaxX = (atlasRect.X + atlasRect.Width) / (float)_dynamicAtlasPages[atlasIndex].Width;
+        float uvTop = atlasRect.Y / (float)_dynamicAtlasPages[atlasIndex].Height;
+        float uvBottom = (atlasRect.Y + atlasRect.Height) / (float)_dynamicAtlasPages[atlasIndex].Height;
 
         return new GlyphEntry(
             atlasIndex,
             bounds.Width,
             bounds.Height,
             advance,
-            bounds.Left - GlyphPadding,
-            bounds.Top - GlyphPadding,
-            new System.Numerics.Vector2(uvMinX, uvBottom),
-            new System.Numerics.Vector2(uvMaxX, uvTop));
+            bounds.Left - DynamicGlyphPadding,
+            bounds.Top - DynamicGlyphPadding,
+            new System.Numerics.Vector2(uvMinX, uvTop),
+            new System.Numerics.Vector2(uvMaxX, uvBottom));
     }
 
-    private static float MeasureAdvance(FontFace font, string glyphText)
+    private float MeasureAdvance(BitmapFontFace font, string glyphText)
     {
         using var measureBitmap = new System.Drawing.Bitmap(4, 4, PixelFormat.Format32bppArgb);
         using var graphics = System.Drawing.Graphics.FromImage(measureBitmap);
@@ -335,23 +475,23 @@ public sealed class GlyphAtlasTextRenderer : IDisposable
         return size.Width;
     }
 
-    private DrawingRectangle AllocateGlyph(int width, int height, out int atlasIndex)
+    private DrawingRectangle AllocateDynamicGlyph(int width, int height, out int atlasIndex)
     {
-        for (int i = 0; i < _atlasPages.Count; i++)
+        for (int i = 0; i < _dynamicAtlasPages.Count; i++)
         {
-            if (_atlasPages[i].TryAllocate(width, height, out var rect))
+            if (_dynamicAtlasPages[i].TryAllocate(width, height, out var rect))
             {
                 atlasIndex = i;
                 return rect;
             }
         }
 
-        var page = new AtlasPage(_textureManager, _atlasPages.Count);
-        _atlasPages.Add(page);
+        var page = new DynamicAtlasPage(_textureManager, _dynamicAtlasPages.Count);
+        _dynamicAtlasPages.Add(page);
         if (!page.TryAllocate(width, height, out var pageRect))
             throw new InvalidOperationException("Failed to allocate glyph in a new atlas page.");
 
-        atlasIndex = _atlasPages.Count - 1;
+        atlasIndex = _dynamicAtlasPages.Count - 1;
         return pageRect;
     }
 
@@ -436,20 +576,26 @@ public sealed class GlyphAtlasTextRenderer : IDisposable
         }
     }
 
-    private readonly record struct FontKey(string Source, float Size);
+    private readonly record struct BitmapFontKey(string Source, float Size);
+    private readonly record struct CachedSdfFontFace(SdfFontFace Face, long VersionToken);
 
-    private sealed class FontFace : IDisposable
+    private interface ITextFontFace
+    {
+        float ReferenceFontSize { get; }
+        float LineHeight { get; }
+        float SpaceAdvance { get; }
+        IReadOnlyList<TextureObjectUploaded> AtlasTextures { get; }
+        bool TryGetGlyph(Rune rune, out GlyphEntry glyph);
+    }
+
+    private sealed class BitmapFontFace : ITextFontFace, IDisposable
     {
         private readonly PrivateFontCollection? _privateCollection;
+        private readonly GlyphAtlasTextRenderer _owner;
 
-        public System.Drawing.FontFamily Family { get; }
-        public float PixelSize { get; }
-        public float LineHeight { get; }
-        public float SpaceAdvance { get; }
-        public Dictionary<int, GlyphEntry> Glyphs { get; } = new();
-
-        private FontFace(System.Drawing.FontFamily family, float pixelSize, float lineHeight, float spaceAdvance, PrivateFontCollection? privateCollection)
+        public BitmapFontFace(GlyphAtlasTextRenderer owner, System.Drawing.FontFamily family, float pixelSize, float lineHeight, float spaceAdvance, PrivateFontCollection? privateCollection)
         {
+            _owner = owner;
             Family = family;
             PixelSize = pixelSize;
             LineHeight = lineHeight;
@@ -457,7 +603,15 @@ public sealed class GlyphAtlasTextRenderer : IDisposable
             _privateCollection = privateCollection;
         }
 
-        public static FontFace? Create(string source, float pixelSize)
+        public System.Drawing.FontFamily Family { get; }
+        public float PixelSize { get; }
+        public float ReferenceFontSize => PixelSize;
+        public float LineHeight { get; }
+        public float SpaceAdvance { get; }
+        public Dictionary<int, GlyphEntry> Glyphs { get; } = new();
+        public IReadOnlyList<TextureObjectUploaded> AtlasTextures => _owner._dynamicAtlasPages.Select(static page => page.Texture).ToList();
+
+        public static BitmapFontFace? Create(GlyphAtlasTextRenderer owner, string source, float pixelSize)
         {
             try
             {
@@ -481,12 +635,25 @@ public sealed class GlyphAtlasTextRenderer : IDisposable
                 using var font = new System.Drawing.Font(family, pixelSize, System.Drawing.FontStyle.Regular, System.Drawing.GraphicsUnit.Pixel);
                 float lineHeight = font.GetHeight(graphics);
                 float spaceAdvance = graphics.MeasureString(" ", font, int.MaxValue, CreateMeasureFormat()).Width;
-                return new FontFace(family, pixelSize, lineHeight, MathF.Max(spaceAdvance, pixelSize * 0.33f), collection);
+                return new BitmapFontFace(owner, family, pixelSize, lineHeight, MathF.Max(spaceAdvance, pixelSize * 0.33f), collection);
             }
             catch
             {
                 return null;
             }
+        }
+
+        public bool TryGetGlyph(Rune rune, out GlyphEntry glyph)
+        {
+            if (Glyphs.TryGetValue(rune.Value, out GlyphEntry? cached) && cached != null)
+            {
+                glyph = cached;
+                return true;
+            }
+
+            glyph = _owner.RasterizeGlyph(this, rune);
+            Glyphs[rune.Value] = glyph;
+            return true;
         }
 
         public System.Drawing.Font CreateFont()
@@ -500,32 +667,156 @@ public sealed class GlyphAtlasTextRenderer : IDisposable
         }
     }
 
-    private sealed class AtlasPage : IDisposable
+    private sealed class SdfFontFace : ITextFontFace, IDisposable
     {
+        private readonly TextureManager _textureManager;
+        private readonly string[] _atlasPaths;
+        private readonly Dictionary<int, GlyphEntry> _glyphs;
+
+        private SdfFontFace(TextureManager textureManager, string[] atlasPaths, IReadOnlyList<TextureObjectUploaded> textures, Dictionary<int, GlyphEntry> glyphs, float referenceFontSize, float lineHeight, float spaceAdvance, int spread)
+        {
+            _textureManager = textureManager;
+            _atlasPaths = atlasPaths;
+            AtlasTextures = textures;
+            _glyphs = glyphs;
+            ReferenceFontSize = MathF.Max(1f, referenceFontSize);
+            LineHeight = MathF.Max(1f, lineHeight);
+            SpaceAdvance = MathF.Max(1f, spaceAdvance);
+            Spread = Math.Max(1, spread);
+        }
+
+        public float ReferenceFontSize { get; }
+        public float LineHeight { get; }
+        public float SpaceAdvance { get; }
+        public int Spread { get; }
+        public IReadOnlyList<TextureObjectUploaded> AtlasTextures { get; }
+
+        public static SdfFontFace? Create(string assetPath, Func<string, string?, string> resolveAssetPath, TextureManager textureManager)
+        {
+            try
+            {
+                var asset = SdfFontAsset.Load(assetPath);
+                string assetDirectory = Path.GetDirectoryName(assetPath) ?? AppContext.BaseDirectory;
+                var atlasPaths = new string[asset.AtlasPages.Count];
+                var textures = new List<TextureObjectUploaded>(asset.AtlasPages.Count);
+
+                for (int i = 0; i < asset.AtlasPages.Count; i++)
+                {
+                    string pagePath = asset.AtlasPages[i].Path;
+                    string fullAtlasPath;
+
+                    if (Path.IsPathRooted(pagePath))
+                    {
+                        fullAtlasPath = Path.GetFullPath(pagePath);
+                    }
+                    else
+                    {
+                        string combinedPath = Path.Combine(assetDirectory, pagePath);
+                        fullAtlasPath = File.Exists(combinedPath)
+                            ? Path.GetFullPath(combinedPath)
+                            : Path.GetFullPath(resolveAssetPath(pagePath, null));
+                    }
+
+                    atlasPaths[i] = fullAtlasPath;
+                    textures.Add(textureManager.Load(fullAtlasPath, asset.Filter, flipY: false));
+                }
+
+                var glyphs = new Dictionary<int, GlyphEntry>();
+                foreach (var glyph in asset.Glyphs)
+                {
+                    System.Numerics.Vector2 uvMin = System.Numerics.Vector2.Zero;
+                    System.Numerics.Vector2 uvMax = System.Numerics.Vector2.Zero;
+
+                    if (glyph.AtlasIndex >= 0 && glyph.AtlasIndex < asset.AtlasPages.Count && glyph.Width > 0 && glyph.Height > 0)
+                    {
+                        var page = asset.AtlasPages[glyph.AtlasIndex];
+                        float uvMinX = glyph.X / (float)page.Width;
+                        float uvMaxX = (glyph.X + glyph.Width) / (float)page.Width;
+                        float uvTop = glyph.Y / (float)page.Height;
+                        float uvBottom = (glyph.Y + glyph.Height) / (float)page.Height;
+                        uvMin = new System.Numerics.Vector2(uvMinX, uvTop);
+                        uvMax = new System.Numerics.Vector2(uvMaxX, uvBottom);
+                    }
+
+                    glyphs[glyph.Unicode] = new GlyphEntry(
+                        glyph.AtlasIndex,
+                        glyph.Width,
+                        glyph.Height,
+                        glyph.Advance,
+                        glyph.OffsetX,
+                        glyph.OffsetY,
+                        uvMin,
+                        uvMax);
+                }
+
+                return new SdfFontFace(
+                    textureManager,
+                    atlasPaths,
+                    textures,
+                    glyphs,
+                    asset.SamplingPointSize,
+                    asset.LineHeight,
+                    asset.SpaceAdvance,
+                    asset.Spread);
+            }
+            catch
+            {
+                return null;
+            }
+        }
+
+        public bool TryGetGlyph(Rune rune, out GlyphEntry glyph)
+        {
+            if (_glyphs.TryGetValue(rune.Value, out GlyphEntry? cached) && cached != null)
+            {
+                glyph = cached;
+                return true;
+            }
+
+            glyph = GlyphEntry.Empty(SpaceAdvance);
+            return false;
+        }
+
+        public void Dispose()
+        {
+            foreach (string atlasPath in _atlasPaths)
+            {
+                if (!string.IsNullOrWhiteSpace(atlasPath))
+                    _textureManager.Unload(atlasPath);
+            }
+        }
+    }
+
+    private sealed class DynamicAtlasPage : IDisposable
+    {
+        private readonly TextureManager _textureManager;
         private readonly byte[] _pixels;
-        private int _cursorX = GlyphPadding;
-        private int _cursorY = GlyphPadding;
+        private int _cursorX = DynamicGlyphPadding;
+        private int _cursorY = DynamicGlyphPadding;
         private int _rowHeight;
 
-        public TextureObjectUploaded Texture { get; }
-        public int Width { get; } = AtlasPageSize;
-        public int Height { get; } = AtlasPageSize;
-
-        public AtlasPage(TextureManager textureManager, int index)
+        public DynamicAtlasPage(TextureManager textureManager, int index)
         {
+            _textureManager = textureManager;
+            Width = DynamicAtlasPageSize;
+            Height = DynamicAtlasPageSize;
             _pixels = new byte[Width * Height * 4];
-            Texture = textureManager.CreateFromRgba(_pixels, Width, Height, $"__font_atlas_{index}__", SpriteTextureFilter.Linear);
+            Texture = CreateUploadedTexture();
         }
+
+        public TextureObjectUploaded Texture { get; private set; }
+        public int Width { get; }
+        public int Height { get; }
 
         public bool TryAllocate(int width, int height, out DrawingRectangle rect)
         {
-            int paddedWidth = width + GlyphPadding * 2;
-            int paddedHeight = height + GlyphPadding * 2;
+            int paddedWidth = width + DynamicGlyphPadding * 2;
+            int paddedHeight = height + DynamicGlyphPadding * 2;
 
             if (_cursorX + paddedWidth > Width)
             {
-                _cursorX = GlyphPadding;
-                _cursorY += _rowHeight + GlyphPadding;
+                _cursorX = DynamicGlyphPadding;
+                _cursorY += _rowHeight + DynamicGlyphPadding;
                 _rowHeight = 0;
             }
 
@@ -535,8 +826,8 @@ public sealed class GlyphAtlasTextRenderer : IDisposable
                 return false;
             }
 
-            rect = new DrawingRectangle(_cursorX + GlyphPadding, _cursorY + GlyphPadding, width, height);
-            _cursorX += paddedWidth + GlyphPadding;
+            rect = new DrawingRectangle(_cursorX + DynamicGlyphPadding, _cursorY + DynamicGlyphPadding, width, height);
+            _cursorX += paddedWidth + DynamicGlyphPadding;
             _rowHeight = Math.Max(_rowHeight, paddedHeight);
             return true;
         }
@@ -550,12 +841,32 @@ public sealed class GlyphAtlasTextRenderer : IDisposable
                 Array.Copy(rgbaPixels, srcRow, _pixels, dstRow, rect.Width * 4);
             }
 
-            Texture.UpdatePartial(PartialTextureData.Create(rgbaPixels), rect.X, rect.Y, rect.Width, rect.Height).Unwrap();
+            var previous = Texture;
+            Texture = CreateUploadedTexture();
+            previous.Dispose();
         }
 
         public void Dispose()
         {
             Texture.Dispose();
+        }
+
+        private TextureObjectUploaded CreateUploadedTexture()
+        {
+            byte[] flipped = FlipPixelsY(_pixels, Width, Height);
+            return _textureManager.CreateFromRgba(flipped, Width, Height, filter: SpriteTextureFilter.Linear);
+        }
+
+        private static byte[] FlipPixelsY(byte[] pixels, int width, int height)
+        {
+            byte[] flipped = new byte[pixels.Length];
+            int stride = width * 4;
+            for (int y = 0; y < height; y++)
+            {
+                Array.Copy(pixels, y * stride, flipped, (height - 1 - y) * stride, stride);
+            }
+
+            return flipped;
         }
     }
 

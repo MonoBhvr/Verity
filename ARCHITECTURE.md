@@ -158,11 +158,11 @@ coroutine은 render frame 기준이 아니라 logic tick 기준으로 전진합�
 | [Core 문서](D:/Verity/Docs/Core.md) | ECS, 월드, 공용 수학 타입, 디버그, 타일맵, 에셋 경로 유틸리티 |
 | [Scripting 문서](D:/Verity/Docs/Scripting.md) | `Script`, lifecycle, coroutine, 스크립트 shortcut API |
 | [Physics 문서](D:/Verity/Docs/Physics.md) | `Physical`, `PhysicalShape`, 쿼리, contact, solver 구조 |
-| [Graphics 문서](D:/Verity/Docs/Graphics.md) | 카메라, 렌더러, 조명, sorting layer, 후처리 |
+| [Graphics 문서](D:/Verity/Docs/Graphics.md) | 카메라, 렌더러, 조명, sorting layer, 후처리, UI 텍스트 렌더링 |
 | [Animation 문서](D:/Verity/Docs/Animation.md) | `Animator`, clip, track, controller graph |
 | [Audio 문서](D:/Verity/Docs/Audio.md) | `AudioClip`, `AudioSource`, `AudioManager`, audio system |
 | [Input 문서](D:/Verity/Docs/Input.md) | 입력 폴링, `KeyCode`, `MouseButton` |
 | [Filter 문서](D:/Verity/Docs/Filter.md) | `Filter`, `MixedFilter`, `FilterRegistry`, bitmask 체계 |
-| [UI 문서](D:/Verity/Docs/UI.md) | UI 노드, 캔버스, 바인딩, 레이아웃, UI 시스템 |
+| [UI 문서](D:/Verity/Docs/UI.md) | UI 노드, 캔버스, 바인딩, 레이아웃, 현재 스크린 UI 구조 |
 
 ---

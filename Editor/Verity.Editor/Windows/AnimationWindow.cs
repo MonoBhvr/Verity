@@ -632,12 +632,12 @@ public class AnimationWindow : EditorWindow
             ImGui.EndCombo();
         }
 
-        string modePreview = condition.Mode.ToString();
+        string modePreview = GetConditionModeLabel(condition.Mode);
         if (ImGui.BeginCombo(L10n.Tr("anim_mode"), modePreview))
         {
             foreach (var mode in GetAvailableModes(condition.Parameter))
             {
-                if (ImGui.Selectable(mode.ToString(), mode == condition.Mode))
+                if (ImGui.Selectable(GetConditionModeLabel(mode), mode == condition.Mode))
                 {
                     condition.Mode = mode;
                     _app.MarkAsDirty();
@@ -1103,6 +1103,13 @@ public class AnimationWindow : EditorWindow
             },
             _ => new[] { AnimatorConditionMode.If }
         };
+    }
+
+    private static string GetConditionModeLabel(AnimatorConditionMode mode)
+    {
+        string key = $"enum_{nameof(AnimatorConditionMode)}_{mode}";
+        string localized = L10n.Tr(key);
+        return localized == key ? mode.ToString() : localized;
     }
 
     private static void RenameParameter<T>(Dictionary<string, T> parameters, string oldName, string newName)

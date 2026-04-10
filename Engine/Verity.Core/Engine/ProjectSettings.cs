@@ -31,10 +31,28 @@ public class ProjectSettings
     public List<string> Tags { get; set; } = new() { "Untagged", "MainCamera", "Player", "GameController" };
     public List<string> SortingLayers { get; set; } = new() { "Default" };
     public List<string> PhysicsGroups { get; set; } = new() { "Default" };
+    public string DefaultUiFontPath { get; set; } = string.Empty;
+    public string DefaultUiFontGuid { get; set; } = string.Empty;
+    public List<UiAssetReference> UiCatalog { get; set; } = new();
+    public List<UiRoleBinding> UiRoleDefaults { get; set; } = new();
     public string LastOpenedWorldAssetPath { get; set; } = string.Empty;
     public EditorDockLayoutSettings EditorDockLayout { get; set; } = new();
 
     public static ProjectSettings Default => new();
+}
+
+public sealed class UiAssetReference
+{
+    public string Name { get; set; } = string.Empty;
+    public string Path { get; set; } = string.Empty;
+    public string Guid { get; set; } = string.Empty;
+}
+
+public sealed class UiRoleBinding
+{
+    public string Role { get; set; } = string.Empty;
+    public string Path { get; set; } = string.Empty;
+    public string Guid { get; set; } = string.Empty;
 }
 
 public class EditorDockLayoutSettings

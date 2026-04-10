@@ -46,7 +46,7 @@ public sealed class UiDocument : Script
             return null;
 
         Screen = UiSystem.LoadAsset(ScreenPath, ScreenGuid);
-        Canvas = UiSystem.ShowScreen(Screen, Owner);
+        Canvas = UiSystem.ShowScreen(Screen, Owner.World, Owner);
         Canvas.Visible = Enabled && Owner.Active && Visible;
         RegisterBindings();
         return Canvas;

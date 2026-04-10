@@ -252,5 +252,14 @@ public abstract class Script : Component
     public static T? FindUi<T>(string nameOrId) where T : UiNode => UiSystem.Query<T>(nameOrId);
     public static Canvas ShowUiScreen(UIScreenAsset screen) => UiSystem.ShowScreen(screen);
     public static Canvas ShowUiScreen(string path, string? guid = null) => UiSystem.ShowScreen(UiSystem.LoadAsset(path, guid));
+    public static Canvas OpenUi(UIScreenAsset screen) => global::Verity.Core.UI.UI.Open(screen);
+    public static Canvas OpenUiRole(string role) => global::Verity.Core.UI.UI.OpenRole(role);
+    public static Canvas OpenUi(string path, string? guid = null) => global::Verity.Core.UI.UI.Open(path, guid);
+    public static void CloseUi(string screenNameOrId) => global::Verity.Core.UI.UI.Close(screenNameOrId);
+    public static void CloseUiRole(string role) => global::Verity.Core.UI.UI.CloseRole(role);
+    public static void SetUi(string screenNameOrId, string variableName, object? value) => global::Verity.Core.UI.UI.Set(screenNameOrId, variableName, value);
+    public static void SetUiRole(string role, string variableName, object? value) => global::Verity.Core.UI.UI.SetRole(role, variableName, value);
+    public static void SendUi(string screenNameOrId, string command, object? payload = null) => global::Verity.Core.UI.UI.Send(screenNameOrId, command, payload);
+    public static void SendUiRole(string role, string command, object? payload = null) => global::Verity.Core.UI.UI.SendRole(role, command, payload);
     #endregion
 }

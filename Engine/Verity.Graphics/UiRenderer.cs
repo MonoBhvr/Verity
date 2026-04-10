@@ -8,6 +8,9 @@ namespace Verity.Graphics;
 
 public static class UiRenderer
 {
+    public static string DefaultFontPath { get; set; } = string.Empty;
+    public static string DefaultFontFamily { get; set; } = string.Empty;
+
     public static void Render(RenderPipeline pipeline, UIScreenAsset screen, int viewportWidth, int viewportHeight, FramebufferObject.Uploaded? targetFbo = null)
     {
         if (viewportWidth <= 0 || viewportHeight <= 0)
@@ -124,8 +127,8 @@ public static class UiRenderer
                 color,
                 fontSize,
                 wordWrap,
-                node.Visual.FontPath,
-                node.Visual.FontFamily,
+                ResolveFontPath(node),
+                ResolveFontFamily(node),
                 horizontal,
                 vertical),
             projection,
@@ -254,5 +257,19 @@ public static class UiRenderer
     private static Color WithAlpha(Color color, float alphaScale)
     {
         return new Color(color.R, color.G, color.B, color.A * alphaScale);
+    }
+
+    private static string ResolveFontPath(UiNode node)
+    {
+        return !string.IsNullOrWhiteSpace(node.Visual.FontPath)
+            ? node.Visual.FontPath
+            : DefaultFontPath;
+    }
+
+    private static string ResolveFontFamily(UiNode node)
+    {
+        return !string.IsNullOrWhiteSpace(node.Visual.FontFamily)
+            ? node.Visual.FontFamily
+            : DefaultFontFamily;
     }
 }

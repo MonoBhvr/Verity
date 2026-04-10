@@ -8,7 +8,7 @@ namespace Verity.Editor.Windows;
 public unsafe class FilterEditorWindow : EditorWindow
 {
     private readonly EditorApp _app;
-    private string _newFilterName = "NewFilter";
+    private string _newFilterName = L10n.Tr("creation_default_filter");
     private string _newEnumTypeName = "Verity.Input.KeyCode, Verity.Input";
     private FilterMode _newFilterMode = FilterMode.Whitelist;
     private bool _createAsMixed = true;
@@ -58,9 +58,13 @@ public unsafe class FilterEditorWindow : EditorWindow
             {
                 ImGui.PushID(filter.Name);
                 bool isSelected = _selectedFilter == filter;
-                string label = (filter.MixedValues.Count > 0 || string.IsNullOrEmpty(filter.EnumTypeName) ? $"[M] " : "") + filter.Name;
+                string mixedBadge = filter.MixedValues.Count > 0 || string.IsNullOrEmpty(filter.EnumTypeName)
+                    ? L10n.Tr("ui_filter_mixed_badge") + " "
+                    : string.Empty;
+                string label = mixedBadge + filter.Name;
+                string modeLabel = GetFilterModeLabel(filter.Mode);
                 
-                if (ImGui.Selectable($"{label} ({filter.Mode})##sel", isSelected, ImGuiSelectableFlags.None, new Vector2(ImGui.GetContentRegionAvail().X - 35, 0)))
+                if (ImGui.Selectable($"{label} ({modeLabel})##sel", isSelected, ImGuiSelectableFlags.None, new Vector2(ImGui.GetContentRegionAvail().X - 35, 0)))
                 {
                     _selectedFilter = filter;
                     _editValueTypeBuffer = filter.EnumTypeName ?? "";
@@ -93,7 +97,7 @@ public unsafe class FilterEditorWindow : EditorWindow
 
     private void DrawFilterEditorVertical()
     {
-        string currentLabel = _selectedFilter == null ? (L10n.Tr("btn_create_new") ?? "[+ Create New Filter]") : _selectedFilter.Name;
+        string currentLabel = _selectedFilter == null ? L10n.Tr("btn_create_new") : _selectedFilter.Name;
         
         ImGui.Columns(2, "FilterSelectVerticalCols", false);
         ImGui.SetColumnWidth(0, ImGui.GetWindowWidth() - 50);
@@ -101,11 +105,11 @@ public unsafe class FilterEditorWindow : EditorWindow
         ImGui.SetNextItemWidth(-1);
         if (ImGui.BeginCombo("##FilterSelectVertical", currentLabel))
         {
-            if (ImGui.Selectable(L10n.Tr("btn_create_new") ?? "[+ Create New Filter]", _selectedFilter == null)) _selectedFilter = null;
+            if (ImGui.Selectable(L10n.Tr("btn_create_new"), _selectedFilter == null)) _selectedFilter = null;
             ImGui.Separator();
             foreach (var filter in FilterManager.GetAllFilters())
             {
-                if (ImGui.Selectable($"{filter.Name} ({filter.Mode})", _selectedFilter == filter))
+                if (ImGui.Selectable($"{filter.Name} ({GetFilterModeLabel(filter.Mode)})", _selectedFilter == filter))
                 {
                     _selectedFilter = filter;
                     _editValueTypeBuffer = filter.EnumTypeName ?? "";
@@ -149,7 +153,7 @@ public unsafe class FilterEditorWindow : EditorWindow
     {
         ImGui.Text($"{L10n.Tr("menu_edit")}: {selectedFilter.Name}");
         ImGui.SameLine(ImGui.GetWindowWidth() - 120);
-        if (ImGui.Button(L10n.Tr("btn_back") ?? "Back")) { onBack(); return; }
+        if (ImGui.Button(L10n.Tr("btn_back"))) { onBack(); return; }
         
         ImGui.Separator();
         
@@ -159,12 +163,12 @@ public unsafe class FilterEditorWindow : EditorWindow
         if (ImGui.InputText("##FilterName", ref name, 64)) selectedFilter.Name = name;
         
         int mode = (int)selectedFilter.Mode;
-        ImGui.Text("Mode"); ImGui.SameLine(100);
+        ImGui.Text(L10n.Tr("ui_filter_mode")); ImGui.SameLine(100);
         ImGui.SetNextItemWidth(-1);
-        if (ImGui.Combo("##FilterMode", ref mode, "Whitelist\0Blacklist\0")) selectedFilter.Mode = (FilterMode)mode;
+        if (ImGui.Combo("##FilterMode", ref mode, $"{L10n.Tr("label_whitelist")}\0{L10n.Tr("label_blacklist")}\0")) selectedFilter.Mode = (FilterMode)mode;
         
         ImGui.Separator();
-        ImGui.Text(L10n.Tr("label_values") ?? "Active Rules:");
+        ImGui.Text(L10n.Tr("label_values"));
         
         float footerHeight = ImGui.GetFrameHeightWithSpacing() * 5 + 20;
         if (ImGui.BeginChild("ValuesList", new Vector2(0, -footerHeight), ImGuiChildFlags.Borders))
@@ -172,7 +176,7 @@ public unsafe class FilterEditorWindow : EditorWindow
             for (int i = 0; i < selectedFilter.Values.Count; i++)
             {
                 ImGui.PushID($"v_{i}");
-                ImGui.Text($"[S] {selectedFilter.Values[i]}");
+                ImGui.Text($"{L10n.Tr("ui_filter_static_badge")} {selectedFilter.Values[i]}");
                 ImGui.SameLine(ImGui.GetWindowWidth() - 35);
                 if (ImGui.Button("X")) { selectedFilter.Values.RemoveAt(i); selectedFilter.UpdateCache(); FilterManager.Save(); ImGui.PopID(); break; }
                 ImGui.PopID();
@@ -192,7 +196,7 @@ public unsafe class FilterEditorWindow : EditorWindow
         ImGui.EndChild();
         
         ImGui.Separator();
-        ImGui.TextDisabled("Add New Rule:");
+        ImGui.TextDisabled(L10n.Tr("ui_filter_add_new_rule"));
 
         bool isSingleType = !string.IsNullOrEmpty(selectedFilter.EnumTypeName);
         if (isSingleType) ImGui.BeginDisabled();
@@ -202,7 +206,7 @@ public unsafe class FilterEditorWindow : EditorWindow
         var resolvedType = string.IsNullOrEmpty(_editValueTypeBuffer) ? null : FilterManager.ResolveTypeInternal(_editValueTypeBuffer);
         if (resolvedType != null)
         {
-            ImGui.TextDisabled("Select Value:");
+            ImGui.TextDisabled(L10n.Tr("ui_filter_select_value"));
             if (resolvedType.IsEnum)
             {
                 string[] names = Enum.GetNames(resolvedType);
@@ -218,7 +222,7 @@ public unsafe class FilterEditorWindow : EditorWindow
         ImGui.Dummy(new Vector2(0, 5));
         bool canAdd = !string.IsNullOrEmpty(_editValueTypeBuffer) && !string.IsNullOrEmpty(_editValueBuffer);
         if (!canAdd) ImGui.BeginDisabled();
-        if (ImGui.Button(L10n.Tr("btn_add") ?? "Add to Filter", new Vector2(-1, 30)))
+        if (ImGui.Button(L10n.Tr("btn_add"), new Vector2(-1, 30)))
         {
             if (string.IsNullOrEmpty(selectedFilter.EnumTypeName)) selectedFilter.MixedValues.Add(new FilterValue { TypeName = _editValueTypeBuffer, Value = _editValueBuffer });
             else selectedFilter.Values.Add(_editValueBuffer);
@@ -229,7 +233,7 @@ public unsafe class FilterEditorWindow : EditorWindow
         if (!canAdd) ImGui.EndDisabled();
         
         ImGui.Separator();
-        if (ImGui.Button(L10n.Tr("btn_delete_filter") ?? "Delete This Filter", new Vector2(-1, 25))) 
+        if (ImGui.Button(L10n.Tr("btn_delete_filter"), new Vector2(-1, 25))) 
         { 
             _app.RequestDeleteFilter(selectedFilter);
         }
@@ -238,17 +242,17 @@ public unsafe class FilterEditorWindow : EditorWindow
     private void DrawUnifiedTypePicker(string id, ref string currentType)
     {
         Type? resolved = string.IsNullOrEmpty(currentType) ? null : FilterManager.ResolveTypeInternal(currentType);
-        string preview = resolved != null ? (resolved.Name == "Tag" || resolved.Name == "PhysicsGroup" || resolved.Name == "SortingLayer" ? resolved.Name : resolved.FullName!) : "Select Type...";
+        string preview = resolved != null ? (resolved.Name == "Tag" || resolved.Name == "PhysicsGroup" || resolved.Name == "SortingLayer" ? resolved.Name : resolved.FullName!) : L10n.Tr("ui_filter_select_type");
         
         ImGui.SetNextItemWidth(-1);
         if (ImGui.BeginCombo(id, preview))
         {
-            if (ImGui.Selectable("System: Tag", currentType == "Verity.Core.Tag, Verity.Core")) { currentType = "Verity.Core.Tag, Verity.Core"; _editValueBuffer = ""; }
-            if (ImGui.Selectable("System: Physics Group", currentType == "Verity.Core.PhysicsGroup, Verity.Core")) { currentType = "Verity.Core.PhysicsGroup, Verity.Core"; _editValueBuffer = ""; }
-            if (ImGui.Selectable("System: Sorting Layer", currentType == "Verity.Core.SortingLayer, Verity.Core")) { currentType = "Verity.Core.SortingLayer, Verity.Core"; _editValueBuffer = ""; }
+            if (ImGui.Selectable(L10n.Tr("ui_filter_system_tag"), currentType == "Verity.Core.Tag, Verity.Core")) { currentType = "Verity.Core.Tag, Verity.Core"; _editValueBuffer = ""; }
+            if (ImGui.Selectable(L10n.Tr("ui_filter_system_physics_group"), currentType == "Verity.Core.PhysicsGroup, Verity.Core")) { currentType = "Verity.Core.PhysicsGroup, Verity.Core"; _editValueBuffer = ""; }
+            if (ImGui.Selectable(L10n.Tr("ui_filter_system_sorting_layer"), currentType == "Verity.Core.SortingLayer, Verity.Core")) { currentType = "Verity.Core.SortingLayer, Verity.Core"; _editValueBuffer = ""; }
             
             ImGui.Separator();
-            ImGui.TextDisabled(" Search Enums:");
+            ImGui.TextDisabled(L10n.Tr("ui_filter_search_enums"));
             ImGui.InputText("##EnumSearchSub", ref _enumSearchFilter, 64);
             
             var enumTypes = _app.ScriptCompiler?.GetAllEnumTypes() ?? new List<Type>();
@@ -274,7 +278,7 @@ public unsafe class FilterEditorWindow : EditorWindow
     private void DrawSimpleStringCombo(string id, List<string> items, ref string current)
     {
         ImGui.SetNextItemWidth(-1);
-        if (ImGui.BeginCombo(id, string.IsNullOrEmpty(current) ? "(Select Value...)" : current))
+        if (ImGui.BeginCombo(id, string.IsNullOrEmpty(current) ? L10n.Tr("ui_filter_select_value_combo") : current))
         {
             foreach (var item in items) if (ImGui.Selectable(item, item == current)) current = item;
             ImGui.EndCombo();
@@ -283,26 +287,26 @@ public unsafe class FilterEditorWindow : EditorWindow
 
     private void DrawCreateFilter()
     {
-        ImGui.Text(L10n.Tr("btn_create_filter") ?? "Create New Filter");
+        ImGui.Text(L10n.Tr("btn_create_filter"));
         ImGui.Separator();
         
-        ImGui.Text(L10n.Tr("label_name") ?? "Filter Name:");
+        ImGui.Text(L10n.Tr("label_name"));
         ImGui.InputText("##NewName", ref _newFilterName, 64);
         
-        ImGui.Checkbox("Mixed Type Filter (Recommended)", ref _createAsMixed);
+        ImGui.Checkbox(L10n.Tr("ui_filter_mixed_type_recommended"), ref _createAsMixed);
         
         if (!_createAsMixed)
         {
-            ImGui.Text("Filter Target Type:");
+            ImGui.Text(L10n.Tr("ui_filter_target_type"));
             DrawUnifiedTypePicker("##NewTypePicker", ref _newEnumTypeName);
         }
         
         int mode = (int)_newFilterMode;
-        ImGui.Text("Default Mode:");
-        if (ImGui.Combo("##NewMode", ref mode, "Whitelist\0Blacklist\0")) _newFilterMode = (FilterMode)mode;
+        ImGui.Text(L10n.Tr("ui_filter_default_mode"));
+        if (ImGui.Combo("##NewMode", ref mode, $"{L10n.Tr("label_whitelist")}\0{L10n.Tr("label_blacklist")}\0")) _newFilterMode = (FilterMode)mode;
         
         ImGui.Dummy(new Vector2(0, 10));
-        if (ImGui.Button(L10n.Tr("btn_create") ?? "Create Filter", new Vector2(-1, 40)))
+        if (ImGui.Button(L10n.Tr("btn_create"), new Vector2(-1, 40)))
         {
             if (!string.IsNullOrWhiteSpace(_newFilterName))
             {
@@ -328,5 +332,12 @@ public unsafe class FilterEditorWindow : EditorWindow
             _editValueTypeBuffer = filter.EnumTypeName ?? "";
             _editValueBuffer = "";
         }
+    }
+
+    private static string GetFilterModeLabel(FilterMode mode)
+    {
+        return mode == FilterMode.Whitelist
+            ? L10n.Tr("label_whitelist")
+            : L10n.Tr("label_blacklist");
     }
 }

@@ -407,6 +407,8 @@ public class EditorApp : IDisposable
         
         string? fontPath = FindKoreanFont();
         _imgui.Initialize(_device, fontPath, this.ProjectSettings.EditorFontSize);
+        UiRenderer.DefaultFontPath = string.Empty;
+        UiRenderer.DefaultFontFamily = FindUiFontFamily();
         _imgui.SetMultiViewportEnabled(true);
         
         _shader = Shader2D.Create(_device);
@@ -454,18 +456,18 @@ public class EditorApp : IDisposable
                         ProjectsRoot = settings.ProjectsRoot;
                         InvalidateLauncherProjectCache();
                     }
-                    L10n.LoadLanguage(settings.Language ?? "ko");
+                    L10n.LoadLanguage(settings.Language);
                 }
             } 
             else 
             {
-                L10n.LoadLanguage("ko");
+                L10n.LoadLanguage(null);
             }
         } 
         catch (Exception e) 
         {
             CoreDebug.LogError($"[Launcher] Failed to load global settings: {e.Message}");
-            L10n.LoadLanguage("ko");
+            L10n.LoadLanguage(null);
         }
     }
 
@@ -504,6 +506,33 @@ public class EditorApp : IDisposable
             }
         }
         return null;
+    }
+
+    private static string FindUiFontFamily()
+    {
+        string[] candidates =
+        [
+            "Malgun Gothic",
+            "Noto Sans KR",
+            "Noto Sans CJK KR",
+            "Gulim",
+            "Batang",
+            "Segoe UI"
+        ];
+
+        foreach (string candidate in candidates)
+        {
+            try
+            {
+                using var family = new System.Drawing.FontFamily(candidate);
+                return family.Name;
+            }
+            catch
+            {
+            }
+        }
+
+        return string.Empty;
     }
 
     private FileStream? _projectLock;
@@ -701,27 +730,44 @@ public class EditorApp : IDisposable
     {
         if (AssetsPath == null) return;
         string path = Path.Combine(AssetsPath, "ProjectSettings.json");
+        bool shouldSave = false;
         if (File.Exists(path)) {
             try { 
                 var json = File.ReadAllText(path); 
                 var settings = JsonSerializer.Deserialize<ProjectSettings>(json, _projectSettingsOptions);
                 this.ProjectSettings = settings ?? new();
                 SortingLayer.SyncWithSettings(this.ProjectSettings.SortingLayers);
+                UiSystem.ProjectSettings = this.ProjectSettings;
             }
-            catch (Exception e) { 
-                CoreDebug.LogError($"[Project] Failed to load settings: {e.Message}");
-                this.ProjectSettings = new(); 
-            }
-        } else { this.ProjectSettings = new(); SaveProjectSettings(); }
-
+              catch (Exception e) { 
+                  CoreDebug.LogError($"[Project] Failed to load settings: {e.Message}");
+                  this.ProjectSettings = new(); 
+                  UiSystem.ProjectSettings = this.ProjectSettings;
+                  shouldSave = true;
+              }
+        } else { this.ProjectSettings = new(); UiSystem.ProjectSettings = this.ProjectSettings; shouldSave = true; }
+  
         if (ProjectSettings.EditorDockLayout == null)
             ProjectSettings.EditorDockLayout = new EditorDockLayoutSettings();
+
+        try
+        {
+            shouldSave |= EnsureDefaultUiFontAsset();
+        }
+        catch (Exception e)
+        {
+            CoreDebug.LogError($"[Font] Default UI font initialization failed: {e.Message}");
+        }
+        ApplyProjectUiFontDefaults();
+        if (shouldSave)
+            SaveProjectSettings();
     }
 
     public void SaveProjectSettings()
     {
         if (AssetsPath == null) return;
         PersistProjectDockLayoutState();
+        ApplyProjectUiFontDefaults();
         string path = Path.Combine(AssetsPath, "ProjectSettings.json");
         try {
             var json = JsonSerializer.Serialize(this.ProjectSettings, _projectSettingsOptions);
@@ -729,6 +775,82 @@ public class EditorApp : IDisposable
         } catch (Exception e) {
             CoreDebug.LogError($"[Project] Failed to save settings: {e.Message}");
         }
+    }
+
+    private void ApplyProjectUiFontDefaults()
+    {
+        UiRenderer.DefaultFontPath = ProjectSettings.DefaultUiFontPath;
+        UiRenderer.DefaultFontFamily = string.IsNullOrWhiteSpace(ProjectSettings.DefaultUiFontPath)
+            ? FindUiFontFamily()
+            : string.Empty;
+    }
+
+    private bool EnsureDefaultUiFontAsset()
+    {
+        if (AssetsPath == null)
+            return false;
+
+        string resolvedExisting = AssetPathUtility.ResolvePath(ProjectPath ?? AssetsPath, ProjectSettings.DefaultUiFontPath, ProjectSettings.DefaultUiFontGuid);
+        if (!string.IsNullOrWhiteSpace(resolvedExisting) &&
+            File.Exists(resolvedExisting) &&
+            SdfFontAsset.IsFontAssetPath(resolvedExisting))
+        {
+            if (string.IsNullOrWhiteSpace(ProjectSettings.DefaultUiFontPath))
+                ProjectSettings.DefaultUiFontPath = AssetPathUtility.Normalize(resolvedExisting);
+            if (string.IsNullOrWhiteSpace(ProjectSettings.DefaultUiFontGuid))
+                ProjectSettings.DefaultUiFontGuid = AssetPathUtility.EnsureMetaAndGetGuid(resolvedExisting);
+            return false;
+        }
+
+        string bundledAssetPath = FindBundledDefaultUiFontAssetPath();
+        if (string.IsNullOrWhiteSpace(bundledAssetPath) || !File.Exists(bundledAssetPath))
+        {
+            CoreDebug.LogError("[Font] Bundled default UI font asset could not be found.");
+            return false;
+        }
+
+        string destinationDirectory = Path.Combine(AssetsPath, "Fonts", "BuiltIn");
+        string destinationAssetPath = Path.Combine(destinationDirectory, Path.GetFileName(bundledAssetPath));
+
+        Directory.CreateDirectory(destinationDirectory);
+        File.Copy(bundledAssetPath, destinationAssetPath, true);
+        AssetPathUtility.EnsureMetaAndGetGuid(destinationAssetPath);
+
+        var asset = SdfFontAsset.Load(destinationAssetPath);
+        foreach (var atlasPage in asset.AtlasPages)
+        {
+            string sourceAtlasPath = Path.Combine(Path.GetDirectoryName(bundledAssetPath)!, atlasPage.Path);
+            string destinationAtlasPath = Path.Combine(destinationDirectory, atlasPage.Path);
+            if (!File.Exists(sourceAtlasPath))
+                continue;
+
+            File.Copy(sourceAtlasPath, destinationAtlasPath, true);
+            AssetPathUtility.EnsureMetaAndGetGuid(destinationAtlasPath);
+        }
+
+        ProjectSettings.DefaultUiFontPath = AssetPathUtility.Normalize(destinationAssetPath);
+        ProjectSettings.DefaultUiFontGuid = AssetPathUtility.EnsureMetaAndGetGuid(destinationAssetPath);
+        CoreDebug.Log($"[Font] Installed bundled default UI font: {ProjectSettings.DefaultUiFontPath}");
+        return true;
+    }
+
+    private static string FindBundledDefaultUiFontAssetPath()
+    {
+        string[] searchPaths =
+        [
+            Path.Combine(AppContext.BaseDirectory, "EditorResources", "Fonts", "DefaultUI.fontasset"),
+            Path.Combine(AppContext.BaseDirectory, "..", "EditorResources", "Fonts", "DefaultUI.fontasset"),
+            Path.Combine(Directory.GetCurrentDirectory(), "Editor", "Verity.Editor", "EditorResources", "Fonts", "DefaultUI.fontasset")
+        ];
+
+        foreach (string path in searchPaths)
+        {
+            string fullPath = Path.GetFullPath(path);
+            if (File.Exists(fullPath))
+                return fullPath;
+        }
+
+        return string.Empty;
     }
 
     private void PersistProjectDockLayoutState()
@@ -927,6 +1049,7 @@ public class EditorApp : IDisposable
         try { 
             var ps = JsonSerializer.Deserialize<ProjectSettings>(state.ProjectSettingsJson, _projectSettingsOptions);
             if (ps != null) this.ProjectSettings = ps;
+            UiSystem.ProjectSettings = this.ProjectSettings;
             var bs = JsonSerializer.Deserialize<BuildSettings>(state.BuildSettingsJson);
             if (bs != null) this.BuildSettings = bs;
         } catch { }
@@ -1555,8 +1678,8 @@ public class EditorApp : IDisposable
                 if (ImGui.MenuItem(L10n.Tr("menu_reset_layout"))) resetLayout = true;
                 ImGui.Separator();
                 if (ImGui.BeginMenu(L10n.Tr("menu_language"))) {
-                    if (ImGui.MenuItem("English", "", L10n.CurrentLanguage == "en")) { L10n.LoadLanguage("en"); SaveGlobalSettings(); resetLayout = true; }
-                    if (ImGui.MenuItem("한국어", "", L10n.CurrentLanguage == "ko")) { L10n.LoadLanguage("ko"); SaveGlobalSettings(); resetLayout = true; }
+                    if (ImGui.MenuItem(L10n.Tr("lang_english"), "", L10n.CurrentLanguage == "en")) { L10n.LoadLanguage("en"); SaveGlobalSettings(); resetLayout = true; }
+                    if (ImGui.MenuItem(L10n.Tr("lang_korean"), "", L10n.CurrentLanguage == "ko")) { L10n.LoadLanguage("ko"); SaveGlobalSettings(); resetLayout = true; }
                     ImGui.EndMenu();
                 }
                 ImGui.EndMenu();
@@ -1972,13 +2095,13 @@ public class EditorApp : IDisposable
             ImGui.Separator();
             if (ImGui.BeginMenu(L10n.Tr("menu_language")))
             {
-                if (ImGui.MenuItem("English", "", L10n.CurrentLanguage == "en"))
+                if (ImGui.MenuItem(L10n.Tr("lang_english"), "", L10n.CurrentLanguage == "en"))
                 {
                     L10n.LoadLanguage("en");
                     SaveGlobalSettings();
                     resetLayout = true;
                 }
-                if (ImGui.MenuItem("한국어", "", L10n.CurrentLanguage == "ko"))
+                if (ImGui.MenuItem(L10n.Tr("lang_korean"), "", L10n.CurrentLanguage == "ko"))
                 {
                     L10n.LoadLanguage("ko");
                     SaveGlobalSettings();

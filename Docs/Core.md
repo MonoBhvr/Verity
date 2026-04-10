@@ -789,3 +789,50 @@ public void ApplyNativeAspectRatio()
 
 - 타일 변경 시 `RenderDirty`, `PhysicsDirty`, `ContentVersion`이 갱신됩니다.
 - bounds는 항상 즉시 다시 계산하지 않고 필요 시 갱신합니다.
+---
+
+## 8. UI Integration
+
+Core now contains the ownership and settings structures that the UI runtime depends on.
+
+### 8.1 `World.Ui`
+
+Every `World` has a `Ui` property of type `WorldUi`.
+
+This is the runtime owner of screen UI for that world.
+
+Current responsibilities:
+
+- open screens by asset
+- open screens by logical role
+- close and find open canvases
+- set screen variables
+- send commands to `UiScript`
+
+This keeps screen UI attached to the active world instead of modeling screens as entities.
+
+### 8.2 `ProjectSettings`
+
+`ProjectSettings` now includes UI configuration:
+
+- `UiCatalog`
+- `UiRoleDefaults`
+
+This is the shared/default UI selection layer.
+
+### 8.3 `World`
+
+`World` now includes:
+
+- `UiRoleOverrides`
+
+This is the per-world override layer used when a world needs to replace a common UI role with another asset.
+
+### 8.4 Runtime resolution
+
+The runtime resolves UI roles in this order:
+
+1. `World.UiRoleOverrides`
+2. `ProjectSettings.UiRoleDefaults`
+
+This matches the current implementation and is the basis of `UI.OpenRole(...)`, `World.Ui.OpenRole(...)`, and the related role-based APIs.

@@ -49,11 +49,11 @@ public static class Input
     public static KeyCode AnyKey => _enabled && _keysDown.Count > 0 ? _keysDown.First() : (KeyCode)(-1);
     public static MouseButton AnyMouseButton => _enabled && _buttonsDown.Count > 0 ? _buttonsDown.First() : (MouseButton)(-1);
     public static bool AnyKeyDown => _enabled && _pressedThisTick.Count > 0;
-    public static bool GetKey(KeyCode key) => _enabled && _keysDown.Contains(key);
-    public static bool GetKeyDown(KeyCode key) => _enabled && _pressedThisTick.Contains(key);
-    public static bool GetKeyUp(KeyCode key) => _enabled && _releasedThisTick.Contains(key);
+    public static bool Down(KeyCode key) => _enabled && _keysDown.Contains(key);
+    public static bool Pressed(KeyCode key) => _enabled && _pressedThisTick.Contains(key);
+    public static bool Released(KeyCode key) => _enabled && _releasedThisTick.Contains(key);
 
-    public static bool GetKey(Filter? filter)
+    public static bool Down(Filter? filter)
     {
         if (filter == null || !_enabled) return false;
         
@@ -62,7 +62,7 @@ public static class Input
         return false;
     }
 
-    public static bool GetKeyDown(Filter? filter)
+    public static bool Pressed(Filter? filter)
     {
         if (filter == null || !_enabled) return false;
         
@@ -71,7 +71,7 @@ public static class Input
         return false;
     }
 
-    public static bool GetKeyUp(Filter? filter)
+    public static bool Released(Filter? filter)
     {
         if (filter == null || !_enabled) return false;
         
@@ -80,21 +80,21 @@ public static class Input
         return false;
     }
 
-    public static bool GetKey(string filterName) => GetKey(Filter.Get(filterName));
-    public static bool GetKeyDown(string filterName) => GetKeyDown(Filter.Get(filterName));
-    public static bool GetKeyUp(string filterName) => GetKeyUp(Filter.Get(filterName));
+    public static bool Down(string filterName) => Down(Filter.Get(filterName));
+    public static bool Pressed(string filterName) => Pressed(Filter.Get(filterName));
+    public static bool Released(string filterName) => Released(Filter.Get(filterName));
 
-    public static bool GetMouseButton(MouseButton button) => _enabled && _buttonsDown.Contains(button);
-    public static bool GetMouseButtonDown(MouseButton button) => _enabled && _mousePressedThisTick.Contains(button);
-    public static bool GetMouseButtonUp(MouseButton button) => _enabled && _mouseReleasedThisTick.Contains(button);
+    public static bool MouseDown(MouseButton button) => _enabled && _buttonsDown.Contains(button);
+    public static bool MousePressed(MouseButton button) => _enabled && _mousePressedThisTick.Contains(button);
+    public static bool MouseReleased(MouseButton button) => _enabled && _mouseReleasedThisTick.Contains(button);
 
-    public static bool GetMouseButton(Filter? filter)
+    public static bool MouseDown(Filter? filter)
     {
         if (filter == null || !_enabled) return false;
         if (filter.Mode == FilterMode.Whitelist)
         {
             foreach (var btn in filter.GetValues<MouseButton>())
-                if (GetMouseButton(btn)) return true;
+                if (MouseDown(btn)) return true;
             return false;
         }
         else
@@ -105,13 +105,13 @@ public static class Input
         }
     }
 
-    public static bool GetMouseButtonDown(Filter? filter)
+    public static bool MousePressed(Filter? filter)
     {
         if (filter == null || !_enabled) return false;
         if (filter.Mode == FilterMode.Whitelist)
         {
             foreach (var btn in filter.GetValues<MouseButton>())
-                if (GetMouseButtonDown(btn)) return true;
+                if (MousePressed(btn)) return true;
             return false;
         }
         else
@@ -122,13 +122,13 @@ public static class Input
         }
     }
 
-    public static bool GetMouseButtonUp(Filter? filter)
+    public static bool MouseReleased(Filter? filter)
     {
         if (filter == null || !_enabled) return false;
         if (filter.Mode == FilterMode.Whitelist)
         {
             foreach (var btn in filter.GetValues<MouseButton>())
-                if (GetMouseButtonUp(btn)) return true;
+                if (MouseReleased(btn)) return true;
             return false;
         }
         else
@@ -139,9 +139,46 @@ public static class Input
         }
     }
 
-    public static bool GetMouseButton(string filterName) => GetMouseButton(Filter.Get(filterName));
-    public static bool GetMouseButtonDown(string filterName) => GetMouseButtonDown(Filter.Get(filterName));
-    public static bool GetMouseButtonUp(string filterName) => GetMouseButtonUp(Filter.Get(filterName));
+    public static bool MouseDown(string filterName) => MouseDown(Filter.Get(filterName));
+    public static bool MousePressed(string filterName) => MousePressed(Filter.Get(filterName));
+    public static bool MouseReleased(string filterName) => MouseReleased(Filter.Get(filterName));
+
+    [Obsolete("Use Down instead")]
+    public static bool GetKey(KeyCode key) => Down(key);
+    [Obsolete("Use Pressed instead")]
+    public static bool GetKeyDown(KeyCode key) => Pressed(key);
+    [Obsolete("Use Released instead")]
+    public static bool GetKeyUp(KeyCode key) => Released(key);
+    [Obsolete("Use Down instead")]
+    public static bool GetKey(Filter? filter) => Down(filter);
+    [Obsolete("Use Pressed instead")]
+    public static bool GetKeyDown(Filter? filter) => Pressed(filter);
+    [Obsolete("Use Released instead")]
+    public static bool GetKeyUp(Filter? filter) => Released(filter);
+    [Obsolete("Use Down instead")]
+    public static bool GetKey(string filterName) => Down(filterName);
+    [Obsolete("Use Pressed instead")]
+    public static bool GetKeyDown(string filterName) => Pressed(filterName);
+    [Obsolete("Use Released instead")]
+    public static bool GetKeyUp(string filterName) => Released(filterName);
+    [Obsolete("Use MouseDown instead")]
+    public static bool GetMouseButton(MouseButton button) => MouseDown(button);
+    [Obsolete("Use MousePressed instead")]
+    public static bool GetMouseButtonDown(MouseButton button) => MousePressed(button);
+    [Obsolete("Use MouseReleased instead")]
+    public static bool GetMouseButtonUp(MouseButton button) => MouseReleased(button);
+    [Obsolete("Use MouseDown instead")]
+    public static bool GetMouseButton(Filter? filter) => MouseDown(filter);
+    [Obsolete("Use MousePressed instead")]
+    public static bool GetMouseButtonDown(Filter? filter) => MousePressed(filter);
+    [Obsolete("Use MouseReleased instead")]
+    public static bool GetMouseButtonUp(Filter? filter) => MouseReleased(filter);
+    [Obsolete("Use MouseDown instead")]
+    public static bool GetMouseButton(string filterName) => MouseDown(filterName);
+    [Obsolete("Use MousePressed instead")]
+    public static bool GetMouseButtonDown(string filterName) => MousePressed(filterName);
+    [Obsolete("Use MouseReleased instead")]
+    public static bool GetMouseButtonUp(string filterName) => MouseReleased(filterName);
 
     private static KeyCode MapMouseButtonToKeyCode(MouseButton button)
     {

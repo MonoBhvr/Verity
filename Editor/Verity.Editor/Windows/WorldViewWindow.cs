@@ -301,7 +301,7 @@ public unsafe class WorldViewWindow : EditorWindow
         ImGui.SameLine();
         float snapSize = _snapSize;
         ImGui.SetNextItemWidth(60f);
-        if (ImGui.DragFloat("##SnapSize", ref snapSize, 0.1f, 0.01f, 100f, "S: %.2f"))
+        if (ImGui.DragFloat("##SnapSize", ref snapSize, 0.1f, 0.01f, 100f, L10n.Tr("label_snap_size_format")))
             _snapSize = Math.Max(0.01f, snapSize);
         if (ImGui.IsItemActivated())
             _app.BeginUndoAction();
@@ -1422,7 +1422,7 @@ public unsafe class WorldViewWindow : EditorWindow
 
     private Entity CreateSpriteEntityFromDrag(World world, string draggedPath, Sprite? draggedSprite)
     {
-        var entity = world.CreateEntity(Path.GetFileNameWithoutExtension(draggedPath) ?? "New Entity");
+        var entity = world.CreateEntity(Path.GetFileNameWithoutExtension(draggedPath) ?? L10n.Tr("creation_default_entity"));
         var sr = entity.AddComponent<SpriteRenderer>();
         sr.Sprite = draggedSprite ?? _app.CreateSpriteReference(draggedPath);
         sr.Texture = _app.LoadSpriteTexture(sr.Sprite);
@@ -1581,7 +1581,7 @@ public unsafe class WorldViewWindow : EditorWindow
             ImGui.EndPopup(); 
         } 
     }
-    private void FinalizeAction() { if (_targetPath == null || string.IsNullOrWhiteSpace(_inputBuffer)) return; if (_activeMode == ModalMode.Create) { if (_creationType == CreationType.Script) { var p = System.IO.Path.Combine(_targetPath, _inputBuffer + ".cs"); System.IO.File.WriteAllText(p, $"using Verity.Core.ECS;\n\npublic class {_inputBuffer} : Script\n{{\n    void Start()\n    {{\n    }}\n\n    void Update()\n    {{\n    }}\n}}"); } else if (_creationType == CreationType.World) { var p = System.IO.Path.Combine(_targetPath, _inputBuffer + ".verity"); var w = new World(_inputBuffer); var camEnt = w.CreateEntity("Main Camera"); camEnt.AddComponent<Camera>(); System.IO.File.WriteAllText(p, Verity.Core.Serialization.SceneSerializer.Serialize(w)); LoadWorldByPath(p); } } }
+    private void FinalizeAction() { if (_targetPath == null || string.IsNullOrWhiteSpace(_inputBuffer)) return; if (_activeMode == ModalMode.Create) { if (_creationType == CreationType.Script) { var p = System.IO.Path.Combine(_targetPath, _inputBuffer + ".cs"); System.IO.File.WriteAllText(p, $"using Verity.Core.ECS;\n\npublic class {_inputBuffer} : Script\n{{\n    void Start()\n    {{\n    }}\n\n    void Update()\n    {{\n    }}\n}}"); } else if (_creationType == CreationType.World) { var p = System.IO.Path.Combine(_targetPath, _inputBuffer + ".verity"); var w = new World(_inputBuffer); var camEnt = w.CreateEntity(L10n.Tr("creation_default_main_camera")); camEnt.AddComponent<Camera>(); System.IO.File.WriteAllText(p, Verity.Core.Serialization.SceneSerializer.Serialize(w)); LoadWorldByPath(p); } } }
     public void CreateWorldInProject() => OpenCreatePopup(_app.AssetsPath!, CreationType.World);
     public void LoadWorldByPath(string path) { 
         if (!System.IO.File.Exists(path)) return; 
@@ -1604,5 +1604,5 @@ public unsafe class WorldViewWindow : EditorWindow
     }
     public void SaveActiveWorldAsAsset() { if (WorldManager.ActiveWorld == null || _app.AssetsPath == null) return; var path = System.IO.Path.Combine(_app.AssetsPath, $"{WorldManager.ActiveWorld.Name}.verity"); System.IO.File.WriteAllText(path, Verity.Core.Serialization.SceneSerializer.Serialize(WorldManager.ActiveWorld)); }
     public void CompileScriptsForActiveWorld() => _app.ScriptCompiler?.Compile();
-    private void OpenCreatePopup(string dir, CreationType type) { _activeMode = ModalMode.Create; _creationType = type; _targetPath = dir; _inputBuffer = type == CreationType.Script ? "NewScript" : "NewWorld"; _shouldOpenPopup = true; }
+    private void OpenCreatePopup(string dir, CreationType type) { _activeMode = ModalMode.Create; _creationType = type; _targetPath = dir; _inputBuffer = type == CreationType.Script ? L10n.Tr("creation_default_script") : L10n.Tr("creation_default_world"); _shouldOpenPopup = true; }
 }
