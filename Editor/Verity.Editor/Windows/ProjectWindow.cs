@@ -18,6 +18,12 @@ namespace Verity.Editor.Windows;
 
 public unsafe class ProjectWindow : EditorWindow
 {
+    private enum PublishBuildMode
+    {
+        Debug,
+        Release
+    }
+
     private readonly EditorApp _app;
     private string? _currentDirectory;
     private string? _contextDirectory;
@@ -2144,6 +2150,21 @@ public unsafe class ProjectWindow : EditorWindow
 
     public void PublishSingleFile()
     {
+        PublishBuild(PublishBuildMode.Release);
+    }
+
+    public void PublishDebugBuild()
+    {
+        PublishBuild(PublishBuildMode.Debug);
+    }
+
+    public void PublishReleaseBuild()
+    {
+        PublishBuild(PublishBuildMode.Release);
+    }
+
+    private void PublishBuild(PublishBuildMode mode)
+    {
         if (_app.IsBuilding || _app.ProjectPath == null)
             return;
 
@@ -2153,7 +2174,7 @@ public unsafe class ProjectWindow : EditorWindow
             try
             {
                 _app.BuildStatus = L10n.Tr("msg_publish_preparing_dir");
-                string publishDir = Path.Combine(_app.ProjectPath, "Build");
+                string publishDir = Path.Combine(_app.ProjectPath, "Build", mode.ToString());
                 if (Directory.Exists(publishDir))
                 {
                     try { Directory.Delete(publishDir, true); } catch { }
@@ -2175,16 +2196,23 @@ public unsafe class ProjectWindow : EditorWindow
                 CopyDirectory(_app.AssetsPath!, gameAssets);
 
                 _app.BuildStatus = L10n.Tr("msg_publish_syncing_build_settings");
-                string settingsSrc = Path.Combine(_app.ProjectPath, "BuildSettings.json");
+                string settingsSrc = Path.Combine(_app.AssetsPath!, "BuildSettings.json");
+                string settingsDest = Path.Combine(gameAssets, "BuildSettings.json");
                 if (File.Exists(settingsSrc))
-                    File.Copy(settingsSrc, Path.Combine(gameProjDir, "BuildSettings.json"), true);
+                    File.Copy(settingsSrc, settingsDest, true);
+                else if (File.Exists(settingsDest))
+                    File.Delete(settingsDest);
 
                 _app.BuildStatus = L10n.Tr("msg_publish_compiling_scripts");
                 string gameDll = Path.Combine(gameProjDir, "UserScripts.dll");
                 _app.ScriptCompiler?.CompileToFile(gameDll);
 
                 _app.BuildStatus = L10n.Tr("msg_publish_running_dotnet");
-                var psi = new ProcessStartInfo("dotnet", $"publish \"{Path.Combine(gameProjDir, "Verity.Game.csproj")}\" -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -o \"{publishDir}\"")
+                string publishArgs = mode == PublishBuildMode.Debug
+                    ? $"publish \"{Path.Combine(gameProjDir, "Verity.Game.csproj")}\" -c Debug -r win-x64 --self-contained true -p:PublishSingleFile=false -p:RuntimeShowConsole=true -p:RuntimeDiagnostics=true -p:DebugSymbols=true -p:DebugType=portable -o \"{publishDir}\""
+                    : $"publish \"{Path.Combine(gameProjDir, "Verity.Game.csproj")}\" -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:RuntimeShowConsole=false -p:RuntimeDiagnostics=false -p:DebugSymbols=false -p:DebugType=None -o \"{publishDir}\"";
+
+                var psi = new ProcessStartInfo("dotnet", publishArgs)
                 {
                     CreateNoWindow = true,
                     UseShellExecute = false,

@@ -15,7 +15,7 @@ public sealed class SdfFontAsset
         Converters = { new JsonStringEnumConverter() }
     };
 
-    public int Version { get; set; } = 1;
+    public int Version { get; set; } = 2;
     public string SourceFontPath { get; set; } = string.Empty;
     public string FamilyName { get; set; } = string.Empty;
     public float SamplingPointSize { get; set; } = 48f;

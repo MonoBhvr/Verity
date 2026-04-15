@@ -192,7 +192,7 @@ public sealed class Canvas
 
     private void ProcessInput()
     {
-        var pointer = UiSystem.PointerPosition;
+        var pointer = UiSystem.ViewportToCanvas(UiSystem.PointerPosition, Screen);
         var hovered = HitTest(pointer);
         bool down = Verity.Input.Input.MousePressed(Verity.Input.MouseButton.Left);
         bool held = Verity.Input.Input.MouseDown(Verity.Input.MouseButton.Left);
@@ -431,7 +431,9 @@ public static class UiLayoutEngine
 {
     public static void Layout(UIScreenAsset screen, float viewportWidth, float viewportHeight)
     {
-        LayoutNode(screen.Root, new UiRect(0, 0, screen.ReferenceResolution.X, screen.ReferenceResolution.Y));
+        float rootWidth = Math.Max(1f, screen.ReferenceResolution.X);
+        float rootHeight = Math.Max(1f, screen.ReferenceResolution.Y);
+        LayoutNode(screen.Root, new UiRect(0, 0, rootWidth, rootHeight));
     }
 
     private static void LayoutNode(UiNode node, UiRect parentRect)
@@ -568,6 +570,7 @@ public static class UiSystem
     public static string? AssetsRoot { get; set; }
     public static ProjectSettings? ProjectSettings { get; set; }
     public static Vector2 PointerPosition { get; private set; }
+    public static Vector2 ViewportSize { get; private set; }
     public static IReadOnlyList<Canvas> ActiveCanvases => Active;
     public static UIScreenAsset Load(string path) => UiSerializer.Load(path);
     public static string ResolveAssetPath(string path, string? guid = null) => AssetPathUtility.ResolvePath(AssetsRoot ?? AppContext.BaseDirectory, path, guid);
@@ -579,13 +582,13 @@ public static class UiSystem
 
         UiRoleBinding? worldOverride = world?.UiRoleOverrides.LastOrDefault(binding =>
             string.Equals(binding.Role, role, StringComparison.OrdinalIgnoreCase) &&
-            !string.IsNullOrWhiteSpace(binding.Path));
+            !string.IsNullOrWhiteSpace(binding.Asset.Path));
         if (worldOverride != null)
             return worldOverride;
 
         return ProjectSettings?.UiRoleDefaults.LastOrDefault(binding =>
             string.Equals(binding.Role, role, StringComparison.OrdinalIgnoreCase) &&
-            !string.IsNullOrWhiteSpace(binding.Path));
+            !string.IsNullOrWhiteSpace(binding.Asset.Path));
     }
 
     public static Canvas ShowRole(string role, World.World? world = null, Entity? ownerEntity = null)
@@ -594,7 +597,7 @@ public static class UiSystem
         if (binding == null)
             throw new InvalidOperationException($"UI role '{role}' is not configured.");
 
-        Canvas canvas = ShowScreen(LoadAsset(binding.Path, binding.Guid), world, ownerEntity);
+        Canvas canvas = ShowScreen(LoadAsset(binding.Asset.Path, binding.Asset.Guid), world, ownerEntity);
         canvas.OpenedRole = role;
         return canvas;
     }
@@ -644,6 +647,7 @@ public static class UiSystem
 
     public static void Update(float viewportWidth, float viewportHeight)
     {
+        ViewportSize = new Vector2(Math.Max(1f, viewportWidth), Math.Max(1f, viewportHeight));
         PointerPosition = new Vector2(Verity.Input.Input.MousePosition.X, Verity.Input.Input.MousePosition.Y);
         foreach (var canvas in Active.ToArray())
             canvas.Update(viewportWidth, viewportHeight);
@@ -659,14 +663,34 @@ public static class UiSystem
 
     public static Vector2 ViewportToCanvas(Vector2 viewportPosition, UIScreenAsset screen)
     {
-        return new Vector2(viewportPosition.X * screen.ReferenceResolution.X, viewportPosition.Y * screen.ReferenceResolution.Y);
+        UiRect canvasRect = GetCanvasViewportRect(screen, ViewportSize.X, ViewportSize.Y);
+        float scale = Math.Max(0.0001f, canvasRect.Width / Math.Max(1f, screen.ReferenceResolution.X));
+        return new Vector2(
+            (viewportPosition.X - canvasRect.X) / scale,
+            (viewportPosition.Y - canvasRect.Y) / scale);
     }
 
     public static Vector2 CanvasToViewport(Vector2 canvasPosition, UIScreenAsset screen)
     {
-        float width = Math.Max(1f, screen.ReferenceResolution.X);
-        float height = Math.Max(1f, screen.ReferenceResolution.Y);
-        return new Vector2(canvasPosition.X / width, canvasPosition.Y / height);
+        UiRect canvasRect = GetCanvasViewportRect(screen, ViewportSize.X, ViewportSize.Y);
+        float scale = Math.Max(0.0001f, canvasRect.Width / Math.Max(1f, screen.ReferenceResolution.X));
+        return new Vector2(
+            canvasRect.X + (canvasPosition.X * scale),
+            canvasRect.Y + (canvasPosition.Y * scale));
+    }
+
+    public static UiRect GetCanvasViewportRect(UIScreenAsset screen, float viewportWidth, float viewportHeight)
+    {
+        float referenceWidth = Math.Max(1f, screen.ReferenceResolution.X);
+        float referenceHeight = Math.Max(1f, screen.ReferenceResolution.Y);
+        float safeViewportWidth = Math.Max(1f, viewportWidth);
+        float safeViewportHeight = Math.Max(1f, viewportHeight);
+        float scale = MathF.Min(safeViewportWidth / referenceWidth, safeViewportHeight / referenceHeight);
+        float width = referenceWidth * scale;
+        float height = referenceHeight * scale;
+        float x = (safeViewportWidth - width) * 0.5f;
+        float y = (safeViewportHeight - height) * 0.5f;
+        return new UiRect(x, y, width, height);
     }
 
     internal static UiScript? CreateUiScript(string typeName)

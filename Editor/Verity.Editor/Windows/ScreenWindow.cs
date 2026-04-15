@@ -49,7 +49,11 @@ public class ScreenWindow : EditorWindow
             {
                 camera = FindWorldCamera(world);
                 if (camera != null)
+                {
+                    long renderStart = Stopwatch.GetTimestamp();
                     _app.RenderPipeline.RenderWorld(world, camera, _app.RenderPipeline.ScreenFbo);
+                    _app.Profiler.RecordRenderStage("Screen Render", Stopwatch.GetElapsedTime(renderStart).TotalMilliseconds);
+                }
                 else
                     _app.Device.Clear(new Verity.Core.Color(0.12f, 0.12f, 0.14f, 1f), _app.RenderPipeline.ScreenFbo);
             }
@@ -57,7 +61,11 @@ public class ScreenWindow : EditorWindow
                 _app.Device.Clear(new Verity.Core.Color(0.12f, 0.12f, 0.14f, 1f), _app.RenderPipeline.ScreenFbo);
 
             if (overlayActive)
+            {
+                long overlayStart = Stopwatch.GetTimestamp();
                 UiRenderer.Render(_app.RenderPipeline, uiEditor!.PreviewScreen!, width, height, _app.RenderPipeline.ScreenFbo);
+                _app.Profiler.RecordRenderStage("Screen Overlay UI", Stopwatch.GetElapsedTime(overlayStart).TotalMilliseconds);
+            }
 
             _lastRenderedWidth = width;
             _lastRenderedHeight = height;

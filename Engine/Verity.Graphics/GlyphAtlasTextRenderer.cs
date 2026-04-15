@@ -33,6 +33,7 @@ public readonly record struct TextRenderOptions(
     System.Numerics.Vector2 MaxSize,
     Color Color,
     float FontSize,
+    bool AutoFit,
     bool WordWrap,
     string FontPath,
     string FontFamily,
@@ -122,6 +123,9 @@ void main()
 
     private void DrawTextInternal(TextRenderOptions options, ITextFontFace font, Shader2D shader, Matrix4x4 projection, Matrix4x4 view, FramebufferObject.Uploaded? targetFbo)
     {
+        if (options.AutoFit)
+            options = options with { FontSize = ComputeAutoFitFontSize(options, font) };
+
         var layout = LayoutText(options, font);
         if (layout.TotalGlyphCount == 0)
             return;
@@ -227,24 +231,55 @@ void main()
 
         lines.Add(new LayoutLine(lineStartGlyphIndex, glyphs.Count, penX));
 
-        float totalHeight = lines.Count * lineHeight;
-        float yOffset = ComputeVerticalOffset(options.VerticalAlignment, maxHeight, totalHeight);
+        var lineBounds = new LayoutBounds[lines.Count];
+        float blockMinY = float.PositiveInfinity;
+        float blockMaxY = float.NegativeInfinity;
 
         for (int lineIndex = 0; lineIndex < lines.Count; lineIndex++)
         {
             var line = lines[lineIndex];
-            float xOffset = ComputeHorizontalOffset(options.HorizontalAlignment, maxWidth, line.Width);
+            LayoutBounds bounds = ComputeBounds(glyphs, line.StartGlyphIndex, line.EndGlyphIndex);
+            lineBounds[lineIndex] = bounds;
+
+            if (!bounds.HasValue)
+                continue;
+
+            blockMinY = MathF.Min(blockMinY, bounds.Min.Y);
+            blockMaxY = MathF.Max(blockMaxY, bounds.Max.Y);
+        }
+
+        float visibleHeight = blockMinY <= blockMaxY ? blockMaxY - blockMinY : lines.Count * lineHeight;
+        float yOffset = ComputeVerticalOffset(options.VerticalAlignment, maxHeight, visibleHeight);
+        float yAnchor = blockMinY <= blockMaxY ? -blockMinY : 0f;
+
+        for (int lineIndex = 0; lineIndex < lines.Count; lineIndex++)
+        {
+            var line = lines[lineIndex];
+            LayoutBounds bounds = lineBounds[lineIndex];
+            float lineVisibleWidth = bounds.HasValue ? bounds.Max.X - bounds.Min.X : line.Width;
+            float xAnchor = bounds.HasValue ? -bounds.Min.X : 0f;
+            float xOffset = ComputeHorizontalOffset(options.HorizontalAlignment, maxWidth, lineVisibleWidth);
             for (int i = line.StartGlyphIndex; i < line.EndGlyphIndex; i++)
             {
                 var positioned = glyphs[i];
                 glyphs[i] = positioned with
                 {
-                    Position = SnapToPixel(positioned.Position + new System.Numerics.Vector2(options.Position.X + xOffset, options.Position.Y + yOffset))
+                    Position = SnapToPixel(positioned.Position + new System.Numerics.Vector2(options.Position.X + xAnchor + xOffset, options.Position.Y + yAnchor + yOffset))
                 };
             }
         }
 
-        return new TextLayoutResult(glyphs, glyphs.Count, totalHeight);
+        float visibleWidth = 0f;
+        for (int lineIndex = 0; lineIndex < lineBounds.Length; lineIndex++)
+        {
+            LayoutBounds bounds = lineBounds[lineIndex];
+            if (!bounds.HasValue)
+                continue;
+
+            visibleWidth = MathF.Max(visibleWidth, bounds.Max.X - bounds.Min.X);
+        }
+
+        return new TextLayoutResult(glyphs, glyphs.Count, new System.Numerics.Vector2(visibleWidth, visibleHeight));
     }
 
     private static float ComputeHorizontalOffset(TextHorizontalAlignment alignment, float maxWidth, float lineWidth)
@@ -278,11 +313,74 @@ void main()
         return new System.Numerics.Vector2(MathF.Round(position.X), MathF.Round(position.Y));
     }
 
+    private static LayoutBounds ComputeBounds(IReadOnlyList<PositionedGlyph> glyphs, int startIndex, int endIndex)
+    {
+        if (startIndex >= endIndex)
+            return LayoutBounds.Empty;
+
+        float minX = float.PositiveInfinity;
+        float minY = float.PositiveInfinity;
+        float maxX = float.NegativeInfinity;
+        float maxY = float.NegativeInfinity;
+
+        for (int i = startIndex; i < endIndex; i++)
+        {
+            var glyph = glyphs[i];
+            minX = MathF.Min(minX, glyph.Position.X);
+            minY = MathF.Min(minY, glyph.Position.Y);
+            maxX = MathF.Max(maxX, glyph.Position.X + glyph.Size.X);
+            maxY = MathF.Max(maxY, glyph.Position.Y + glyph.Size.Y);
+        }
+
+        return new LayoutBounds(new System.Numerics.Vector2(minX, minY), new System.Numerics.Vector2(maxX, maxY));
+    }
+
     private static float ComputeScreenPxRange(float requestedFontSize, SdfFontFace font)
     {
         float fontSize = MathF.Max(1f, requestedFontSize);
         float scale = fontSize / MathF.Max(1f, font.ReferenceFontSize);
         return MathF.Max(1f, font.Spread * scale);
+    }
+
+    private float ComputeAutoFitFontSize(TextRenderOptions options, ITextFontFace font)
+    {
+        float maxWidth = options.MaxSize.X > 0f ? options.MaxSize.X : float.PositiveInfinity;
+        float maxHeight = options.MaxSize.Y > 0f ? options.MaxSize.Y : float.PositiveInfinity;
+        float requested = MathF.Max(1f, options.FontSize > 0f ? options.FontSize : font.ReferenceFontSize);
+        if (float.IsInfinity(maxWidth) && float.IsInfinity(maxHeight))
+            return requested;
+
+        TextRenderOptions requestedOptions = options with { AutoFit = false, FontSize = requested };
+        TextLayoutResult requestedLayout = LayoutText(requestedOptions, font);
+        if (FitsWithin(requestedLayout.Size, maxWidth, maxHeight))
+            return requested;
+
+        float low = 1f;
+        float high = requested;
+        float best = low;
+        for (int i = 0; i < 8; i++)
+        {
+            float mid = (low + high) * 0.5f;
+            TextLayoutResult layout = LayoutText(options with { AutoFit = false, FontSize = mid }, font);
+            if (FitsWithin(layout.Size, maxWidth, maxHeight))
+            {
+                best = mid;
+                low = mid;
+            }
+            else
+            {
+                high = mid;
+            }
+        }
+
+        return best;
+    }
+
+    private static bool FitsWithin(System.Numerics.Vector2 size, float maxWidth, float maxHeight)
+    {
+        bool fitsWidth = float.IsInfinity(maxWidth) || size.X <= maxWidth;
+        bool fitsHeight = float.IsInfinity(maxHeight) || size.Y <= maxHeight;
+        return fitsWidth && fitsHeight;
     }
 
     private BitmapFontFace? GetBitmapFontFace(TextRenderOptions options)
@@ -501,7 +599,7 @@ void main()
         graphics.InterpolationMode = InterpolationMode.HighQualityBicubic;
         graphics.PixelOffsetMode = PixelOffsetMode.HighQuality;
         graphics.CompositingQuality = CompositingQuality.HighQuality;
-        graphics.TextRenderingHint = TextRenderingHint.AntiAliasGridFit;
+        graphics.TextRenderingHint = TextRenderingHint.AntiAlias;
     }
 
     private static DrawingStringFormat CreateMeasureFormat()
@@ -722,6 +820,9 @@ void main()
                 }
 
                 var glyphs = new Dictionary<int, GlyphEntry>();
+                bool needsLegacyPaddingFix = asset.Version < 2 && asset.Padding > 0;
+                float legacyPaddingOffset = needsLegacyPaddingFix ? asset.Padding : 0f;
+
                 foreach (var glyph in asset.Glyphs)
                 {
                     System.Numerics.Vector2 uvMin = System.Numerics.Vector2.Zero;
@@ -743,8 +844,8 @@ void main()
                         glyph.Width,
                         glyph.Height,
                         glyph.Advance,
-                        glyph.OffsetX,
-                        glyph.OffsetY,
+                        glyph.OffsetX + legacyPaddingOffset,
+                        glyph.OffsetY + legacyPaddingOffset,
                         uvMin,
                         uvMax);
                 }
@@ -894,6 +995,13 @@ void main()
         System.Numerics.Vector2 UvMax);
 
     private readonly record struct LayoutLine(int StartGlyphIndex, int EndGlyphIndex, float Width);
+    private readonly record struct LayoutBounds(System.Numerics.Vector2 Min, System.Numerics.Vector2 Max)
+    {
+        public bool HasValue => Min.X <= Max.X && Min.Y <= Max.Y;
+        public static LayoutBounds Empty => new(
+            new System.Numerics.Vector2(float.PositiveInfinity, float.PositiveInfinity),
+            new System.Numerics.Vector2(float.NegativeInfinity, float.NegativeInfinity));
+    }
 
-    private readonly record struct TextLayoutResult(IReadOnlyList<PositionedGlyph> Glyphs, int TotalGlyphCount, float TotalHeight);
+    private readonly record struct TextLayoutResult(IReadOnlyList<PositionedGlyph> Glyphs, int TotalGlyphCount, System.Numerics.Vector2 Size);
 }

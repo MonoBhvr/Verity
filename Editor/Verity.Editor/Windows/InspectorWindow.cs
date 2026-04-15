@@ -680,6 +680,7 @@ public unsafe class InspectorWindow : EditorWindow
         var settings = _app.ProjectSettings;
         settings.UiCatalog ??= new List<UiAssetReference>();
         settings.UiRoleDefaults ??= new List<UiRoleBinding>();
+        settings.StartupUiRoles ??= new List<string>();
         bool changed = false;
         if (ImGui.CollapsingHeader(L10n.Tr("header_general"), ImGuiTreeNodeFlags.DefaultOpen)) {
             float fontSize = settings.EditorFontSize; if (ImGui.DragFloat(L10n.Tr("field_EditorFontSize"), ref fontSize, 0.5f, 8f, 72f)) { settings.EditorFontSize = fontSize; changed = true; }
@@ -709,6 +710,7 @@ public unsafe class InspectorWindow : EditorWindow
         changed |= DrawProjectSettingsList(L10n.Tr("header_physics_groups"), settings.PhysicsGroups, "Group", false);
         changed |= DrawUiAssetReferenceList(L10n.Tr("ui_header_catalog"), settings.UiCatalog);
         changed |= DrawUiRoleBindingList(L10n.Tr("ui_header_role_defaults"), settings.UiRoleDefaults);
+        changed |= DrawProjectSettingsList(L10n.Tr("ui_header_startup_ui_roles"), settings.StartupUiRoles, "UiRole", false);
         if (changed) _app.SaveProjectSettings();
     }
 
@@ -942,30 +944,14 @@ public unsafe class InspectorWindow : EditorWindow
                 changed = true;
             }
 
-            string path = entry.Path ?? string.Empty;
-            if (ImGui.InputText(L10n.Tr("label_path"), ref path, 260))
+            if (DrawUiAssetField(L10n.Tr("label_asset"), entry.Asset, out UiAsset selectedAsset))
             {
-                entry.Path = AssetPathUtility.Normalize(path);
-                changed = true;
-            }
-
-            string guid = entry.Guid ?? string.Empty;
-            if (ImGui.InputText(L10n.Tr("label_guid"), ref guid, 128))
-            {
-                entry.Guid = guid;
-                changed = true;
-            }
-
-            if (ImGui.Button(L10n.Tr("ui_btn_use_selected_ui"), new Vector2(120f, 0f)) && TryGetSelectedUiAsset(out string selectedPath, out string selectedGuid))
-            {
-                entry.Path = selectedPath;
-                entry.Guid = selectedGuid;
+                entry.Asset = selectedAsset;
                 if (string.IsNullOrWhiteSpace(entry.Name))
-                    entry.Name = Path.GetFileNameWithoutExtension(selectedPath);
+                    entry.Name = Path.GetFileNameWithoutExtension(selectedAsset.Path);
                 changed = true;
             }
 
-            ImGui.SameLine();
             if (ImGui.Button(L10n.Tr("ctx_remove"), new Vector2(80f, 0f)))
             {
                 list.RemoveAt(i);
@@ -1005,28 +991,12 @@ public unsafe class InspectorWindow : EditorWindow
                 changed = true;
             }
 
-            string path = binding.Path ?? string.Empty;
-            if (ImGui.InputText(L10n.Tr("label_path"), ref path, 260))
+            if (DrawUiAssetField(L10n.Tr("label_asset"), binding.Asset, out UiAsset selectedAsset))
             {
-                binding.Path = AssetPathUtility.Normalize(path);
+                binding.Asset = selectedAsset;
                 changed = true;
             }
 
-            string guid = binding.Guid ?? string.Empty;
-            if (ImGui.InputText(L10n.Tr("label_guid"), ref guid, 128))
-            {
-                binding.Guid = guid;
-                changed = true;
-            }
-
-            if (ImGui.Button(L10n.Tr("ui_btn_use_selected_ui"), new Vector2(120f, 0f)) && TryGetSelectedUiAsset(out string selectedPath, out string selectedGuid))
-            {
-                binding.Path = selectedPath;
-                binding.Guid = selectedGuid;
-                changed = true;
-            }
-
-            ImGui.SameLine();
             if (ImGui.Button(L10n.Tr("ctx_remove"), new Vector2(80f, 0f)))
             {
                 list.RemoveAt(i);
@@ -1060,6 +1030,62 @@ public unsafe class InspectorWindow : EditorWindow
         path = AssetPathUtility.Normalize(selectedPath);
         guid = AssetPathUtility.TryGetGuid(selectedPath);
         return true;
+    }
+
+    private bool DrawUiAssetField(string label, UiAsset current, out UiAsset updated)
+    {
+        updated = current;
+        string display = string.IsNullOrWhiteSpace(current.Path) ? L10n.Tr("msg_none") : AssetPathUtility.DisplayName(current.Path);
+        bool changed = false;
+
+        if (DrawReferenceSlot(label, display, current.Path) && !string.IsNullOrWhiteSpace(current.Path))
+            RevealAssetReference(current.Path);
+
+        if (ImGui.BeginDragDropTarget())
+        {
+            var payload = ImGui.AcceptDragDropPayload("ASSET_PATH");
+            if (payload.Handle != null && EditorSelection.DraggedAssetPath != null && EditorSelection.DraggedAssetPath.EndsWith(".ui", StringComparison.OrdinalIgnoreCase))
+            {
+                updated = new UiAsset(EditorSelection.DraggedAssetPath, AssetPathUtility.TryGetGuid(EditorSelection.DraggedAssetPath));
+                changed = true;
+            }
+            ImGui.EndDragDropTarget();
+        }
+
+        if (DrawReferencePickerButton())
+            ImGui.OpenPopup("UiAssetPicker");
+
+        if (ImGui.BeginPopup("UiAssetPicker"))
+        {
+            ImGui.InputText(L10n.Tr("label_search"), ref _searchFilter, 64);
+            if (ImGui.MenuItem(L10n.Tr("msg_none")))
+            {
+                updated = default;
+                changed = true;
+            }
+
+            foreach (var entry in GetAssetPickerEntries("ui", static path => Path.GetExtension(path).Equals(".ui", StringComparison.OrdinalIgnoreCase)))
+            {
+                if (!string.IsNullOrEmpty(_searchFilter) && !entry.RelativePath.Contains(_searchFilter, StringComparison.OrdinalIgnoreCase))
+                    continue;
+
+                if (ImGui.MenuItem(entry.RelativePath))
+                {
+                    updated = new UiAsset(entry.FullPath, AssetPathUtility.TryGetGuid(entry.FullPath));
+                    changed = true;
+                }
+            }
+
+            if (ImGui.MenuItem(L10n.Tr("ui_btn_use_selected_ui")) && TryGetSelectedUiAsset(out string selectedPath, out string selectedGuid))
+            {
+                updated = new UiAsset(selectedPath, selectedGuid);
+                changed = true;
+            }
+
+            ImGui.EndPopup();
+        }
+
+        return changed;
     }
 
     private void DrawStyleAssetInspector(string path)
@@ -1117,7 +1143,7 @@ public unsafe class InspectorWindow : EditorWindow
             ImGui.Text(L10n.Tr("msg_active_world_settings"));
             ImGui.Separator();
             DrawGenericInspector(world);
-            if (DrawUiRoleBindingList("UI Role Overrides", world.UiRoleOverrides))
+            if (DrawUiRoleBindingList(L10n.Tr("ui_header_role_overrides"), world.UiRoleOverrides))
                 _app.RecordUndo();
             if (ImGui.Button(L10n.Tr("btn_save_world"), new Vector2(-1, 30)))
                 _app.GetWindow<ProjectWindow>()?.SaveActiveWorldAsAsset();
@@ -2855,6 +2881,30 @@ public unsafe class InspectorWindow : EditorWindow
         return ImGui.Button("o##picker", new Vector2(22f, ImGui.GetFrameHeight()));
     }
 
+    private static float GetReferencePickerMaxHeight()
+    {
+        var viewport = ImGui.GetMainViewport();
+        float viewportHeight = viewport.Size.Y;
+        if (viewportHeight <= 0f)
+            return 360f;
+
+        return MathF.Min(420f, MathF.Max(220f, viewportHeight * 0.45f));
+    }
+
+    private bool BeginReferencePickerPopup()
+    {
+        ImGui.SetNextWindowSizeConstraints(new Vector2(240f, 0f), new Vector2(float.MaxValue, GetReferencePickerMaxHeight()));
+        return ImGui.BeginPopup("Picker");
+    }
+
+    private bool BeginReferencePickerList()
+    {
+        float reservedHeight = ImGui.GetTextLineHeightWithSpacing() * 3f + ImGui.GetStyle().ItemSpacing.Y * 2f;
+        float availableHeight = ImGui.GetContentRegionAvail().Y;
+        float listHeight = MathF.Max(140f, availableHeight - reservedHeight);
+        return ImGui.BeginChild("PickerList", new Vector2(0f, listHeight), ImGuiChildFlags.Borders);
+    }
+
     private void RevealAssetReference(string assetPath, string? spriteId = null)
     {
         if (string.IsNullOrWhiteSpace(assetPath))
@@ -2906,17 +2956,23 @@ public unsafe class InspectorWindow : EditorWindow
         }
 
         if (DrawReferencePickerButton()) ImGui.OpenPopup("Picker");
-        if (ImGui.BeginPopup("Picker"))
+        if (BeginReferencePickerPopup())
         {
             ImGui.InputText(L10n.Tr("label_search"), ref _searchFilter, 64);
-            if (ImGui.MenuItem(L10n.Tr("msg_none"))) onUpdate(null);
-            foreach (var entry in GetAssetPickerEntries("audio", IsAudioExtension))
-            {
-                if (!string.IsNullOrEmpty(_searchFilter) && !entry.RelativePath.Contains(_searchFilter, StringComparison.OrdinalIgnoreCase))
-                    continue;
+            ImGui.Separator();
 
-                if (ImGui.MenuItem(entry.RelativePath))
-                    onUpdate(AudioClip.FromPath(entry.FullPath));
+            if (BeginReferencePickerList())
+            {
+                if (ImGui.MenuItem(L10n.Tr("msg_none"))) onUpdate(null);
+                foreach (var entry in GetAssetPickerEntries("audio", IsAudioExtension))
+                {
+                    if (!string.IsNullOrEmpty(_searchFilter) && !entry.RelativePath.Contains(_searchFilter, StringComparison.OrdinalIgnoreCase))
+                        continue;
+
+                    if (ImGui.MenuItem(entry.RelativePath))
+                        onUpdate(AudioClip.FromPath(entry.FullPath));
+                }
+                ImGui.EndChild();
             }
             ImGui.EndPopup();
         }
@@ -2981,16 +3037,22 @@ public unsafe class InspectorWindow : EditorWindow
             RevealAssetReference(current.Path, current.SpriteId);
         if (ImGui.BeginDragDropTarget()) { var p = ImGui.AcceptDragDropPayload("ASSET_PATH"); if (p.Handle != null && EditorSelection.DraggedAssetPath != null) { var ext = Path.GetExtension(EditorSelection.DraggedAssetPath).ToLower(); if (ext is ".png" or ".jpg" or ".jpeg") onUpdate(EditorSelection.DraggedSpriteAsset ?? CreateSpriteFromAssetPath(EditorSelection.DraggedAssetPath)); } ImGui.EndDragDropTarget(); }
         if (DrawReferencePickerButton()) ImGui.OpenPopup("Picker");
-        if (ImGui.BeginPopup("Picker")) {
+        if (BeginReferencePickerPopup()) {
             ImGui.InputText(L10n.Tr("label_search"), ref _searchFilter, 64);
-            if (ImGui.MenuItem(L10n.Tr("msg_none"))) onUpdate(default(Sprite));
-            foreach (var entry in GetAssetPickerEntries("sprites", static path =>
+            ImGui.Separator();
+
+            if (BeginReferencePickerList())
             {
-                string ext = Path.GetExtension(path).ToLowerInvariant();
-                return ext is ".png" or ".jpg" or ".jpeg";
-            })) {
-                if (string.IsNullOrEmpty(_searchFilter) || entry.RelativePath.Contains(_searchFilter, StringComparison.OrdinalIgnoreCase))
-                    DrawSpritePickerEntry(entry.FullPath, entry.RelativePath, onUpdate);
+                if (ImGui.MenuItem(L10n.Tr("msg_none"))) onUpdate(default(Sprite));
+                foreach (var entry in GetAssetPickerEntries("sprites", static path =>
+                {
+                    string ext = Path.GetExtension(path).ToLowerInvariant();
+                    return ext is ".png" or ".jpg" or ".jpeg";
+                })) {
+                    if (string.IsNullOrEmpty(_searchFilter) || entry.RelativePath.Contains(_searchFilter, StringComparison.OrdinalIgnoreCase))
+                        DrawSpritePickerEntry(entry.FullPath, entry.RelativePath, onUpdate);
+                }
+                ImGui.EndChild();
             }
             ImGui.EndPopup();
         }
@@ -3059,11 +3121,17 @@ public unsafe class InspectorWindow : EditorWindow
             RevealAssetReference(current.Path);
         if (ImGui.BeginDragDropTarget()) { var p = ImGui.AcceptDragDropPayload("ASSET_PATH"); if (p.Handle != null && EditorSelection.DraggedAssetPath != null) if (Path.GetExtension(EditorSelection.DraggedAssetPath).ToLower() == ".style") onUpdate((StyleAsset)EditorSelection.DraggedAssetPath); ImGui.EndDragDropTarget(); }
         if (DrawReferencePickerButton()) ImGui.OpenPopup("Picker");
-        if (ImGui.BeginPopup("Picker")) {
+        if (BeginReferencePickerPopup()) {
             ImGui.InputText(L10n.Tr("label_search"), ref _searchFilter, 64);
-            if (ImGui.MenuItem(L10n.Tr("msg_none"))) onUpdate(default(StyleAsset));
-            foreach (var entry in GetAssetPickerEntries("style", static path => Path.GetExtension(path).Equals(".style", StringComparison.OrdinalIgnoreCase))) {
-                if ((string.IsNullOrEmpty(_searchFilter) || entry.RelativePath.Contains(_searchFilter, StringComparison.OrdinalIgnoreCase)) && ImGui.MenuItem(entry.RelativePath)) onUpdate((StyleAsset)entry.FullPath);
+            ImGui.Separator();
+
+            if (BeginReferencePickerList())
+            {
+                if (ImGui.MenuItem(L10n.Tr("msg_none"))) onUpdate(default(StyleAsset));
+                foreach (var entry in GetAssetPickerEntries("style", static path => Path.GetExtension(path).Equals(".style", StringComparison.OrdinalIgnoreCase))) {
+                    if ((string.IsNullOrEmpty(_searchFilter) || entry.RelativePath.Contains(_searchFilter, StringComparison.OrdinalIgnoreCase)) && ImGui.MenuItem(entry.RelativePath)) onUpdate((StyleAsset)entry.FullPath);
+                }
+                ImGui.EndChild();
             }
             ImGui.EndPopup();
         }
@@ -3078,11 +3146,17 @@ public unsafe class InspectorWindow : EditorWindow
             RevealAssetReference(current.Path);
         if (ImGui.BeginDragDropTarget()) { var p = ImGui.AcceptDragDropPayload("ASSET_PATH"); if (p.Handle != null && EditorSelection.DraggedAssetPath != null) if (Path.GetExtension(EditorSelection.DraggedAssetPath).ToLower() == ".shader") onUpdate((ShaderAsset)EditorSelection.DraggedAssetPath); ImGui.EndDragDropTarget(); }
         if (DrawReferencePickerButton()) ImGui.OpenPopup("Picker");
-        if (ImGui.BeginPopup("Picker")) {
+        if (BeginReferencePickerPopup()) {
             ImGui.InputText(L10n.Tr("label_search"), ref _searchFilter, 64);
-            if (ImGui.MenuItem(L10n.Tr("msg_none"))) onUpdate(default(ShaderAsset));
-            foreach (var entry in GetAssetPickerEntries("shader", static path => Path.GetExtension(path).Equals(".shader", StringComparison.OrdinalIgnoreCase))) {
-                if ((string.IsNullOrEmpty(_searchFilter) || entry.RelativePath.Contains(_searchFilter, StringComparison.OrdinalIgnoreCase)) && ImGui.MenuItem(entry.RelativePath)) onUpdate((ShaderAsset)entry.FullPath);
+            ImGui.Separator();
+
+            if (BeginReferencePickerList())
+            {
+                if (ImGui.MenuItem(L10n.Tr("msg_none"))) onUpdate(default(ShaderAsset));
+                foreach (var entry in GetAssetPickerEntries("shader", static path => Path.GetExtension(path).Equals(".shader", StringComparison.OrdinalIgnoreCase))) {
+                    if ((string.IsNullOrEmpty(_searchFilter) || entry.RelativePath.Contains(_searchFilter, StringComparison.OrdinalIgnoreCase)) && ImGui.MenuItem(entry.RelativePath)) onUpdate((ShaderAsset)entry.FullPath);
+                }
+                ImGui.EndChild();
             }
             ImGui.EndPopup();
         }
@@ -3097,16 +3171,22 @@ public unsafe class InspectorWindow : EditorWindow
             RevealAssetReference(current);
         if (ImGui.BeginDragDropTarget()) { var p = ImGui.AcceptDragDropPayload("ASSET_PATH"); if (p.Handle != null && EditorSelection.DraggedAssetPath != null) { var ext = Path.GetExtension(EditorSelection.DraggedAssetPath).ToLower(); if (exts.Split(';').Any(e => e.Trim().ToLower() == ext)) onUpdate(EditorSelection.DraggedAssetPath); } ImGui.EndDragDropTarget(); }
         if (DrawReferencePickerButton()) ImGui.OpenPopup("Picker");
-        if (ImGui.BeginPopup("Picker")) {
+        if (BeginReferencePickerPopup()) {
             ImGui.InputText(L10n.Tr("label_search"), ref _searchFilter, 64);
-            if (ImGui.MenuItem(L10n.Tr("msg_none"))) onUpdate(null);
-            var normalizedExtensions = exts.Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-                .Select(static ext => ext.StartsWith('.') ? ext.ToLowerInvariant() : "." + ext.ToLowerInvariant())
-                .Distinct(StringComparer.OrdinalIgnoreCase)
-                .ToArray();
-            string cacheKey = "ext:" + string.Join(';', normalizedExtensions);
-            foreach (var entry in GetAssetPickerEntries(cacheKey, path => normalizedExtensions.Contains(Path.GetExtension(path), StringComparer.OrdinalIgnoreCase))) {
-                if ((string.IsNullOrEmpty(_searchFilter) || entry.RelativePath.Contains(_searchFilter, StringComparison.OrdinalIgnoreCase)) && ImGui.MenuItem(entry.RelativePath)) onUpdate(entry.FullPath);
+            ImGui.Separator();
+
+            if (BeginReferencePickerList())
+            {
+                if (ImGui.MenuItem(L10n.Tr("msg_none"))) onUpdate(null);
+                var normalizedExtensions = exts.Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                    .Select(static ext => ext.StartsWith('.') ? ext.ToLowerInvariant() : "." + ext.ToLowerInvariant())
+                    .Distinct(StringComparer.OrdinalIgnoreCase)
+                    .ToArray();
+                string cacheKey = "ext:" + string.Join(';', normalizedExtensions);
+                foreach (var entry in GetAssetPickerEntries(cacheKey, path => normalizedExtensions.Contains(Path.GetExtension(path), StringComparer.OrdinalIgnoreCase))) {
+                    if ((string.IsNullOrEmpty(_searchFilter) || entry.RelativePath.Contains(_searchFilter, StringComparison.OrdinalIgnoreCase)) && ImGui.MenuItem(entry.RelativePath)) onUpdate(entry.FullPath);
+                }
+                ImGui.EndChild();
             }
             ImGui.EndPopup();
         }
@@ -3120,12 +3200,18 @@ public unsafe class InspectorWindow : EditorWindow
         if (DrawReferenceSlot(name, btnLabel) && current != null)
             RevealComponentReference(current);
         if (DrawReferencePickerButton()) ImGui.OpenPopup("Picker");
-        if (ImGui.BeginPopup("Picker")) {
+        if (BeginReferencePickerPopup()) {
             ImGui.InputText(L10n.Tr("label_search"), ref _searchFilter, 64);
-            if (ImGui.MenuItem(L10n.Tr("msg_none"))) onUpdate(null);
-            if (WorldManager.ActiveWorld != null) foreach (var e in WorldManager.ActiveWorld.GetAllEntities()) {
-                var c = e.GetComponent(targetType);
-                if (c != null && (string.IsNullOrEmpty(_searchFilter) || e.Name.Contains(_searchFilter, StringComparison.OrdinalIgnoreCase))) if (ImGui.MenuItem(e.Name)) onUpdate(c);
+            ImGui.Separator();
+
+            if (BeginReferencePickerList())
+            {
+                if (ImGui.MenuItem(L10n.Tr("msg_none"))) onUpdate(null);
+                if (WorldManager.ActiveWorld != null) foreach (var e in WorldManager.ActiveWorld.GetAllEntities()) {
+                    var c = e.GetComponent(targetType);
+                    if (c != null && (string.IsNullOrEmpty(_searchFilter) || e.Name.Contains(_searchFilter, StringComparison.OrdinalIgnoreCase))) if (ImGui.MenuItem(e.Name)) onUpdate(c);
+                }
+                ImGui.EndChild();
             }
             ImGui.EndPopup();
         }

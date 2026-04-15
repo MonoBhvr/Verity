@@ -79,6 +79,22 @@ public enum UiBindingMode
     TwoWay
 }
 
+public enum UiTextHorizontalAlignment
+{
+    Default,
+    Left,
+    Center,
+    Right
+}
+
+public enum UiTextVerticalAlignment
+{
+    Default,
+    Top,
+    Middle,
+    Bottom
+}
+
 public enum UiEventType
 {
     PointerEnter,
@@ -184,6 +200,9 @@ public sealed class UiVisualStyle
 
     public string FontPath { get; set; } = string.Empty;
     public string FontFamily { get; set; } = string.Empty;
+    public UiTextHorizontalAlignment TextHorizontalAlignment { get; set; } = UiTextHorizontalAlignment.Default;
+    public UiTextVerticalAlignment TextVerticalAlignment { get; set; } = UiTextVerticalAlignment.Default;
+    public bool AutoFitText { get; set; }
     public string BackgroundToken { get; set; } = string.Empty;
     public string ForegroundToken { get; set; } = string.Empty;
 }

@@ -3,6 +3,7 @@ using System.IO;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Verity.Core.Audio;
+using Verity.Core.Engine;
 using Verity.Core.World;
 
 namespace Verity.Core.Serialization;
@@ -209,6 +210,95 @@ public sealed class StyleAssetConverter : PathAssetConverter<StyleAsset>
 public sealed class ShaderAssetConverter : PathAssetConverter<ShaderAsset>
 {
     protected override ShaderAsset Create(string path, string guid) => new(path, guid);
+}
+
+public sealed class UiAssetConverter : PathAssetConverter<UiAsset>
+{
+    protected override UiAsset Create(string path, string guid) => new(path, guid);
+}
+
+public sealed class UiAssetReferenceConverter : JsonConverter<UiAssetReference>
+{
+    public override UiAssetReference? Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
+    {
+        if (reader.TokenType == JsonTokenType.Null)
+            return null;
+
+        using JsonDocument doc = JsonDocument.ParseValue(ref reader);
+        JsonElement root = doc.RootElement;
+        string name = root.TryGetProperty("Name", out var nameProp) ? nameProp.GetString() ?? string.Empty : string.Empty;
+
+        UiAsset asset;
+        if (root.TryGetProperty("Asset", out var assetProp))
+        {
+            string path = assetProp.TryGetProperty("Path", out var pathProp) ? pathProp.GetString() ?? string.Empty : string.Empty;
+            string guid = assetProp.TryGetProperty("Guid", out var guidProp) ? guidProp.GetString() ?? string.Empty : string.Empty;
+            asset = new UiAsset(path, guid);
+        }
+        else
+        {
+            string path = root.TryGetProperty("Path", out var pathProp) ? pathProp.GetString() ?? string.Empty : string.Empty;
+            string guid = root.TryGetProperty("Guid", out var guidProp) ? guidProp.GetString() ?? string.Empty : string.Empty;
+            asset = new UiAsset(path, guid);
+        }
+
+        return new UiAssetReference
+        {
+            Name = name,
+            Asset = asset
+        };
+    }
+
+    public override void Write(Utf8JsonWriter writer, UiAssetReference value, JsonSerializerOptions options)
+    {
+        writer.WriteStartObject();
+        writer.WriteString("Name", value.Name);
+        writer.WritePropertyName("Asset");
+        JsonSerializer.Serialize(writer, value.Asset, options);
+        writer.WriteEndObject();
+    }
+}
+
+public sealed class UiRoleBindingConverter : JsonConverter<UiRoleBinding>
+{
+    public override UiRoleBinding? Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
+    {
+        if (reader.TokenType == JsonTokenType.Null)
+            return null;
+
+        using JsonDocument doc = JsonDocument.ParseValue(ref reader);
+        JsonElement root = doc.RootElement;
+        string role = root.TryGetProperty("Role", out var roleProp) ? roleProp.GetString() ?? string.Empty : string.Empty;
+
+        UiAsset asset;
+        if (root.TryGetProperty("Asset", out var assetProp))
+        {
+            string path = assetProp.TryGetProperty("Path", out var pathProp) ? pathProp.GetString() ?? string.Empty : string.Empty;
+            string guid = assetProp.TryGetProperty("Guid", out var guidProp) ? guidProp.GetString() ?? string.Empty : string.Empty;
+            asset = new UiAsset(path, guid);
+        }
+        else
+        {
+            string path = root.TryGetProperty("Path", out var pathProp) ? pathProp.GetString() ?? string.Empty : string.Empty;
+            string guid = root.TryGetProperty("Guid", out var guidProp) ? guidProp.GetString() ?? string.Empty : string.Empty;
+            asset = new UiAsset(path, guid);
+        }
+
+        return new UiRoleBinding
+        {
+            Role = role,
+            Asset = asset
+        };
+    }
+
+    public override void Write(Utf8JsonWriter writer, UiRoleBinding value, JsonSerializerOptions options)
+    {
+        writer.WriteStartObject();
+        writer.WriteString("Role", value.Role);
+        writer.WritePropertyName("Asset");
+        JsonSerializer.Serialize(writer, value.Asset, options);
+        writer.WriteEndObject();
+    }
 }
 
 public class ColorConverter : JsonConverter<Color>

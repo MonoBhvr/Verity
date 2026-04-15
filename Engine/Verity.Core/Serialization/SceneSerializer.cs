@@ -505,8 +505,9 @@ public static class SceneSerializer
         {
             sourceRoot = DeserializeEntity(tempWorld, File.ReadAllText(blueprintPath), userAssembly, preserveEntityIds: true);
         }
-        catch
+        catch (Exception e)
         {
+            Debug.LogError($"[SceneSerializer] Failed to deserialize blueprint asset '{blueprintPath}': {e}");
             return null;
         }
 
@@ -720,6 +721,7 @@ public static class SceneSerializer
     private static List<Entity> DeserializeEntitiesInternal(World.World world, JsonArray array, Assembly? userAssembly, bool preserveEntityIds)
     {
         var entities = new List<Entity>();
+        var nodeEntities = new List<Entity?>(array.Count);
         var entityIdMap = new Dictionary<Guid, Entity>();
         var blueprintOverrideNodes = new List<(Entity Root, JsonArray Overrides)>();
 
@@ -727,7 +729,10 @@ public static class SceneSerializer
         foreach (JsonNode? node in array)
         {
             if (node == null)
+            {
+                nodeEntities.Add(null);
                 continue;
+            }
 
             JsonObject? blueprintInstance = node["BlueprintInstance"]?.AsObject();
             if (blueprintInstance != null)
@@ -736,8 +741,14 @@ public static class SceneSerializer
                 if (instanceRoot != null)
                 {
                     entities.Add(instanceRoot);
+                    nodeEntities.Add(instanceRoot);
                     if (blueprintInstance["Overrides"] is JsonArray overrides && overrides.Count > 0)
                         blueprintOverrideNodes.Add((instanceRoot, overrides));
+                }
+                else
+                {
+                    nodeEntities.Add(null);
+                    Debug.LogError($"[SceneSerializer] Failed to instantiate blueprint entity '{(string?)node["Name"] ?? "Entity"}'.");
                 }
 
                 continue;
@@ -753,35 +764,39 @@ public static class SceneSerializer
 
             entity.Active = (bool?)node["Active"] ?? true;
             entities.Add(entity);
+            nodeEntities.Add(entity);
         }
 
         // 2. Restore hierarchy FIRST
         for (int i = 0; i < array.Count; i++)
         {
-            if (array[i]?["BlueprintInstance"] != null)
+            Entity? entity = nodeEntities[i];
+            if (entity == null || array[i]?["BlueprintInstance"] != null)
                 continue;
 
             int pIdx = (int?)array[i]?["ParentIndex"] ?? -1;
-            if (pIdx >= 0 && pIdx < entities.Count)
-                entities[i].Transform.SetParent(entities[pIdx].Transform, false);
+            if (pIdx >= 0 && pIdx < nodeEntities.Count && nodeEntities[pIdx] != null)
+                entity.Transform.SetParent(nodeEntities[pIdx]!.Transform, false);
         }
 
         // 3. Set local transforms (now they are correctly relative to restored parents)
         for (int i = 0; i < array.Count; i++)
         {
             var node = array[i];
-            if (node == null || node["BlueprintInstance"] != null)
+            Entity? entity = nodeEntities[i];
+            if (node == null || entity == null || node["BlueprintInstance"] != null)
                 continue;
-            entities[i].Transform.Position = DeserializeVector2(node["Position"]);
-            entities[i].Transform.Rotation = (float?)node["Rotation"] ?? 0f;
-            entities[i].Transform.Scale = DeserializeVector2(node["Scale"]);
+            entity.Transform.Position = DeserializeVector2(node["Position"]);
+            entity.Transform.Rotation = (float?)node["Rotation"] ?? 0f;
+            entity.Transform.Scale = DeserializeVector2(node["Scale"]);
         }
 
         // 4. Create components first so reference fields can resolve across entities
         var pendingFields = new List<(Component Component, JsonObject Fields, bool Enabled)>();
         for (int i = 0; i < array.Count; i++)
         {
-            if (array[i]?["BlueprintInstance"] != null)
+            Entity? entity = nodeEntities[i];
+            if (entity == null || array[i]?["BlueprintInstance"] != null)
                 continue;
 
             var comps = array[i]?["Components"]?.AsArray();
@@ -796,16 +811,16 @@ public static class SceneSerializer
                 Type? type = ResolveType(typeName, userAssembly);
                 if (type == null) continue;
 
-                var component = entities[i].GetComponent(type);
+                var component = entity.GetComponent(type);
                 if (component == null)
                 {
-                    if (!entities[i].CanAddComponent(type, out var reason))
+                    if (!entity.CanAddComponent(type, out var reason))
                     {
-                        Debug.LogWarning($"[SceneSerializer] Skipping component '{type.Name}' on '{entities[i].Name}': {reason}");
+                        Debug.LogWarning($"[SceneSerializer] Skipping component '{type.Name}' on '{entity.Name}': {reason}");
                         continue;
                     }
 
-                    component = entities[i].AddComponent(type);
+                    component = entity.AddComponent(type);
                 }
 
                 var fields = compNode["Fields"]?.AsObject();
@@ -863,7 +878,10 @@ public static class SceneSerializer
         AssetReferenceData assetReference = AssetPathUtility.FromJsonNode(blueprintInstance["Asset"]);
         string blueprintPath = AssetPathUtility.ResolvePath(AssetRoot, assetReference.Path, assetReference.Guid);
         if (!File.Exists(blueprintPath))
+        {
+            Debug.LogError($"[SceneSerializer] Blueprint asset not found: {blueprintPath}");
             return null;
+        }
 
         var tempWorld = new World.World("__blueprint_instance__");
         Entity? sourceRoot;
@@ -877,11 +895,17 @@ public static class SceneSerializer
         }
 
         if (sourceRoot == null)
+        {
+            Debug.LogError($"[SceneSerializer] Blueprint asset produced no root entity: {blueprintPath}");
             return null;
+        }
 
         Entity? instanceRoot = CloneBlueprintIntoWorld(sourceRoot, world, assetReference, userAssembly);
         if (instanceRoot == null)
+        {
+            Debug.LogError($"[SceneSerializer] Failed to clone blueprint into world: {blueprintPath}");
             return null;
+        }
 
         if (Guid.TryParse((string?)node["Id"], out Guid rootId))
         {
@@ -1205,8 +1229,7 @@ public static class SceneSerializer
             array.Add(new JsonObject
             {
                 ["Role"] = binding.Role,
-                ["Path"] = binding.Path,
-                ["Guid"] = binding.Guid
+                ["Asset"] = AssetPathUtility.ToJsonNode(binding.Asset.Path, binding.Asset.Guid)
             });
         }
 
@@ -1227,8 +1250,9 @@ public static class SceneSerializer
             bindings.Add(new UiRoleBinding
             {
                 Role = (string?)item["Role"] ?? string.Empty,
-                Path = (string?)item["Path"] ?? string.Empty,
-                Guid = (string?)item["Guid"] ?? string.Empty
+                Asset = item["Asset"] != null
+                    ? new UiAsset(AssetPathUtility.FromJsonNode(item["Asset"]).Path, AssetPathUtility.FromJsonNode(item["Asset"]).Guid)
+                    : new UiAsset((string?)item["Path"] ?? string.Empty, (string?)item["Guid"] ?? string.Empty)
             });
         }
 

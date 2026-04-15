@@ -21,3 +21,8 @@ Verity.Game/UserScripts.dll
 *.swp
 *.ini
 tmp/
+
+# Codex temporary artifacts
+.codex-temp/
+**/obj_codex/
+**/bin_codex/

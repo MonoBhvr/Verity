@@ -1,8 +1,12 @@
 using System.Numerics;
 using System.Text.Json;
 using Hexa.NET.ImGui;
+using Irodori.Backend.OpenGL;
+using Irodori.Framebuffer;
+using Irodori.Texture;
 using Verity.Core;
 using Verity.Core.UI;
+using Verity.Graphics;
 
 namespace Verity.Editor.Windows;
 
@@ -37,6 +41,7 @@ public sealed unsafe class UIEditorWindow : EditorWindow
     private int _resolutionPreset;
     private Vector2 _canvasPan = Vector2.Zero;
     private float _canvasZoom = 1.15f;
+    private Vector2 _lastCanvasPreviewSize = new(1920f, 1080f);
     private bool _frameCanvasRequested = true;
     private CanvasTool _activeCanvasTool = CanvasTool.Move;
     private CanvasDragMode _canvasDragMode;
@@ -50,6 +55,11 @@ public sealed unsafe class UIEditorWindow : EditorWindow
     private readonly Stack<UiEditorUndoSnapshot> _undoStack = new();
     private readonly Stack<UiEditorUndoSnapshot> _redoStack = new();
     private string _lastCommittedScreenJson = string.Empty;
+    private UiEditorUndoSnapshot? _pendingContinuousUndoSnapshot;
+    private FramebufferObject.Uploaded? _previewFbo;
+    private TextureObjectUploaded? _previewColorTex;
+    private int _previewRenderWidth;
+    private int _previewRenderHeight;
     private bool _restoringUndo;
     private const int MaxUndoHistory = 100;
 
@@ -326,6 +336,8 @@ public sealed unsafe class UIEditorWindow : EditorWindow
         if (avail.X <= 0 || avail.Y <= 0)
             return;
 
+        _lastCanvasPreviewSize = avail;
+
         var origin = ImGui.GetCursorScreenPos();
         ImGui.InvisibleButton("##ui-canvas-hit", new Vector2(MathF.Max(1f, avail.X), MathF.Max(1f, avail.Y)));
         bool hovered = ImGui.IsItemHovered();
@@ -350,8 +362,7 @@ public sealed unsafe class UIEditorWindow : EditorWindow
         DrawCanvasBackdrop(draw, origin, avail, canvasPos, canvasSize, scale);
 
         UiLayoutEngine.Layout(_screen, _screen.ReferenceResolution.X, _screen.ReferenceResolution.Y);
-        foreach (var node in _screen.Root.DescendantsAndSelf().Where(n => n.Visible && n.Active))
-            DrawNodePreview(node, draw, canvasPos, scale);
+        DrawRenderedCanvasPreview(draw, canvasPos, canvasSize);
 
         HandleCanvasEditing(origin, avail, canvasPos, scale, hovered);
         DrawSelectionGizmo(draw, canvasPos, scale);
@@ -446,6 +457,61 @@ public sealed unsafe class UIEditorWindow : EditorWindow
         draw.AddText(hintPos, ImGui.GetColorU32(new Vector4(1f, 1f, 1f, 0.55f)), L10n.Tr("ui_msg_canvas_controls"));
     }
 
+    private void DrawRenderedCanvasPreview(ImDrawListPtr draw, Vector2 canvasPos, Vector2 canvasSize)
+    {
+        if (_screen == null)
+            return;
+
+        int renderWidth = Math.Max(1, (int)MathF.Round(_screen.ReferenceResolution.X));
+        int renderHeight = Math.Max(1, (int)MathF.Round(_screen.ReferenceResolution.Y));
+        EnsurePreviewRenderTarget(renderWidth, renderHeight);
+        if (_previewFbo == null || _previewColorTex == null)
+            return;
+
+        _app.Device.Clear(new Verity.Core.Color(0f, 0f, 0f, 0f), _previewFbo);
+        long renderStart = System.Diagnostics.Stopwatch.GetTimestamp();
+        UiRenderer.Render(_app.RenderPipeline, _screen, renderWidth, renderHeight, _previewFbo);
+        _app.Profiler.RecordRenderStage("UI Preview Render", System.Diagnostics.Stopwatch.GetElapsedTime(renderStart).TotalMilliseconds);
+
+        if (_previewColorTex is not OpenGlTexture glTex)
+            return;
+
+        draw.PushClipRect(canvasPos, canvasPos + canvasSize, true);
+        draw.AddImage(
+            new ImTextureRef(null, new ImTextureID((nint)glTex.Id)),
+            canvasPos,
+            canvasPos + canvasSize,
+            new Vector2(0f, 1f),
+            new Vector2(1f, 0f));
+        draw.PopClipRect();
+    }
+
+    private void EnsurePreviewRenderTarget(int width, int height)
+    {
+        if (_previewFbo != null && _previewColorTex != null && _previewRenderWidth == width && _previewRenderHeight == height)
+            return;
+
+        _previewFbo?.Dispose();
+        _previewColorTex?.Dispose();
+
+        unsafe
+        {
+            _previewColorTex = _app.Device.CreateTexture()
+                .WithSize(width, height)
+                .WithTextureType(ETextureInternalType.Rgba8)
+                .WithFilter(ETextureFilter.Linear, ETextureFilter.Linear)
+                .Upload(TextureData.Create((void*)null))
+                .Unwrap();
+        }
+
+        _previewFbo = _app.Device.CreateFramebuffer()
+            .WithColorAttachment(_previewColorTex)
+            .Upload()
+            .Unwrap();
+        _previewRenderWidth = width;
+        _previewRenderHeight = height;
+    }
+
     private void DrawNodePreview(UiNode node, ImDrawListPtr draw, Vector2 canvasPos, float scale)
     {
         var rect = node.LayoutRect;
@@ -467,30 +533,7 @@ public sealed unsafe class UIEditorWindow : EditorWindow
         draw.AddQuadFilled(corners[0], corners[1], corners[2], corners[3], ImGui.GetColorU32(fill));
         draw.AddQuad(corners[0], corners[1], corners[2], corners[3], ImGui.GetColorU32(border), _selectedNode == node ? 2f : 1f);
 
-        string label = node switch
-        {
-            Button button => Coerce(button.Text),
-            Label text => Coerce(text.Text),
-            Dropdown dropdown => dropdown.Options.Count > 0 ? Coerce(dropdown.Options[Math.Clamp(dropdown.SelectedIndex, 0, dropdown.Options.Count - 1)]) : L10n.Tr("ui_default_dropdown"),
-            Toggle toggle => Coerce(toggle.Text),
-            Window window => Coerce(window.Title),
-            Tooltip tooltip => Coerce(tooltip.Text),
-            InputField input => string.IsNullOrWhiteSpace(input.Value) ? Coerce(input.Placeholder) : Coerce(input.Value),
-            TextArea area => string.IsNullOrWhiteSpace(area.Value) ? Coerce(area.Placeholder) : Coerce(area.Value),
-            _ => string.Empty
-        };
-
-        if (!string.IsNullOrWhiteSpace(label))
-        {
-            float previewFontSize = ResolvePreviewFontSize(node, scale);
-            Vector2 textPos = TransformLocalPoint(node, canvasPos, scale, new Vector2(8f, 8f));
-            draw.AddText(
-                null,
-                previewFontSize,
-                textPos,
-                ImGui.GetColorU32(new Vector4(node.Visual.ForegroundColor.R, node.Visual.ForegroundColor.G, node.Visual.ForegroundColor.B, 1f)),
-                label);
-        }
+        DrawNodePreviewText(node, draw, canvasPos, scale);
     }
 
     private static float ResolvePreviewFontSize(UiNode node, float scale)
@@ -503,6 +546,69 @@ public sealed unsafe class UIEditorWindow : EditorWindow
         };
 
         return Math.Clamp(baseSize * scale, 10f, 72f);
+    }
+
+    private void DrawNodePreviewText(UiNode node, ImDrawListPtr draw, Vector2 canvasPos, float scale)
+    {
+        if (!UiRenderer.TryResolveNodeText(node, out string label, out var color, out _))
+            return;
+
+        if (string.IsNullOrWhiteSpace(label))
+            return;
+
+        UiRect textRect = UiRenderer.GetNodeTextRect(node);
+        if (textRect.Width <= 0f || textRect.Height <= 0f)
+            return;
+
+        float previewFontSize = ResolvePreviewFontSize(node, scale);
+        Vector2 textRectOrigin = TransformLocalPoint(
+            node,
+            canvasPos,
+            scale,
+            new Vector2(textRect.X - node.LayoutRect.X, textRect.Y - node.LayoutRect.Y));
+
+        Vector2 textRectSize = new(textRect.Width * scale, textRect.Height * scale);
+        Vector2 measured = EstimatePreviewTextSize(label, previewFontSize);
+        float x = textRectOrigin.X + ResolvePreviewHorizontalOffset(UiRenderer.ResolveNodeHorizontalAlignment(node), textRectSize.X, measured.X);
+        float y = textRectOrigin.Y + ResolvePreviewVerticalOffset(UiRenderer.ResolveNodeVerticalAlignment(node), textRectSize.Y, measured.Y);
+        Vector2 textPos = new(MathF.Round(x), MathF.Round(y));
+
+        draw.PushClipRect(textRectOrigin, textRectOrigin + textRectSize, true);
+        draw.AddText(
+            null,
+            previewFontSize,
+            textPos,
+            ImGui.GetColorU32(new Vector4(color.R, color.G, color.B, color.A)),
+            label);
+        draw.PopClipRect();
+    }
+
+    private static Vector2 EstimatePreviewTextSize(string text, float previewFontSize)
+    {
+        Vector2 measured = ImGui.CalcTextSize(text);
+        float baseFontSize = MathF.Max(1f, ImGui.GetFontSize());
+        float scale = previewFontSize / baseFontSize;
+        return measured * scale;
+    }
+
+    private static float ResolvePreviewHorizontalOffset(TextHorizontalAlignment alignment, float rectWidth, float textWidth)
+    {
+        return alignment switch
+        {
+            TextHorizontalAlignment.Center => MathF.Max(0f, (rectWidth - textWidth) * 0.5f),
+            TextHorizontalAlignment.Right => MathF.Max(0f, rectWidth - textWidth),
+            _ => 0f
+        };
+    }
+
+    private static float ResolvePreviewVerticalOffset(TextVerticalAlignment alignment, float rectHeight, float textHeight)
+    {
+        return alignment switch
+        {
+            TextVerticalAlignment.Middle => MathF.Max(0f, (rectHeight - textHeight) * 0.5f),
+            TextVerticalAlignment.Bottom => MathF.Max(0f, rectHeight - textHeight),
+            _ => 0f
+        };
     }
 
     private UiNode? HitTest(Vector2 point)
@@ -633,11 +739,14 @@ public sealed unsafe class UIEditorWindow : EditorWindow
         }
 
         int sortingOrder = _screen.SortingOrder;
-        if (ImGui.DragInt(TrId("ui_label_sorting_order", "ScreenSortingOrder"), ref sortingOrder, 1f))
+        bool sortingOrderChanged = ImGui.DragInt(TrId("ui_label_sorting_order", "ScreenSortingOrder"), ref sortingOrder, 1f);
+        bool sortingOrderDeferred = PrepareContinuousInspectorEdit();
+        if (sortingOrderChanged)
         {
             _screen.SortingOrder = sortingOrder;
-            Save();
+            Save(deferUndo: sortingOrderDeferred);
         }
+        FinalizeContinuousInspectorEdit();
 
         string uiScriptType = Coerce(_screen.UiScriptType);
         if (ImGui.InputText(TrId("ui_field_ui_script_type", "ScreenUiScriptType"), ref uiScriptType, 256))
@@ -647,11 +756,23 @@ public sealed unsafe class UIEditorWindow : EditorWindow
         }
 
         Vector2 refResolution = _screen.ReferenceResolution;
-        if (ImGui.DragFloat2(TrId("ui_label_reference_resolution", "ScreenReferenceResolution"), (float*)&refResolution, 1f, 1f, 8192f))
+        bool refResolutionChanged = ImGui.DragFloat2(TrId("ui_label_reference_resolution", "ScreenReferenceResolution"), (float*)&refResolution, 1f, 1f, 8192f);
+        bool refResolutionDeferred = PrepareContinuousInspectorEdit();
+        if (refResolutionChanged)
         {
             _screen.ReferenceResolution = refResolution;
+            Save(deferUndo: refResolutionDeferred);
+        }
+        FinalizeContinuousInspectorEdit();
+
+        Vector2 previewAspectResolution = GetPreviewAspectResolution(_screen.ReferenceResolution);
+        string aspectLabel = $"{(int)previewAspectResolution.X} x {(int)previewAspectResolution.Y}";
+        if (ImGui.Button(TrId("ui_btn_match_preview_aspect", "ScreenMatchPreviewAspect"), new Vector2(-1f, 0f)))
+        {
+            _screen.ReferenceResolution = previewAspectResolution;
             Save();
         }
+        ImGui.TextDisabled(L10n.Tr("ui_msg_match_preview_aspect_hint", aspectLabel));
 
         ImGui.TextDisabled(L10n.Tr("ui_msg_screen_variables_hint"));
         for (int i = 0; i < _screen.Variables.Count; i++)
@@ -698,17 +819,59 @@ public sealed unsafe class UIEditorWindow : EditorWindow
             return;
 
         Vector2 pos = transform.Position;
-        if (ImGui.DragFloat2(TrId("field_Position", "LayoutPosition"), (float*)&pos, 1f)) { transform.Position = pos; Save(); }
+        bool posChanged = ImGui.DragFloat2(TrId("field_Position", "LayoutPosition"), (float*)&pos, 1f);
+        bool posDeferred = PrepareContinuousInspectorEdit();
+        if (posChanged)
+        {
+            transform.Position = pos;
+            Save(deferUndo: posDeferred);
+        }
+        FinalizeContinuousInspectorEdit();
         Vector2 size = transform.Size;
-        if (ImGui.DragFloat2(TrId("field_Size", "LayoutSize"), (float*)&size, 1f, 0f, 10000f)) { transform.Size = size; Save(); }
+        bool sizeChanged = ImGui.DragFloat2(TrId("field_Size", "LayoutSize"), (float*)&size, 1f, 0f, 10000f);
+        bool sizeDeferred = PrepareContinuousInspectorEdit();
+        if (sizeChanged)
+        {
+            transform.Size = size;
+            Save(deferUndo: sizeDeferred);
+        }
+        FinalizeContinuousInspectorEdit();
         Vector2 anchorMin = transform.AnchorMin;
-        if (ImGui.DragFloat2(TrId("ui_field_anchor_min", "LayoutAnchorMin"), (float*)&anchorMin, 0.01f, 0f, 1f)) { transform.AnchorMin = anchorMin; Save(); }
+        bool anchorMinChanged = ImGui.DragFloat2(TrId("ui_field_anchor_min", "LayoutAnchorMin"), (float*)&anchorMin, 0.01f, 0f, 1f);
+        bool anchorMinDeferred = PrepareContinuousInspectorEdit();
+        if (anchorMinChanged)
+        {
+            transform.AnchorMin = anchorMin;
+            Save(deferUndo: anchorMinDeferred);
+        }
+        FinalizeContinuousInspectorEdit();
         Vector2 anchorMax = transform.AnchorMax;
-        if (ImGui.DragFloat2(TrId("ui_field_anchor_max", "LayoutAnchorMax"), (float*)&anchorMax, 0.01f, 0f, 1f)) { transform.AnchorMax = anchorMax; Save(); }
+        bool anchorMaxChanged = ImGui.DragFloat2(TrId("ui_field_anchor_max", "LayoutAnchorMax"), (float*)&anchorMax, 0.01f, 0f, 1f);
+        bool anchorMaxDeferred = PrepareContinuousInspectorEdit();
+        if (anchorMaxChanged)
+        {
+            transform.AnchorMax = anchorMax;
+            Save(deferUndo: anchorMaxDeferred);
+        }
+        FinalizeContinuousInspectorEdit();
         Vector2 pivot = transform.Pivot;
-        if (ImGui.DragFloat2(TrId("field_Pivot", "LayoutPivot"), (float*)&pivot, 0.01f, 0f, 1f)) { transform.Pivot = pivot; Save(); }
+        bool pivotChanged = ImGui.DragFloat2(TrId("field_Pivot", "LayoutPivot"), (float*)&pivot, 0.01f, 0f, 1f);
+        bool pivotDeferred = PrepareContinuousInspectorEdit();
+        if (pivotChanged)
+        {
+            transform.Pivot = pivot;
+            Save(deferUndo: pivotDeferred);
+        }
+        FinalizeContinuousInspectorEdit();
         float rotation = transform.Rotation;
-        if (ImGui.DragFloat(TrId("field_Rotation", "LayoutRotation"), ref rotation, 1f)) { transform.Rotation = rotation; Save(); }
+        bool rotationChanged = ImGui.DragFloat(TrId("field_Rotation", "LayoutRotation"), ref rotation, 1f);
+        bool rotationDeferred = PrepareContinuousInspectorEdit();
+        if (rotationChanged)
+        {
+            transform.Rotation = rotation;
+            Save(deferUndo: rotationDeferred);
+        }
+        FinalizeContinuousInspectorEdit();
     }
 
     private void DrawContainerLayoutEditor(UiContainer container)
@@ -724,18 +887,24 @@ public sealed unsafe class UIEditorWindow : EditorWindow
         }
 
         Vector2 spacing = container.Layout.Spacing;
-        if (ImGui.DragFloat2(TrId("ui_field_spacing", "ContainerSpacing"), (float*)&spacing, 1f, 0f, 1000f))
+        bool spacingChanged = ImGui.DragFloat2(TrId("ui_field_spacing", "ContainerSpacing"), (float*)&spacing, 1f, 0f, 1000f);
+        bool spacingDeferred = PrepareContinuousInspectorEdit();
+        if (spacingChanged)
         {
             container.Layout.Spacing = spacing;
-            Save();
+            Save(deferUndo: spacingDeferred);
         }
+        FinalizeContinuousInspectorEdit();
 
         Vector4 padding = container.Layout.Padding;
-        if (ImGui.DragFloat4(TrId("ui_field_padding", "ContainerPadding"), (float*)&padding, 1f, 0f, 1000f))
+        bool paddingChanged = ImGui.DragFloat4(TrId("ui_field_padding", "ContainerPadding"), (float*)&padding, 1f, 0f, 1000f);
+        bool paddingDeferred = PrepareContinuousInspectorEdit();
+        if (paddingChanged)
         {
             container.Layout.Padding = padding;
-            Save();
+            Save(deferUndo: paddingDeferred);
         }
+        FinalizeContinuousInspectorEdit();
 
         bool fitChildren = container.Layout.FitChildren;
         if (ImGui.Checkbox(TrId("ui_field_fit_children", "ContainerFitChildren"), ref fitChildren))
@@ -747,28 +916,37 @@ public sealed unsafe class UIEditorWindow : EditorWindow
         if (container.Layout.Mode == UiLayoutMode.Grid)
         {
             int columns = container.Layout.Columns;
-            if (ImGui.DragInt(TrId("ui_field_columns", "ContainerColumns"), ref columns, 1f, 1, 32))
+            bool columnsChanged = ImGui.DragInt(TrId("ui_field_columns", "ContainerColumns"), ref columns, 1f, 1, 32);
+            bool columnsDeferred = PrepareContinuousInspectorEdit();
+            if (columnsChanged)
             {
                 container.Layout.Columns = Math.Max(1, columns);
-                Save();
+                Save(deferUndo: columnsDeferred);
             }
+            FinalizeContinuousInspectorEdit();
         }
 
         if (container.Layout.Mode == UiLayoutMode.Circle)
         {
             float radius = container.Layout.CircleRadius;
-            if (ImGui.DragFloat(TrId("ui_field_circle_radius", "ContainerCircleRadius"), ref radius, 1f, 0f, 5000f))
+            bool radiusChanged = ImGui.DragFloat(TrId("ui_field_circle_radius", "ContainerCircleRadius"), ref radius, 1f, 0f, 5000f);
+            bool radiusDeferred = PrepareContinuousInspectorEdit();
+            if (radiusChanged)
             {
                 container.Layout.CircleRadius = radius;
-                Save();
+                Save(deferUndo: radiusDeferred);
             }
+            FinalizeContinuousInspectorEdit();
 
             float startAngle = container.Layout.CircleStartAngle;
-            if (ImGui.DragFloat(TrId("ui_field_start_angle", "ContainerStartAngle"), ref startAngle, 1f, -360f, 360f))
+            bool startAngleChanged = ImGui.DragFloat(TrId("ui_field_start_angle", "ContainerStartAngle"), ref startAngle, 1f, -360f, 360f);
+            bool startAngleDeferred = PrepareContinuousInspectorEdit();
+            if (startAngleChanged)
             {
                 container.Layout.CircleStartAngle = startAngle;
-                Save();
+                Save(deferUndo: startAngleDeferred);
             }
+            FinalizeContinuousInspectorEdit();
 
             bool clockwise = container.Layout.CircleClockwise;
             if (ImGui.Checkbox(TrId("ui_field_clockwise", "ContainerClockwise"), ref clockwise))
@@ -790,6 +968,46 @@ public sealed unsafe class UIEditorWindow : EditorWindow
         if (ImGui.ColorEdit4(TrId("ui_field_foreground", "VisualForeground"), ref fg)) { visual.ForegroundColor = fg; Save(); }
         Vector4 border = visual.BorderColor;
         if (ImGui.ColorEdit4(TrId("ui_field_border", "VisualBorder"), ref border)) { visual.BorderColor = border; Save(); }
+
+        string fontPath = Coerce(visual.FontPath);
+        if (ImGui.InputText(TrId("ui_field_font_path", "VisualFontPath"), ref fontPath, 260)) { visual.FontPath = fontPath; Save(); }
+        string fontFamily = Coerce(visual.FontFamily);
+        if (ImGui.InputText(TrId("ui_field_font_family", "VisualFontFamily"), ref fontFamily, 128)) { visual.FontFamily = fontFamily; Save(); }
+
+        int horizontalAlignment = (int)visual.TextHorizontalAlignment;
+        string[] horizontalAlignmentItems =
+        {
+            L10n.Tr("ui_text_align_default"),
+            L10n.Tr("ui_text_align_left"),
+            L10n.Tr("ui_text_align_center"),
+            L10n.Tr("ui_text_align_right"),
+        };
+        if (ImGui.Combo(TrId("ui_field_text_horizontal", "VisualTextHorizontal"), ref horizontalAlignment, horizontalAlignmentItems, horizontalAlignmentItems.Length))
+        {
+            visual.TextHorizontalAlignment = (UiTextHorizontalAlignment)horizontalAlignment;
+            Save();
+        }
+
+        int verticalAlignment = (int)visual.TextVerticalAlignment;
+        string[] verticalAlignmentItems =
+        {
+            L10n.Tr("ui_text_align_default"),
+            L10n.Tr("ui_text_align_top"),
+            L10n.Tr("ui_text_align_middle"),
+            L10n.Tr("ui_text_align_bottom"),
+        };
+        if (ImGui.Combo(TrId("ui_field_text_vertical", "VisualTextVertical"), ref verticalAlignment, verticalAlignmentItems, verticalAlignmentItems.Length))
+        {
+            visual.TextVerticalAlignment = (UiTextVerticalAlignment)verticalAlignment;
+            Save();
+        }
+
+        bool autoFitText = visual.AutoFitText;
+        if (ImGui.Checkbox(TrId("ui_field_auto_fit_text", "VisualAutoFitText"), ref autoFitText))
+        {
+            visual.AutoFitText = autoFitText;
+            Save();
+        }
     }
 
     private void DrawBindingsEditor(UiNode node)
@@ -861,7 +1079,14 @@ public sealed unsafe class UIEditorWindow : EditorWindow
         string value = Coerce(text.Text);
         if (ImGui.InputTextMultiline(TrId("field_Text", "TextValue"), ref value, 1024, new Vector2(-1, 90))) { text.Text = value; Save(); }
         float fontSize = text.FontSize;
-        if (ImGui.DragFloat(TrId("ui_field_font_size", "TextFontSize"), ref fontSize, 0.5f, 8f, 96f)) { text.FontSize = fontSize; Save(); }
+        bool fontSizeChanged = ImGui.DragFloat(TrId("ui_field_font_size", "TextFontSize"), ref fontSize, 0.5f, 8f, 96f);
+        bool fontSizeDeferred = PrepareContinuousInspectorEdit();
+        if (fontSizeChanged)
+        {
+            text.FontSize = fontSize;
+            Save(deferUndo: fontSizeDeferred);
+        }
+        FinalizeContinuousInspectorEdit();
         bool wrap = text.WordWrap;
         if (ImGui.Checkbox(TrId("ui_field_word_wrap", "TextWordWrap"), ref wrap)) { text.WordWrap = wrap; Save(); }
     }
@@ -944,11 +1169,32 @@ public sealed unsafe class UIEditorWindow : EditorWindow
             return;
 
         float min = slider.Min;
-        if (ImGui.DragFloat(TrId("ui_field_min", "SliderMin"), ref min, 0.1f)) { slider.Min = min; Save(); }
+        bool sliderMinChanged = ImGui.DragFloat(TrId("ui_field_min", "SliderMin"), ref min, 0.1f);
+        bool sliderMinDeferred = PrepareContinuousInspectorEdit();
+        if (sliderMinChanged)
+        {
+            slider.Min = min;
+            Save(deferUndo: sliderMinDeferred);
+        }
+        FinalizeContinuousInspectorEdit();
         float max = slider.Max;
-        if (ImGui.DragFloat(TrId("ui_field_max", "SliderMax"), ref max, 0.1f)) { slider.Max = max; Save(); }
+        bool sliderMaxChanged = ImGui.DragFloat(TrId("ui_field_max", "SliderMax"), ref max, 0.1f);
+        bool sliderMaxDeferred = PrepareContinuousInspectorEdit();
+        if (sliderMaxChanged)
+        {
+            slider.Max = max;
+            Save(deferUndo: sliderMaxDeferred);
+        }
+        FinalizeContinuousInspectorEdit();
         float value = slider.Value;
-        if (ImGui.DragFloat(TrId("field_Value", "SliderValue"), ref value, 0.01f, slider.Min, slider.Max)) { slider.Value = value; Save(); }
+        bool sliderValueChanged = ImGui.DragFloat(TrId("field_Value", "SliderValue"), ref value, 0.01f, slider.Min, slider.Max);
+        bool sliderValueDeferred = PrepareContinuousInspectorEdit();
+        if (sliderValueChanged)
+        {
+            slider.Value = value;
+            Save(deferUndo: sliderValueDeferred);
+        }
+        FinalizeContinuousInspectorEdit();
     }
 
     private void DrawProgressEditor(ProgressBar progressBar)
@@ -957,11 +1203,32 @@ public sealed unsafe class UIEditorWindow : EditorWindow
             return;
 
         float min = progressBar.Min;
-        if (ImGui.DragFloat(TrId("ui_field_min", "ProgressMin"), ref min, 0.1f)) { progressBar.Min = min; Save(); }
+        bool progressMinChanged = ImGui.DragFloat(TrId("ui_field_min", "ProgressMin"), ref min, 0.1f);
+        bool progressMinDeferred = PrepareContinuousInspectorEdit();
+        if (progressMinChanged)
+        {
+            progressBar.Min = min;
+            Save(deferUndo: progressMinDeferred);
+        }
+        FinalizeContinuousInspectorEdit();
         float max = progressBar.Max;
-        if (ImGui.DragFloat(TrId("ui_field_max", "ProgressMax"), ref max, 0.1f)) { progressBar.Max = max; Save(); }
+        bool progressMaxChanged = ImGui.DragFloat(TrId("ui_field_max", "ProgressMax"), ref max, 0.1f);
+        bool progressMaxDeferred = PrepareContinuousInspectorEdit();
+        if (progressMaxChanged)
+        {
+            progressBar.Max = max;
+            Save(deferUndo: progressMaxDeferred);
+        }
+        FinalizeContinuousInspectorEdit();
         float value = progressBar.Value;
-        if (ImGui.DragFloat(TrId("field_Value", "ProgressValue"), ref value, 0.01f, progressBar.Min, progressBar.Max)) { progressBar.Value = value; Save(); }
+        bool progressValueChanged = ImGui.DragFloat(TrId("field_Value", "ProgressValue"), ref value, 0.01f, progressBar.Min, progressBar.Max);
+        bool progressValueDeferred = PrepareContinuousInspectorEdit();
+        if (progressValueChanged)
+        {
+            progressBar.Value = value;
+            Save(deferUndo: progressValueDeferred);
+        }
+        FinalizeContinuousInspectorEdit();
     }
 
     private void DrawListViewEditor(ListView listView)
@@ -970,7 +1237,14 @@ public sealed unsafe class UIEditorWindow : EditorWindow
             return;
 
         int itemCount = listView.ItemCount;
-        if (ImGui.DragInt(TrId("ui_field_item_count", "ListViewItemCount"), ref itemCount, 1f, 0, 10000)) { listView.ItemCount = itemCount; Save(); }
+        bool itemCountChanged = ImGui.DragInt(TrId("ui_field_item_count", "ListViewItemCount"), ref itemCount, 1f, 0, 10000);
+        bool itemCountDeferred = PrepareContinuousInspectorEdit();
+        if (itemCountChanged)
+        {
+            listView.ItemCount = itemCount;
+            Save(deferUndo: itemCountDeferred);
+        }
+        FinalizeContinuousInspectorEdit();
         bool virtualized = listView.Virtualized;
         if (ImGui.Checkbox(TrId("ui_field_virtualized", "ListViewVirtualized"), ref virtualized)) { listView.Virtualized = virtualized; Save(); }
     }
@@ -1022,7 +1296,7 @@ public sealed unsafe class UIEditorWindow : EditorWindow
         AssetPathUtility.EnsureMetaAndGetGuid(prefabPath);
     }
 
-    private void Save()
+    private void Save(bool deferUndo = false)
     {
         if (_screen == null || string.IsNullOrWhiteSpace(_assetPath))
             return;
@@ -1031,20 +1305,67 @@ public sealed unsafe class UIEditorWindow : EditorWindow
         if (string.IsNullOrWhiteSpace(_lastCommittedScreenJson))
             _lastCommittedScreenJson = currentJson;
 
-        if (!_restoringUndo && !string.Equals(currentJson, _lastCommittedScreenJson, StringComparison.Ordinal))
+        if (!_restoringUndo && !deferUndo)
         {
-            PushUndoSnapshot(new UiEditorUndoSnapshot
+            UiEditorUndoSnapshot? snapshot = _pendingContinuousUndoSnapshot;
+            if (snapshot == null && !string.Equals(currentJson, _lastCommittedScreenJson, StringComparison.Ordinal))
             {
-                ScreenJson = _lastCommittedScreenJson,
-                SelectedNodeId = _selectedNode?.Id,
-                ResolutionPreset = _resolutionPreset
-            });
-            _redoStack.Clear();
+                snapshot = new UiEditorUndoSnapshot
+                {
+                    ScreenJson = _lastCommittedScreenJson,
+                    SelectedNodeId = _selectedNode?.Id,
+                    ResolutionPreset = _resolutionPreset
+                };
+            }
+
+            if (snapshot != null &&
+                !string.Equals(currentJson, snapshot.ScreenJson, StringComparison.Ordinal))
+            {
+                PushUndoSnapshot(snapshot);
+                _redoStack.Clear();
+            }
+
+            _pendingContinuousUndoSnapshot = null;
         }
 
         UiSerializer.Save(_assetPath, _screen);
         AssetPathUtility.EnsureMetaAndGetGuid(_assetPath);
         _lastCommittedScreenJson = currentJson;
+    }
+
+    private void BeginContinuousInspectorEdit()
+    {
+        if (_screen == null || _restoringUndo || _pendingContinuousUndoSnapshot != null)
+            return;
+
+        _pendingContinuousUndoSnapshot = new UiEditorUndoSnapshot
+        {
+            ScreenJson = _lastCommittedScreenJson,
+            SelectedNodeId = _selectedNode?.Id,
+            ResolutionPreset = _resolutionPreset
+        };
+    }
+
+    private void EndContinuousInspectorEdit()
+    {
+        if (_pendingContinuousUndoSnapshot == null)
+            return;
+
+        Save();
+    }
+
+    private bool PrepareContinuousInspectorEdit()
+    {
+        if (ImGui.IsItemActivated())
+            BeginContinuousInspectorEdit();
+
+        return _pendingContinuousUndoSnapshot != null || ImGui.IsItemActive();
+    }
+
+    private void FinalizeContinuousInspectorEdit()
+    {
+        if (ImGui.IsItemDeactivatedAfterEdit())
+            EndContinuousInspectorEdit();
     }
 
     public override void RefreshTitle()
@@ -1062,6 +1383,16 @@ public sealed unsafe class UIEditorWindow : EditorWindow
         float sx = usableWidth / Math.Max(1f, _screen.ReferenceResolution.X);
         float sy = usableHeight / Math.Max(1f, _screen.ReferenceResolution.Y);
         return MathF.Max(0.02f, MathF.Min(sx, sy));
+    }
+
+    private Vector2 GetPreviewAspectResolution(Vector2 currentResolution)
+    {
+        float previewWidth = MathF.Max(1f, _lastCanvasPreviewSize.X);
+        float previewHeight = MathF.Max(1f, _lastCanvasPreviewSize.Y);
+        float currentWidth = MathF.Max(1f, currentResolution.X);
+        float aspect = previewWidth / previewHeight;
+        float nextHeight = MathF.Max(1f, MathF.Round(currentWidth / aspect));
+        return new Vector2(currentWidth, nextHeight);
     }
 
     private void ResetCanvasView()

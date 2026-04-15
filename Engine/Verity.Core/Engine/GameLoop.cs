@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using Verity.Core.ECS;
 using Verity.Core.World;
 
@@ -53,6 +54,8 @@ public class GameLoop
 
     private void PerformLogicTick(World.World world, float fixedDelta)
     {
+        RuntimeProfiler.BeginLogicTick();
+        long tickStart = Stopwatch.GetTimestamp();
         Verity.Input.Input.NewLogicTick();
 
         Time.DeltaTime = fixedDelta;
@@ -64,49 +67,95 @@ public class GameLoop
         var scripts = world.GetActiveScripts();
 
         // Start Phase
+        long phaseStart = Stopwatch.GetTimestamp();
         foreach (var script in scripts)
         {
             if (!script.HasAwoken)
             {
-                script._awakeDelegate?.Invoke();
+                InvokeScriptEvent("Awake", script, script._awakeDelegate);
                 script.HasAwoken = true;
             }
         }
+        RuntimeProfiler.RecordPhase("Awake", Stopwatch.GetElapsedTime(phaseStart).TotalMilliseconds);
 
+        phaseStart = Stopwatch.GetTimestamp();
         foreach (var script in scripts)
         {
             if (!script.HasStarted)
             {
-                script._startDelegate?.Invoke();
+                InvokeScriptEvent("Start", script, script._startDelegate);
                 script.HasStarted = true;
             }
         }
+        RuntimeProfiler.RecordPhase("Start", Stopwatch.GetElapsedTime(phaseStart).TotalMilliseconds);
 
         // FixedUpdate
-        foreach (var script in scripts) script._fixedUpdateDelegate?.Invoke();
+        phaseStart = Stopwatch.GetTimestamp();
+        foreach (var script in scripts)
+            InvokeScriptEvent("FixedUpdate", script, script._fixedUpdateDelegate);
         OnFixedUpdate?.Invoke();
+        RuntimeProfiler.RecordPhase("FixedUpdate", Stopwatch.GetElapsedTime(phaseStart).TotalMilliseconds);
 
         // Update Phase
-        foreach (var script in scripts) script._updateDelegate?.Invoke();
+        phaseStart = Stopwatch.GetTimestamp();
+        foreach (var script in scripts)
+            InvokeScriptEvent("Update", script, script._updateDelegate);
         OnUpdate?.Invoke();
+        RuntimeProfiler.RecordPhase("Update", Stopwatch.GetElapsedTime(phaseStart).TotalMilliseconds);
 
         // Coroutine Update Phase
-        foreach (var script in scripts) script.UpdateCoroutines(fixedDelta);
+        phaseStart = Stopwatch.GetTimestamp();
+        foreach (var script in scripts)
+        {
+            if (RuntimeProfiler.CaptureScriptDetails)
+            {
+                long coroutineStart = Stopwatch.GetTimestamp();
+                script.UpdateCoroutines(fixedDelta);
+                RuntimeProfiler.RecordScriptEvent("Coroutines", script, Stopwatch.GetElapsedTime(coroutineStart).TotalMilliseconds);
+            }
+            else
+            {
+                script.UpdateCoroutines(fixedDelta);
+            }
+        }
+        RuntimeProfiler.RecordPhase("Coroutines", Stopwatch.GetElapsedTime(phaseStart).TotalMilliseconds);
 
         // Late Update Phase
-        foreach (var script in scripts) script._lateUpdateDelegate?.Invoke();
+        phaseStart = Stopwatch.GetTimestamp();
+        foreach (var script in scripts)
+            InvokeScriptEvent("LateUpdate", script, script._lateUpdateDelegate);
         OnLateUpdate?.Invoke();
+        RuntimeProfiler.RecordPhase("LateUpdate", Stopwatch.GetElapsedTime(phaseStart).TotalMilliseconds);
+        RuntimeProfiler.EndLogicTick(Stopwatch.GetElapsedTime(tickStart).TotalMilliseconds);
     }
 
     private void PerformPhysicsTick(World.World world, float fixedDelta)
     {
+        long physicsStart = Stopwatch.GetTimestamp();
         Time.PhysicsTickCount++;
         Verity.Core.Physics.PhysicsManager.Step(fixedDelta, world, ProjectSettings);
         OnPhysicsTick?.Invoke();
+        RuntimeProfiler.EndPhysicsTick(Stopwatch.GetElapsedTime(physicsStart).TotalMilliseconds);
     }
 
     public void TickRender()
     {
         OnRender?.Invoke();
+    }
+
+    private static void InvokeScriptEvent(string phase, Script script, Action? callback)
+    {
+        if (callback == null)
+            return;
+
+        if (!RuntimeProfiler.CaptureScriptDetails)
+        {
+            callback.Invoke();
+            return;
+        }
+
+        long start = Stopwatch.GetTimestamp();
+        callback.Invoke();
+        RuntimeProfiler.RecordScriptEvent(phase, script, Stopwatch.GetElapsedTime(start).TotalMilliseconds);
     }
 }

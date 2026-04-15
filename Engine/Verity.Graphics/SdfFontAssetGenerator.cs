@@ -155,8 +155,10 @@ public static class SdfFontAssetGenerator
 
         int glyphWidth = Math.Max(1, (inflatedBounds.Width + options.Supersample - 1) / options.Supersample);
         int glyphHeight = Math.Max(1, (inflatedBounds.Height + options.Supersample - 1) / options.Supersample);
-        float offsetX = (inflatedBounds.Left / (float)options.Supersample) - options.Padding;
-        float offsetY = (inflatedBounds.Top / (float)options.Supersample) - options.Padding;
+        // The padded atlas region already starts `Padding` pixels before the visible glyph.
+        // Subtracting padding again shifts legacy glyphs up/left at runtime.
+        float offsetX = inflatedBounds.Left / (float)options.Supersample;
+        float offsetY = inflatedBounds.Top / (float)options.Supersample;
 
         return new GeneratedGlyph(sdfPixels, glyphWidth, glyphHeight, advance, offsetX, offsetY);
     }
@@ -343,7 +345,7 @@ public static class SdfFontAssetGenerator
         graphics.InterpolationMode = InterpolationMode.HighQualityBicubic;
         graphics.PixelOffsetMode = PixelOffsetMode.HighQuality;
         graphics.CompositingQuality = CompositingQuality.HighQuality;
-        graphics.TextRenderingHint = TextRenderingHint.AntiAliasGridFit;
+        graphics.TextRenderingHint = TextRenderingHint.AntiAlias;
     }
 
     private static DrawingStringFormat CreateMeasureFormat()

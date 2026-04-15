@@ -23,7 +23,7 @@ public static class WorldLoader
             LoadWorldFromJson(json, Path.GetFileNameWithoutExtension(worldPath), userAssembly);
             OnWorldLoaded?.Invoke(worldPath);
         } catch (Exception e) {
-            Debug.LogError($"[WorldLoader] Failed to load world at {worldPath}: {e.Message}");
+            Debug.LogError($"[WorldLoader] Failed to load world at {worldPath}: {e}");
         }
     }
 
@@ -36,7 +36,7 @@ public static class WorldLoader
             WorldManager.SetActiveWorld(world);
             Debug.Log($"[WorldLoader] Successfully loaded world: {name}");
         } catch (Exception e) {
-            Debug.LogError($"[WorldLoader] Failed to deserialize world '{name}': {e.Message}");
+            Debug.LogError($"[WorldLoader] Failed to deserialize world '{name}': {e}");
         }
     }
 

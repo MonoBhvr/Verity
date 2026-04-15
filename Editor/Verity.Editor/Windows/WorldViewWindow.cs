@@ -139,7 +139,9 @@ public unsafe class WorldViewWindow : EditorWindow
             bool isHovered = ImGui.IsMouseHoveringRect(imgMin, imgMin + contentSize);
             UpdatePreviewEntity(world, isHovered, imgMin);
 
+            long renderStart = Stopwatch.GetTimestamp();
             _app.RenderPipeline.RenderWorld(world, _app.WorldCamera, _app.RenderPipeline.WorldFbo);
+            _app.Profiler.RecordRenderStage("World View Render", Stopwatch.GetElapsedTime(renderStart).TotalMilliseconds);
             if (_showGrid)
                 DrawGrid(_app.RenderPipeline.WorldFbo);
             if (_showGizmos)

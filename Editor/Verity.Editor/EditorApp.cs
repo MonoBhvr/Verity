@@ -19,6 +19,7 @@ using Verity.Input;
 using Verity.Core.UI;
 using SortingLayer = Verity.Graphics.SortingLayer;
 using Verity.Core.Audio;
+using Verity.Editor.Profiling;
 
 namespace Verity.Editor;
 
@@ -73,6 +74,7 @@ public class EditorApp : IDisposable
     private readonly Camera _worldCamera;
     private readonly List<EditorWindow> _windows = [];
     private readonly Stopwatch _stopwatch = new();
+    private readonly EditorProfiler _profiler = new();
     private GameLoop? _gameLoop;
     private WorldSnapshot? _snapshot;
     private ScriptCompiler? _scriptCompiler;
@@ -127,6 +129,7 @@ public class EditorApp : IDisposable
     public RenderPipeline RenderPipeline => _renderPipeline;
     public Camera WorldCamera => _worldCamera;
     public ScriptCompiler? ScriptCompiler => _scriptCompiler;
+    public EditorProfiler Profiler => _profiler;
 
     private bool _isScreenFocused;
     private string _newProjectName = "";
@@ -723,7 +726,7 @@ public class EditorApp : IDisposable
     private static readonly JsonSerializerOptions _projectSettingsOptions = new() 
     { 
         WriteIndented = true, 
-        Converters = { new Vector2Converter(), new Verity.Core.Serialization.ColorConverter() }
+        Converters = { new Vector2Converter(), new Verity.Core.Serialization.ColorConverter(), new UiAssetConverter(), new UiAssetReferenceConverter(), new UiRoleBindingConverter() }
     };
 
     private void LoadProjectSettings()
@@ -1394,6 +1397,10 @@ public class EditorApp : IDisposable
         long lastTicks = _stopwatch.ElapsedTicks;
         while (!_device.ShouldClose)
         {
+            long frameStart = Stopwatch.GetTimestamp();
+            bool profilerOpen = GetWindow<ProfilerWindow>()?.IsOpen == true;
+            _profiler.BeginFrame(profilerOpen);
+            RuntimeProfiler.Enabled = _profiler.IsCollectingFrame;
             long currentTicks = _stopwatch.ElapsedTicks;
             float deltaTime = (float)(currentTicks - lastTicks) / Stopwatch.Frequency;
             lastTicks = currentTicks;
@@ -1401,8 +1408,13 @@ public class EditorApp : IDisposable
             if (!IsPlaying) { Time.DeltaTime = deltaTime; Time.TotalTime += deltaTime; }
             Verity.Input.Input.Enabled = _isScreenFocused;
 
+            long stageStart = Stopwatch.GetTimestamp();
             _device.PollEvents();
+            _profiler.RecordFrameStage("Poll Events", Stopwatch.GetElapsedTime(stageStart).TotalMilliseconds);
+
+            stageStart = Stopwatch.GetTimestamp();
             ProcessPendingAssetInvalidations();
+            _profiler.RecordFrameStage("Asset Refresh", Stopwatch.GetElapsedTime(stageStart).TotalMilliseconds);
 
             // Handle window close button
             if (_device.Window.ShouldClose && _hasUnsavedChanges && !_showExitConfirmPopup)
@@ -1411,7 +1423,9 @@ public class EditorApp : IDisposable
                 RequestExit();
             }
 
+            stageStart = Stopwatch.GetTimestamp();
             if (IsPlaying && _gameLoop != null) _gameLoop.TickLogic(deltaTime);
+            _profiler.RecordFrameStage("Play Logic", Stopwatch.GetElapsedTime(stageStart).TotalMilliseconds);
 
             HandleGlobalShortcuts();
             if (_isFocusInterpolating) {
@@ -1424,6 +1438,7 @@ public class EditorApp : IDisposable
             }
             _device.Gl.Viewport(0, 0, _device.Window.GetWidth(), _device.Window.GetHeight());
             _device.Clear(System.Drawing.Color.FromArgb(255, 30, 30, 30));
+            stageStart = Stopwatch.GetTimestamp();
             _imgui.BeginFrame();
             if (CurrentProjectName == null) DrawLauncher();
             else {
@@ -1438,8 +1453,12 @@ public class EditorApp : IDisposable
             if (CurrentProjectName != null)
                 _dockLayoutPersistenceReady = true;
             _imgui.EndFrame();
+            _profiler.RecordFrameStage("Editor UI", Stopwatch.GetElapsedTime(stageStart).TotalMilliseconds);
             CoreDebug.ClearDrawCommands();
+            stageStart = Stopwatch.GetTimestamp();
             _device.SwapBuffers();
+            _profiler.RecordFrameStage("Swap Buffers", Stopwatch.GetElapsedTime(stageStart).TotalMilliseconds);
+            _profiler.EndFrame(Stopwatch.GetElapsedTime(frameStart).TotalMilliseconds);
         }
     }
 
@@ -1687,7 +1706,8 @@ public class EditorApp : IDisposable
             if (ImGui.BeginMenu(L10n.Tr("menu_build"))) {
                 if (ImGui.MenuItem(L10n.Tr("window_buildsettings"))) GetWindow<BuildSettingsWindow>()!.IsOpen = true;
                 ImGui.Separator();
-                if (ImGui.MenuItem(L10n.Tr("menu_publish"))) assetWindow?.PublishSingleFile();
+                if (ImGui.MenuItem("Publish Debug Build")) assetWindow?.PublishDebugBuild();
+                if (ImGui.MenuItem("Publish Release Build")) assetWindow?.PublishReleaseBuild();
                 ImGui.EndMenu();
             }
             float mid = ImGui.GetWindowWidth() * 0.5f; ImGui.SetCursorPosX(mid - 30);
@@ -1801,7 +1821,9 @@ public class EditorApp : IDisposable
         if (!inDetachedMode && !forceSeparateViewport)
             RememberDockedWindowPlacement(window);
 
+            long windowStart = Stopwatch.GetTimestamp();
             window.OnGui();
+            _profiler.RecordWindow(window.Title, Stopwatch.GetElapsedTime(windowStart).TotalMilliseconds);
         }
 
         ImGui.End();
@@ -2117,8 +2139,10 @@ public class EditorApp : IDisposable
             if (ImGui.MenuItem(L10n.Tr("window_buildsettings")))
                 OpenWindow<BuildSettingsWindow>();
             ImGui.Separator();
-            if (ImGui.MenuItem(L10n.Tr("menu_publish")))
-                assetWindow?.PublishSingleFile();
+            if (ImGui.MenuItem("Publish Debug Build"))
+                assetWindow?.PublishDebugBuild();
+            if (ImGui.MenuItem("Publish Release Build"))
+                assetWindow?.PublishReleaseBuild();
             ImGui.EndMenu();
         }
 

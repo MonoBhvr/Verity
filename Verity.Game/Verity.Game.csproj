@@ -1,15 +1,26 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
-    <OutputType>WinExe</OutputType>
     <TargetFramework>net9.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
-    
+    <RuntimeShowConsole Condition="'$(RuntimeShowConsole)' == ''">false</RuntimeShowConsole>
+    <RuntimeDiagnostics Condition="'$(RuntimeDiagnostics)' == ''">false</RuntimeDiagnostics>
+    <OutputType Condition="'$(RuntimeShowConsole)' == 'true'">Exe</OutputType>
+    <OutputType Condition="'$(RuntimeShowConsole)' != 'true'">WinExe</OutputType>
+
     <!-- Single File Settings -->
-    <PublishSingleFile>true</PublishSingleFile>
-    <SelfContained>true</SelfContained>
-    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <PublishSingleFile Condition="'$(PublishSingleFile)' == ''">true</PublishSingleFile>
+    <SelfContained Condition="'$(SelfContained)' == ''">true</SelfContained>
+    <RuntimeIdentifier Condition="'$(RuntimeIdentifier)' == ''">win-x64</RuntimeIdentifier>
     <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="'$(RuntimeShowConsole)' == 'true'">
+    <DefineConstants>$(DefineConstants);VERITY_RUNTIME_CONSOLE</DefineConstants>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="'$(RuntimeDiagnostics)' == 'true'">
+    <DefineConstants>$(DefineConstants);VERITY_RUNTIME_DIAGNOSTICS</DefineConstants>
   </PropertyGroup>
 
   <ItemGroup>
@@ -20,6 +31,16 @@
     <ProjectReference Include="..\Engine\Verity.Core\Verity.Core.csproj" />
     <ProjectReference Include="..\Engine\Verity.Graphics\Verity.Graphics.csproj" />
     <ProjectReference Include="..\Engine\Verity.Input\Verity.Input.csproj" />
+    <PackageReference Include="sdl2_mixer.nuget.redist" Version="2.8.1" GeneratePathProperty="true" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Content Include="$(Pkgsdl2_mixer_nuget_redist)\build\native\bin\x64\SDL2_mixer.dll"
+             Condition="Exists('$(Pkgsdl2_mixer_nuget_redist)\build\native\bin\x64\SDL2_mixer.dll')">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+      <Link>SDL2_mixer.dll</Link>
+    </Content>
   </ItemGroup>
 
   <!-- Include data as resources when publishing -->

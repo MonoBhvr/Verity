@@ -18,8 +18,12 @@ public static class UiRenderer
 
         UiLayoutEngine.Layout(screen, viewportWidth, viewportHeight);
 
-        var projection = Matrix4x4.CreateOrthographicOffCenter(0f, screen.ReferenceResolution.X, screen.ReferenceResolution.Y, 0f, -1f, 1f);
-        var view = Matrix4x4.Identity;
+        UiRect canvasRect = UiSystem.GetCanvasViewportRect(screen, viewportWidth, viewportHeight);
+        float scale = Math.Max(0.0001f, canvasRect.Width / Math.Max(1f, screen.ReferenceResolution.X));
+        var projection = Matrix4x4.CreateOrthographicOffCenter(0f, viewportWidth, viewportHeight, 0f, -1f, 1f);
+        var view =
+            Matrix4x4.CreateScale(scale, scale, 1f) *
+            Matrix4x4.CreateTranslation(canvasRect.X, canvasRect.Y, 0f);
         foreach (var node in screen.Root.DescendantsAndSelf().Where(n => n.Active && n.Visible))
             RenderNode(pipeline, node, projection, view, targetFbo);
     }
@@ -105,19 +109,19 @@ public static class UiRenderer
 
     private static void RenderNodeText(RenderPipeline pipeline, UiNode node, Matrix4x4 projection, Matrix4x4 view, FramebufferObject.Uploaded? targetFbo)
     {
-        if (!TryGetNodeText(node, out var text, out var color, out var wordWrap))
+        if (!TryResolveNodeText(node, out var text, out var color, out var wordWrap))
             return;
 
         if (string.IsNullOrWhiteSpace(text))
             return;
 
-        var rect = GetTextRect(node);
+        var rect = GetNodeTextRect(node);
         if (rect.Width <= 0f || rect.Height <= 0f)
             return;
 
-        var fontSize = ResolveFontSize(node);
-        var horizontal = ResolveHorizontalAlignment(node);
-        var vertical = ResolveVerticalAlignment(node);
+        var fontSize = ResolveNodeFontSize(node);
+        var horizontal = ResolveNodeHorizontalAlignment(node);
+        var vertical = ResolveNodeVerticalAlignment(node);
 
         pipeline.DrawText(
             new TextRenderOptions(
@@ -126,6 +130,7 @@ public static class UiRenderer
                 new System.Numerics.Vector2(rect.Width, rect.Height),
                 color,
                 fontSize,
+                ResolveAutoFit(node),
                 wordWrap,
                 ResolveFontPath(node),
                 ResolveFontFamily(node),
@@ -136,7 +141,7 @@ public static class UiRenderer
             targetFbo);
     }
 
-    private static bool TryGetNodeText(UiNode node, out string text, out Color color, out bool wordWrap)
+    public static bool TryResolveNodeText(UiNode node, out string text, out Color color, out bool wordWrap)
     {
         text = string.Empty;
         color = node.Visual.ForegroundColor;
@@ -206,7 +211,7 @@ public static class UiRenderer
         }
     }
 
-    private static UiRect GetTextRect(UiNode node)
+    public static UiRect GetNodeTextRect(UiNode node)
     {
         var rect = node.LayoutRect;
         var padding = node.Visual.Padding;
@@ -224,7 +229,7 @@ public static class UiRenderer
         };
     }
 
-    private static float ResolveFontSize(UiNode node)
+    public static float ResolveNodeFontSize(UiNode node)
     {
         return node switch
         {
@@ -233,8 +238,18 @@ public static class UiRenderer
         };
     }
 
-    private static TextHorizontalAlignment ResolveHorizontalAlignment(UiNode node)
+    public static TextHorizontalAlignment ResolveNodeHorizontalAlignment(UiNode node)
     {
+        if (node.Visual.TextHorizontalAlignment != UiTextHorizontalAlignment.Default)
+        {
+            return node.Visual.TextHorizontalAlignment switch
+            {
+                UiTextHorizontalAlignment.Center => TextHorizontalAlignment.Center,
+                UiTextHorizontalAlignment.Right => TextHorizontalAlignment.Right,
+                _ => TextHorizontalAlignment.Left
+            };
+        }
+
         return node switch
         {
             Button or Toggle or Dropdown => TextHorizontalAlignment.Center,
@@ -244,8 +259,18 @@ public static class UiRenderer
         };
     }
 
-    private static TextVerticalAlignment ResolveVerticalAlignment(UiNode node)
+    public static TextVerticalAlignment ResolveNodeVerticalAlignment(UiNode node)
     {
+        if (node.Visual.TextVerticalAlignment != UiTextVerticalAlignment.Default)
+        {
+            return node.Visual.TextVerticalAlignment switch
+            {
+                UiTextVerticalAlignment.Middle => TextVerticalAlignment.Middle,
+                UiTextVerticalAlignment.Bottom => TextVerticalAlignment.Bottom,
+                _ => TextVerticalAlignment.Top
+            };
+        }
+
         return node switch
         {
             Button or Toggle or Dropdown or Tooltip or Tabs => TextVerticalAlignment.Middle,
@@ -253,6 +278,8 @@ public static class UiRenderer
             _ => TextVerticalAlignment.Top
         };
     }
+
+    public static bool ResolveAutoFit(UiNode node) => node.Visual.AutoFitText;
 
     private static Color WithAlpha(Color color, float alphaScale)
     {

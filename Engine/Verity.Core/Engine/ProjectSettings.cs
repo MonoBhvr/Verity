@@ -35,6 +35,7 @@ public class ProjectSettings
     public string DefaultUiFontGuid { get; set; } = string.Empty;
     public List<UiAssetReference> UiCatalog { get; set; } = new();
     public List<UiRoleBinding> UiRoleDefaults { get; set; } = new();
+    public List<string> StartupUiRoles { get; set; } = new();
     public string LastOpenedWorldAssetPath { get; set; } = string.Empty;
     public EditorDockLayoutSettings EditorDockLayout { get; set; } = new();
 
@@ -44,15 +45,13 @@ public class ProjectSettings
 public sealed class UiAssetReference
 {
     public string Name { get; set; } = string.Empty;
-    public string Path { get; set; } = string.Empty;
-    public string Guid { get; set; } = string.Empty;
+    public UiAsset Asset { get; set; }
 }
 
 public sealed class UiRoleBinding
 {
     public string Role { get; set; } = string.Empty;
-    public string Path { get; set; } = string.Empty;
-    public string Guid { get; set; } = string.Empty;
+    public UiAsset Asset { get; set; }
 }
 
 public class EditorDockLayoutSettings

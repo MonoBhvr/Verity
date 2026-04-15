@@ -1,3 +1,8 @@
+param(
+    [ValidateSet("Debug", "Release")]
+    [string]$Mode = "Release"
+)
+
 # 0. 터미널 인코딩 설정 (한글 깨짐 방지)
 chcp 65001 >$null
 $OutputEncoding = [System.Text.Encoding]::UTF8
@@ -6,10 +11,11 @@ $OutputEncoding = [System.Text.Encoding]::UTF8
 # 1. 배포 경로 설정 (프로젝트 루트 내 Dist 폴더)
 $distPath = ".\Dist"
 $editorDist = "$distPath\Editor"
-$runtimeDist = "$distPath\Runtime"
+$runtimeDist = "$distPath\Runtime\$Mode"
 
 Write-Host "`n========================================" -ForegroundColor Cyan
 Write-Host "   Verity Engine 배포 패키지 생성 시작" -ForegroundColor Cyan
+Write-Host "   모드: $Mode" -ForegroundColor Cyan
 Write-Host "========================================`n" -ForegroundColor Cyan
 
 # 2. 기존 Dist 폴더 삭제 (클린 빌드)
@@ -25,7 +31,12 @@ dotnet publish Editor/Verity.Editor.App/Verity.Editor.App.csproj -c Release -r w
 
 # 4. 런타임(Runtime/Game Player) 빌드 및 게시
 Write-Host ">> [2/4] 런타임 엔진(Runtime) 빌드 중..." -ForegroundColor Yellow
-dotnet publish Verity.Game/Verity.Game.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=false -o $runtimeDist --nologo
+if ($Mode -eq "Debug") {
+    dotnet publish Verity.Game/Verity.Game.csproj -c Debug -r win-x64 --self-contained true -p:PublishSingleFile=false -p:RuntimeShowConsole=true -p:RuntimeDiagnostics=true -p:DebugSymbols=true -p:DebugType=portable -o $runtimeDist --nologo
+}
+else {
+    dotnet publish Verity.Game/Verity.Game.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:RuntimeShowConsole=false -p:RuntimeDiagnostics=false -p:DebugSymbols=false -p:DebugType=None -o $runtimeDist --nologo
+}
 
 # 5. 필수 리소스 복사 및 배포판 정제
 Write-Host ">> [3/4] 배포판 리소스 정제 및 복사 중..." -ForegroundColor Yellow
