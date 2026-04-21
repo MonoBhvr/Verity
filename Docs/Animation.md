@@ -2,9 +2,12 @@
 
 이 문서는 애니메이션 시스템의 구조와 공개 API를 설명합니다.
 
+현재 기준으로 **`Animator`가 주력(primary) 애니메이션 시스템**이며, controller/parameter/condition transition과 에디터/런타임 통합도 이 경로를 기준으로 구성되어 있습니다. `ClipAnimator`는 단순 clip 재생용 하위 호환 컴포넌트로 유지되지만, 신규 구현에는 `Animator` 사용을 권장합니다.
+
 범위는 다음과 같습니다.
 
 - `Animator`
+- `ClipAnimator` (deprecated / simple playback)
 - `AnimationClip`, `AnimationTrack`, `Keyframe`
 - 상태 머신 기반 controller 그래프
 - 런타임 업데이트 시스템
@@ -32,7 +35,7 @@
 
 ## 2. `Animator`
 
-`Animator`는 엔티티에 붙어서 controller와 clip을 실제로 재생하는 런타임 컴포넌트입니다.
+`Animator`는 엔티티에 붙어서 controller와 clip을 실제로 재생하는 **기본 런타임 애니메이션 컴포넌트**입니다.
 
 ### 프로퍼티
 
@@ -43,6 +46,7 @@
 | `Controller` | `AnimatorController?` | 현재 controller |
 | `Speed` | `float` | 재생 속도 배율 |
 | `IsPlaying` | `bool` | 현재 재생 중인지 |
+| `IsPaused` | `bool` | 일시 정지 상태인지 |
 | `CurrentTime` | `float` | 현재 상태 시간 |
 | `CurrentStateName` | `string` | 현재 상태 이름 |
 
@@ -52,6 +56,8 @@
 | :--- | :--- |
 | `void Play(string stateName, bool restart = true)` | 특정 상태 재생 |
 | `void Stop()` | 재생 정지 |
+| `void Pause()` | 현재 시간은 유지한 채 일시 정지 |
+| `void Resume()` | 일시 정지된 상태를 이어서 재생 |
 | `void SetFloat(string name, float value)` | float 파라미터 설정 |
 | `void SetInt(string name, int value)` | int 파라미터 설정 |
 | `void SetBool(string name, bool value)` | bool 파라미터 설정 |
@@ -71,6 +77,14 @@
 - binding path 해석 결과는 캐시됩니다.
 - controller가 교체되면 현재 상태/시간/캐시가 초기화됩니다.
 - `Enabled` 상태일 때 `AnimationSystem`에 등록됩니다.
+- condition transition, parameter, trigger 소비 흐름은 `Animator`를 기준으로 지원됩니다.
+
+### 언제 `Animator`를 써야 하나?
+
+- controller 기반 상태 머신이 필요할 때
+- float/int/bool/trigger 파라미터를 쓸 때
+- 조건 기반 상태 전이가 필요할 때
+- 에디터/런타임 통합 경로와 동일한 시스템을 쓰고 싶을 때
 
 ---
 
@@ -205,15 +219,45 @@
 
 ## 5. `AnimationSystem`
 
-`AnimationSystem`은 활성 animator 목록을 관리하는 정적 시스템입니다.
+`AnimationSystem`은 활성 animation component 목록을 관리하는 정적 시스템입니다.
 
 ### 메서드
 
 - `void Register(Animator animator)`
 - `void Unregister(Animator animator)`
+- `void Register(ClipAnimator animator)`
+- `void Unregister(ClipAnimator animator)`
 - `void Update(float deltaTime)`
 
 ### 존재 이유
 
 - 월드 내 여러 animator를 매 tick 공통 규칙으로 갱신하기 위해
 
+---
+
+## 6. `ClipAnimator` (deprecated)
+
+`ClipAnimator`는 제거되지 않았고 계속 동작하지만, 현재는 **단순 clip/state 재생용 하위 호환 표면**으로 보는 것이 맞습니다.
+
+지원 범위:
+
+- `Play`, `PlayIfChanged`, `Stop`, `Pause`, `Resume`
+- 기본 상태 clip 재생
+- 수동 상태 전환
+- `ClipPlayback` 기반 샘플링/페이드
+
+제한 사항:
+
+- controller asset 기반 상태 머신을 직접 제공하지 않습니다.
+- `SetFloat` / `SetInt` / `SetBool` / `SetTrigger` 같은 parameter API가 없습니다.
+- 조건 기반 자동 transition 모델이 없습니다.
+- 에디터/런타임의 주 경로는 `Animator` 기준으로 정리되어 있습니다.
+
+### 마이그레이션 가이드
+
+`ClipAnimator`를 새 코드에서 사용할 계획이라면, 가능하면 아래 기준으로 `Animator`로 옮기는 편이 안전합니다.
+
+1. 기본 clip을 `AnimatorController`의 default state로 이동합니다.
+2. 수동 `Play("StateName")` 호출은 동일한 이름의 animator state 재생으로 치환합니다.
+3. 조건 분기 로직은 controller transition + parameter(`SetFloat`, `SetInt`, `SetBool`, `SetTrigger`)로 옮깁니다.
+4. 프로젝트의 주 애니메이션 워크플로우는 `Animator` 하나를 기준으로 통일합니다.

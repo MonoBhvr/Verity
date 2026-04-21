@@ -1,5 +1,7 @@
 using System.Numerics;
 using SDL2;
+using FilterModeType = Verity.Filter.FilterMode;
+using FilterType = Verity.Filter.Filter;
 
 namespace Verity.Input;
 
@@ -53,7 +55,7 @@ public static class Input
     public static bool Pressed(KeyCode key) => _enabled && _pressedThisTick.Contains(key);
     public static bool Released(KeyCode key) => _enabled && _releasedThisTick.Contains(key);
 
-    public static bool Down(Filter? filter)
+    public static bool Down(FilterType? filter)
     {
         if (filter == null || !_enabled) return false;
         
@@ -62,7 +64,7 @@ public static class Input
         return false;
     }
 
-    public static bool Pressed(Filter? filter)
+    public static bool Pressed(FilterType? filter)
     {
         if (filter == null || !_enabled) return false;
         
@@ -71,7 +73,7 @@ public static class Input
         return false;
     }
 
-    public static bool Released(Filter? filter)
+    public static bool Released(FilterType? filter)
     {
         if (filter == null || !_enabled) return false;
         
@@ -80,18 +82,18 @@ public static class Input
         return false;
     }
 
-    public static bool Down(string filterName) => Down(Filter.Get(filterName));
-    public static bool Pressed(string filterName) => Pressed(Filter.Get(filterName));
-    public static bool Released(string filterName) => Released(Filter.Get(filterName));
+    public static bool Down(string filterName) => Down(FilterType.Get(filterName));
+    public static bool Pressed(string filterName) => Pressed(FilterType.Get(filterName));
+    public static bool Released(string filterName) => Released(FilterType.Get(filterName));
 
     public static bool MouseDown(MouseButton button) => _enabled && _buttonsDown.Contains(button);
     public static bool MousePressed(MouseButton button) => _enabled && _mousePressedThisTick.Contains(button);
     public static bool MouseReleased(MouseButton button) => _enabled && _mouseReleasedThisTick.Contains(button);
 
-    public static bool MouseDown(Filter? filter)
+    public static bool MouseDown(FilterType? filter)
     {
         if (filter == null || !_enabled) return false;
-        if (filter.Mode == FilterMode.Whitelist)
+        if (filter.Mode == FilterModeType.Whitelist)
         {
             foreach (var btn in filter.GetValues<MouseButton>())
                 if (MouseDown(btn)) return true;
@@ -105,10 +107,10 @@ public static class Input
         }
     }
 
-    public static bool MousePressed(Filter? filter)
+    public static bool MousePressed(FilterType? filter)
     {
         if (filter == null || !_enabled) return false;
-        if (filter.Mode == FilterMode.Whitelist)
+        if (filter.Mode == FilterModeType.Whitelist)
         {
             foreach (var btn in filter.GetValues<MouseButton>())
                 if (MousePressed(btn)) return true;
@@ -122,10 +124,10 @@ public static class Input
         }
     }
 
-    public static bool MouseReleased(Filter? filter)
+    public static bool MouseReleased(FilterType? filter)
     {
         if (filter == null || !_enabled) return false;
-        if (filter.Mode == FilterMode.Whitelist)
+        if (filter.Mode == FilterModeType.Whitelist)
         {
             foreach (var btn in filter.GetValues<MouseButton>())
                 if (MouseReleased(btn)) return true;
@@ -139,9 +141,9 @@ public static class Input
         }
     }
 
-    public static bool MouseDown(string filterName) => MouseDown(Filter.Get(filterName));
-    public static bool MousePressed(string filterName) => MousePressed(Filter.Get(filterName));
-    public static bool MouseReleased(string filterName) => MouseReleased(Filter.Get(filterName));
+    public static bool MouseDown(string filterName) => MouseDown(FilterType.Get(filterName));
+    public static bool MousePressed(string filterName) => MousePressed(FilterType.Get(filterName));
+    public static bool MouseReleased(string filterName) => MouseReleased(FilterType.Get(filterName));
 
     [Obsolete("Use Down instead")]
     public static bool GetKey(KeyCode key) => Down(key);
@@ -150,11 +152,11 @@ public static class Input
     [Obsolete("Use Released instead")]
     public static bool GetKeyUp(KeyCode key) => Released(key);
     [Obsolete("Use Down instead")]
-    public static bool GetKey(Filter? filter) => Down(filter);
+    public static bool GetKey(FilterType? filter) => Down(filter);
     [Obsolete("Use Pressed instead")]
-    public static bool GetKeyDown(Filter? filter) => Pressed(filter);
+    public static bool GetKeyDown(FilterType? filter) => Pressed(filter);
     [Obsolete("Use Released instead")]
-    public static bool GetKeyUp(Filter? filter) => Released(filter);
+    public static bool GetKeyUp(FilterType? filter) => Released(filter);
     [Obsolete("Use Down instead")]
     public static bool GetKey(string filterName) => Down(filterName);
     [Obsolete("Use Pressed instead")]
@@ -168,11 +170,11 @@ public static class Input
     [Obsolete("Use MouseReleased instead")]
     public static bool GetMouseButtonUp(MouseButton button) => MouseReleased(button);
     [Obsolete("Use MouseDown instead")]
-    public static bool GetMouseButton(Filter? filter) => MouseDown(filter);
+    public static bool GetMouseButton(FilterType? filter) => MouseDown(filter);
     [Obsolete("Use MousePressed instead")]
-    public static bool GetMouseButtonDown(Filter? filter) => MousePressed(filter);
+    public static bool GetMouseButtonDown(FilterType? filter) => MousePressed(filter);
     [Obsolete("Use MouseReleased instead")]
-    public static bool GetMouseButtonUp(Filter? filter) => MouseReleased(filter);
+    public static bool GetMouseButtonUp(FilterType? filter) => MouseReleased(filter);
     [Obsolete("Use MouseDown instead")]
     public static bool GetMouseButton(string filterName) => MouseDown(filterName);
     [Obsolete("Use MousePressed instead")]

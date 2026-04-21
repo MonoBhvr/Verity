@@ -24,12 +24,23 @@ public enum SpriteSizingMode
     PixelsPerUnit
 }
 
+public static class SpriteImportDefaultNames
+{
+    public const string Sprite = "Sprite";
+
+    public static string IndexedSprite(int index) => $"Sprite {index}";
+}
+
 public sealed class SpriteImportSettings
 {
     public SpriteTextureFilter Filter { get; set; } = SpriteTextureFilter.Point;
     public SpriteImportMode SpriteMode { get; set; } = SpriteImportMode.Single;
     public SpriteSizingMode SizeMode { get; set; } = SpriteSizingMode.FitInsideUnit;
     public int PixelsPerUnit { get; set; } = 32;
+    public int NineSliceLeft { get; set; }
+    public int NineSliceRight { get; set; }
+    public int NineSliceTop { get; set; }
+    public int NineSliceBottom { get; set; }
 
     [JsonConverter(typeof(Vector2Converter))]
     public Vector2 DefaultPivot { get; set; } = new(0.5f, 0.5f);
@@ -39,6 +50,10 @@ public sealed class SpriteImportSettings
     public void Normalize(int textureWidth, int textureHeight)
     {
         PixelsPerUnit = Math.Max(1, PixelsPerUnit);
+        NineSliceLeft = Math.Max(0, NineSliceLeft);
+        NineSliceRight = Math.Max(0, NineSliceRight);
+        NineSliceTop = Math.Max(0, NineSliceTop);
+        NineSliceBottom = Math.Max(0, NineSliceBottom);
         DefaultPivot = SpriteImportUtility.ClampPivot(DefaultPivot);
 
         if (SpriteMode == SpriteImportMode.Single)
@@ -50,7 +65,7 @@ public sealed class SpriteImportSettings
             else
             {
                 var first = Slices[0];
-                first.Name = string.IsNullOrWhiteSpace(first.Name) ? "Sprite" : first.Name;
+                first.Name = string.IsNullOrWhiteSpace(first.Name) ? SpriteImportDefaultNames.Sprite : first.Name;
                 if (first.Width <= 0 || first.Height <= 0)
                 {
                     first.X = 0;
@@ -70,7 +85,7 @@ public sealed class SpriteImportSettings
         for (int i = 0; i < Slices.Count; i++)
         {
             Slices[i].EnsureId();
-            Slices[i].Name = string.IsNullOrWhiteSpace(Slices[i].Name) ? $"Sprite {i + 1}" : Slices[i].Name;
+            Slices[i].Name = string.IsNullOrWhiteSpace(Slices[i].Name) ? SpriteImportDefaultNames.IndexedSprite(i + 1) : Slices[i].Name;
             Slices[i].Width = Math.Max(1, Slices[i].Width);
             Slices[i].Height = Math.Max(1, Slices[i].Height);
             Slices[i].Pivot = SpriteImportUtility.ClampPivot(Slices[i].Pivot);
@@ -85,6 +100,10 @@ public sealed class SpriteImportSettings
             SpriteMode = SpriteMode,
             SizeMode = SizeMode,
             PixelsPerUnit = PixelsPerUnit,
+            NineSliceLeft = NineSliceLeft,
+            NineSliceRight = NineSliceRight,
+            NineSliceTop = NineSliceTop,
+            NineSliceBottom = NineSliceBottom,
             DefaultPivot = DefaultPivot,
             Slices = Slices.Select(slice => slice.Clone()).ToList()
         };
@@ -94,7 +113,7 @@ public sealed class SpriteImportSettings
 public sealed class SpriteSlice
 {
     public string Id { get; set; } = Guid.NewGuid().ToString("N");
-    public string Name { get; set; } = "Sprite";
+    public string Name { get; set; } = SpriteImportDefaultNames.Sprite;
     public int X { get; set; }
     public int Y { get; set; }
     public int Width { get; set; } = 1;
@@ -146,7 +165,7 @@ public static class SpriteImportUtility
     {
         return new SpriteSlice
         {
-            Name = "Sprite",
+            Name = SpriteImportDefaultNames.Sprite,
             X = 0,
             Y = 0,
             Width = Math.Max(1, textureWidth),

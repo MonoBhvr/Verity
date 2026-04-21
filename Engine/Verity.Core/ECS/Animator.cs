@@ -16,6 +16,7 @@ public class Animator : Component
     private AnimationClip? _currentClip;
     private float _time;
     private bool _isPlaying;
+    private bool _isPaused;
     private readonly Dictionary<string, (object? Target, MemberInfo? Member)> _bindingCache = new();
 
     [HideInInspector]
@@ -30,6 +31,7 @@ public class Animator : Component
             _currentClip = null;
             _time = 0f;
             _isPlaying = false;
+            _isPaused = false;
             _bindingCache.Clear();
 
             if (Enabled)
@@ -42,6 +44,7 @@ public class Animator : Component
 
     public float Speed { get; set; } = 1.0f;
     public bool IsPlaying => _isPlaying;
+    public bool IsPaused => _isPaused;
     public float CurrentTime => _time;
     public string CurrentStateName => _currentState?.Name ?? string.Empty;
 
@@ -75,6 +78,7 @@ public class Animator : Component
         _currentClip = state.Clip;
         _time = 0f;
         _isPlaying = _currentClip != null;
+        _isPaused = false;
 
         if (_currentClip != null)
             SampleClip(_currentClip, 0f);
@@ -83,7 +87,33 @@ public class Animator : Component
     public void Stop()
     {
         _isPlaying = false;
+        _isPaused = false;
         _time = 0f;
+    }
+
+    public void Pause()
+    {
+        if (!_isPlaying || _currentClip == null)
+            return;
+
+        _isPlaying = false;
+        _isPaused = true;
+    }
+
+    public void Resume()
+    {
+        if (!_isPaused)
+            return;
+
+        if (_currentClip == null)
+        {
+            TryPlayDefaultState();
+            return;
+        }
+
+        AnimationSystem.Register(this);
+        _isPaused = false;
+        _isPlaying = true;
     }
 
     public void SetFloat(string name, float value)
@@ -186,12 +216,12 @@ public class Animator : Component
         target = null;
         member = null;
 
-        var parts = path.Split('.');
-        if (parts.Length < 2)
+        int separatorIndex = path.LastIndexOf('.');
+        if (separatorIndex <= 0 || separatorIndex >= path.Length - 1)
             return;
 
-        string typeName = parts[0];
-        string memberName = parts[1];
+        string typeName = path[..separatorIndex];
+        string memberName = path[(separatorIndex + 1)..];
 
         foreach (var component in Owner.GetAllComponents())
         {

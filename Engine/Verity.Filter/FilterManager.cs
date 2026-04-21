@@ -1,6 +1,6 @@
 using System.Text.Json;
 
-namespace Verity.Input;
+namespace Verity.Filter;
 
 public static class FilterManager
 {

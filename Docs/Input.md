@@ -8,7 +8,7 @@
 - `KeyCode`
 - `MouseButton`
 
-Filter 기반 입력 묶음은 [Filter 문서](D:/Verity/Docs/Filter.md)에서 상세히 설명합니다.
+Filter 기반 입력 묶음은 [Filter 문서](./Filter.md)에서 상세히 설명합니다.
 
 ---
 
@@ -78,6 +78,76 @@ Verity 입력 시스템은 render frame이 아니라 logic tick 기준으로 입
 | `void Reset()` | 입력 상태 초기화 |
 | `void BeginFrame()` | obsolete |
 | `void EndFrame()` | obsolete |
+
+### obsolete / 마이그레이션 가이드
+
+`Input`에는 이전 이름 체계를 유지하기 위한 obsolete 메서드가 남아 있습니다. 새 코드에서는 아래 대체 API를 사용하세요.
+
+#### 1) polling 이름 변경
+
+- `GetKey(...)` → `Down(...)`
+- `GetKeyDown(...)` → `Pressed(...)`
+- `GetKeyUp(...)` → `Released(...)`
+- `GetMouseButton(...)` → `MouseDown(...)`
+- `GetMouseButtonDown(...)` → `MousePressed(...)`
+- `GetMouseButtonUp(...)` → `MouseReleased(...)`
+
+이 치환 규칙은 `KeyCode`, `MouseButton`, `Filter`, `string filterName` 오버로드에 동일하게 적용됩니다.
+
+```csharp
+// 이전 방식
+if (Input.GetKey(KeyCode.Space))
+{
+    Jump();
+}
+
+if (Input.GetKeyDown("PlayerJump"))
+{
+    Jump();
+}
+
+if (Input.GetMouseButtonUp(MouseButton.Left))
+{
+    Fire();
+}
+
+// 대체 방식
+if (Input.Down(KeyCode.Space))
+{
+    Jump();
+}
+
+if (Input.Pressed("PlayerJump"))
+{
+    Jump();
+}
+
+if (Input.MouseReleased(MouseButton.Left))
+{
+    Fire();
+}
+```
+
+#### 2) `BeginFrame()` / `EndFrame()` 대체
+
+`BeginFrame()`와 `EndFrame()`은 더 이상 입력 상태를 갱신하지 않으며, `[Obsolete("Use NewLogicTick instead")]`로 표시되어 있습니다.
+
+- deprecated: `BeginFrame()`, `EndFrame()`
+- 대체 API: `NewLogicTick()`
+- 호출 시점: render frame 기준이 아니라 logic tick 시작 시점
+
+```csharp
+// 이전 방식
+Input.BeginFrame();
+// 게임 로직 처리
+Input.EndFrame();
+
+// 대체 방식
+Input.NewLogicTick();
+// 이번 logic tick 기준으로 입력 처리
+```
+
+핵심은 입력 edge 상태(`Pressed`, `Released`, `MousePressed`, `MouseReleased`)가 render frame이 아니라 `NewLogicTick()` 호출 시점에 확정된다는 점입니다. 따라서 입력 갱신 루프를 프레임 시작/종료 훅에서 관리하던 기존 코드는 logic tick 진입 지점으로 옮겨야 합니다.
 
 ### 구현상 중요한 규칙
 

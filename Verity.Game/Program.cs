@@ -8,8 +8,10 @@ using Verity.Core.UI;
 using Verity.Core.Serialization;
 using Verity.Core.World;
 using Verity.Graphics;
+using Verity.Filter;
 using Verity.Input;
 using Verity.Core.Audio;
+using Verity.Core.Scripting;
 using System.Diagnostics;
 using System.Drawing;
 using System.IO;
@@ -56,6 +58,7 @@ internal class Program
         var shader = Shader2D.Create(device);
         var textureManager = new TextureManager(device);
         var renderPipeline = new RenderPipeline(device, shader, textureManager);
+        var profilerOverlay = new ProfilerOverlay();
         RenderPipeline.BaseAssetsPath = baseDir;
         SceneSerializer.AssetRootPath = baseDir;
         UiSystem.AssetsRoot = baseDir;
@@ -179,6 +182,8 @@ internal class Program
                 BindAssetsRecursive(root, textureManager, assembly, assemblyName);
         }
 
+        LuaScriptManager.Initialize(baseDir);
+
         Time.Reset();
         var gameLoop = new GameLoop { ProjectSettings = projectSettings };
         var stopwatch = new Stopwatch();
@@ -230,6 +235,8 @@ internal class Program
             float deltaTime = (float)(currentTicks - lastTicks) / Stopwatch.Frequency;
             lastTicks = currentTicks;
 
+            RuntimeProfiler.Enabled = ProfilerOverlay.ShowProfiler;
+            profilerOverlay.TickFrame();
             Verity.Input.Input.NewLogicTick();
             device.PollEvents();
             gameLoop.TickLogic(deltaTime);
@@ -238,6 +245,8 @@ internal class Program
             var world = WorldManager.ActiveWorld;
             Camera? mainCam = world != null ? FindCameraRecursiveInWorld(world) : null;
             frameCount++;
+
+            long renderStart = Stopwatch.GetTimestamp();
 
             if (mainCam != null && world != null)
             {
@@ -266,12 +275,16 @@ internal class Program
             {
                 UiRenderer.Render(renderPipeline, canvas.Screen, (int)device.Window.GetWidth(), (int)device.Window.GetHeight());
             }
-            
+
+            profilerOverlay.SetRenderTime(Stopwatch.GetElapsedTime(renderStart).TotalMilliseconds);
+            profilerOverlay.Render(renderPipeline, world, (int)device.Window.GetWidth(), (int)device.Window.GetHeight());
+
             device.SwapBuffers();
             Verity.Core.Debug.ClearDrawCommands();
         }
         
         AudioSystem.Shutdown();
+        LuaScriptManager.Dispose();
         renderPipeline.Dispose();
         shader.Dispose();
         textureManager.Dispose();

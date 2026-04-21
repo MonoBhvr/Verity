@@ -10,6 +10,7 @@ namespace Verity.Core.UI;
 public sealed class Canvas
 {
     private readonly Dictionary<string, object?> _screen = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, UiScreenVariableDefinition> _screenDefinitions = new(StringComparer.OrdinalIgnoreCase);
     private string? _hoveredId;
     private string? _pressedId;
     private string? _focusedId;
@@ -29,7 +30,10 @@ public sealed class Canvas
         Screen = UiSerializer.CloneScreen(screen);
         foreach (var variable in Screen.Variables)
             if (!string.IsNullOrWhiteSpace(variable.Name))
-                _screen[variable.Name] = null;
+            {
+                _screenDefinitions[variable.Name] = variable;
+                _screen[variable.Name] = UiBindingRuntime.ParseTypedValue(variable.TypeName, variable.DefaultValue);
+            }
 
         UiScript = UiSystem.CreateUiScript(Screen.UiScriptType);
         if (UiScript != null)
@@ -64,7 +68,8 @@ public sealed class Canvas
             return;
 
         UiScript?.OnUpdate(Time.DeltaTime);
-        RebuildDynamicAreas();
+        ApplyScreenExpressions();
+        RefreshDynamicAreas();
         ApplyBindings();
         UiLayoutEngine.Layout(Screen, viewportWidth, viewportHeight);
         UiScript?.OnLayout();
@@ -74,24 +79,110 @@ public sealed class Canvas
 
     public void Close() => UiScript?.OnClose();
 
-    private void RebuildDynamicAreas()
+    private void RefreshDynamicAreas()
     {
         foreach (var node in Screen.Root.DescendantsAndSelf())
         {
             if (node is not DynamicArea area)
                 continue;
 
-            area.Children.Clear();
-            if (area.ItemTemplate == null)
+            RefreshDynamicArea(area, ResolveItems(area));
+        }
+    }
+
+    private void RefreshDynamicArea(DynamicArea area, List<object?> items)
+    {
+        if (area.ItemTemplate == null)
+        {
+            RemoveChildren(area, 0, area.Children.Count);
+            area.ClearRefreshState();
+            return;
+        }
+
+        bool requiresFullRefresh = area.RequiresFullRefresh || area.Children.Count != area.CachedItems.Count;
+        if (!requiresFullRefresh && !area.RequiresRefresh && area.HasSameItems(items))
+        {
+            RebindChildren(area, items, 0, items.Count);
+            area.CommitRefresh(items);
+            return;
+        }
+
+        if (requiresFullRefresh)
+        {
+            RemoveChildren(area, 0, area.Children.Count);
+            InsertChildren(area, items, 0, items.Count);
+            area.CommitRefresh(items);
+            return;
+        }
+
+        int commonPrefix = 0;
+        while (commonPrefix < area.CachedItems.Count &&
+               commonPrefix < items.Count &&
+               DynamicArea.ItemsMatch(area.CachedItems[commonPrefix], items[commonPrefix]))
+        {
+            commonPrefix++;
+        }
+
+        int commonSuffix = 0;
+        while (commonSuffix < area.CachedItems.Count - commonPrefix &&
+               commonSuffix < items.Count - commonPrefix &&
+               DynamicArea.ItemsMatch(area.CachedItems[^(commonSuffix + 1)], items[^(commonSuffix + 1)]))
+        {
+            commonSuffix++;
+        }
+
+        RebindChildren(area, items, 0, commonPrefix);
+        if (commonSuffix > 0)
+            RebindChildren(area, items, items.Count - commonSuffix, commonSuffix);
+
+        RemoveChildren(area, commonPrefix, area.CachedItems.Count - commonPrefix - commonSuffix);
+        InsertChildren(area, items, commonPrefix, items.Count - commonPrefix - commonSuffix);
+        area.CommitRefresh(items);
+    }
+
+    private List<object?> ResolveItems(DynamicArea area)
+    {
+        var items = new List<object?>();
+        foreach (var item in ResolveEnumerable(area, area.ItemsSource))
+            items.Add(item);
+
+        return items;
+    }
+
+    private static void RebindChildren(DynamicArea area, IReadOnlyList<object?> items, int startIndex, int count)
+    {
+        for (int i = 0; i < count; i++)
+        {
+            int childIndex = startIndex + i;
+            area.Children[childIndex].SetBindingItemRecursive(items[childIndex]);
+        }
+    }
+
+    private static void RemoveChildren(DynamicArea area, int startIndex, int count)
+    {
+        for (int i = 0; i < count; i++)
+            area.RemoveChild(area.Children[startIndex]);
+    }
+
+    private static void InsertChildren(DynamicArea area, IReadOnlyList<object?> items, int startIndex, int count)
+    {
+        if (area.ItemTemplate == null)
+            return;
+
+        for (int i = 0; i < count; i++)
+        {
+            int childIndex = startIndex + i;
+            var clone = UiSerializer.CloneNode(area.ItemTemplate);
+            clone.IsRuntimeGenerated = true;
+            clone.SetBindingItemRecursive(items[childIndex]);
+            area.AddChild(clone);
+
+            int lastIndex = area.Children.Count - 1;
+            if (lastIndex == childIndex)
                 continue;
 
-            foreach (var item in ResolveEnumerable(area, area.ItemsSource))
-            {
-                var clone = UiSerializer.CloneNode(area.ItemTemplate);
-                clone.IsRuntimeGenerated = true;
-                clone.SetBindingItemRecursive(item);
-                area.AddChild(clone);
-            }
+            area.Children.RemoveAt(lastIndex);
+            area.Children.Insert(childIndex, clone);
         }
     }
 
@@ -111,10 +202,18 @@ public sealed class Canvas
         {
             if (string.IsNullOrWhiteSpace(binding.Path) || string.IsNullOrWhiteSpace(binding.TargetProperty))
                 continue;
-            if (!TryResolveBindingReference(node, binding.Path, out var source, out var memberPath))
+
+            bool hasResolvedValue = TryEvaluateBindingValue(node, binding.Path, out object? expressionValue);
+            object? resolved = hasResolvedValue
+                ? expressionValue
+                : TryResolveBindingReference(node, binding.Path, out var source, out var memberPath)
+                    ? UiBindingRuntime.ResolvePath(source, memberPath)
+                    : null;
+
+            if (resolved == null && !hasResolvedValue)
                 continue;
 
-            UiBindingRuntime.TrySetPath(node, binding.TargetProperty, UiBindingRuntime.ResolvePath(source, memberPath));
+            UiBindingRuntime.TrySetPath(node, binding.TargetProperty, resolved);
         }
     }
 
@@ -129,6 +228,20 @@ public sealed class Canvas
         {
             source = _screen;
             memberPath = path["Screen.".Length..];
+            return true;
+        }
+
+        if (path.StartsWith("Param.", StringComparison.OrdinalIgnoreCase))
+        {
+            source = _screen;
+            memberPath = path["Param.".Length..];
+            return true;
+        }
+
+        if (path.StartsWith("Params.", StringComparison.OrdinalIgnoreCase))
+        {
+            source = _screen;
+            memberPath = path["Params.".Length..];
             return true;
         }
 
@@ -188,6 +301,87 @@ public sealed class Canvas
         }
 
         return false;
+    }
+
+    private void ApplyScreenExpressions()
+    {
+        if (_screenDefinitions.Count == 0)
+            return;
+
+        var cache = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase);
+        var stack = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var definition in _screenDefinitions.Values)
+            EvaluateScreenVariable(definition, cache, stack);
+    }
+
+    private object? EvaluateScreenVariable(UiScreenVariableDefinition definition, Dictionary<string, object?> cache, HashSet<string> stack)
+    {
+        if (cache.TryGetValue(definition.Name, out object? cached))
+            return cached;
+
+        if (stack.Contains(definition.Name))
+            return _screen.TryGetValue(definition.Name, out object? existingCycleValue) ? existingCycleValue : null;
+
+        stack.Add(definition.Name);
+
+        object? value = _screen.TryGetValue(definition.Name, out object? existingValue)
+            ? existingValue
+            : UiBindingRuntime.ParseTypedValue(definition.TypeName, definition.DefaultValue);
+
+        if (!string.IsNullOrWhiteSpace(definition.Expression) &&
+            UiExpressionRuntime.TryEvaluate(definition.Expression, identifier => ResolveExpressionIdentifier(Screen.Root, identifier, cache, stack), out object? expressionValue))
+        {
+            value = expressionValue;
+        }
+
+        _screen[definition.Name] = value;
+        cache[definition.Name] = value;
+        stack.Remove(definition.Name);
+        return value;
+    }
+
+    private bool TryEvaluateBindingValue(UiNode node, string path, out object? value)
+    {
+        return UiExpressionRuntime.TryEvaluate(path, identifier => ResolveExpressionIdentifier(node, identifier, null, null), out value);
+    }
+
+    private object? ResolveExpressionIdentifier(UiNode node, string identifier, Dictionary<string, object?>? cache, HashSet<string>? stack)
+    {
+        if (TryResolveScreenExpressionIdentifier(identifier, cache, stack, out object? screenValue))
+            return screenValue;
+
+        if (TryResolveBindingReference(node, identifier, out var source, out var memberPath))
+            return UiBindingRuntime.ResolvePath(source, memberPath);
+
+        return null;
+    }
+
+    private bool TryResolveScreenExpressionIdentifier(string identifier, Dictionary<string, object?>? cache, HashSet<string>? stack, out object? value)
+    {
+        value = null;
+        if (string.IsNullOrWhiteSpace(identifier))
+            return false;
+
+        string normalized = identifier;
+        if (normalized.StartsWith("Screen.", StringComparison.OrdinalIgnoreCase))
+            normalized = normalized["Screen.".Length..];
+        else if (normalized.StartsWith("Param.", StringComparison.OrdinalIgnoreCase))
+            normalized = normalized["Param.".Length..];
+        else if (normalized.StartsWith("Params.", StringComparison.OrdinalIgnoreCase))
+            normalized = normalized["Params.".Length..];
+
+        int dot = normalized.IndexOf('.');
+        string root = dot >= 0 ? normalized[..dot] : normalized;
+        string rest = dot >= 0 ? normalized[(dot + 1)..] : string.Empty;
+        if (!_screenDefinitions.TryGetValue(root, out UiScreenVariableDefinition? definition))
+            return false;
+
+        object? baseValue = cache != null && stack != null
+            ? EvaluateScreenVariable(definition, cache, stack)
+            : _screen.TryGetValue(definition.Name, out object? existing) ? existing : UiBindingRuntime.ParseTypedValue(definition.TypeName, definition.DefaultValue);
+
+        value = string.IsNullOrWhiteSpace(rest) ? baseValue : UiBindingRuntime.ResolvePath(baseValue, rest);
+        return true;
     }
 
     private void ProcessInput()
@@ -566,6 +760,9 @@ public static class UiSystem
 {
     private static readonly Dictionary<string, object> BindingSources = new(StringComparer.OrdinalIgnoreCase);
     private static readonly List<Canvas> Active = [];
+    // Pool temporary canvas snapshots used by hot paths to avoid per-frame allocations.
+    private static readonly Stack<List<Canvas>> _canvasListPool = [];
+    private static readonly Dictionary<World.World, List<Canvas>> _worldCanvasCache = [];
 
     public static string? AssetsRoot { get; set; }
     public static ProjectSettings? ProjectSettings { get; set; }
@@ -607,6 +804,7 @@ public static class UiSystem
         var canvas = new Canvas(screen, world, ownerEntity);
         Active.Add(canvas);
         Active.Sort((a, b) => a.Screen.SortingOrder.CompareTo(b.Screen.SortingOrder));
+        InvalidateCanvasCaches();
         return canvas;
     }
 
@@ -620,11 +818,17 @@ public static class UiSystem
             {
                 Active[i].Close();
                 Active.RemoveAt(i);
+                InvalidateCanvasCaches();
             }
         }
     }
 
-    public static void HideCanvas(Canvas canvas) { canvas.Close(); Active.Remove(canvas); }
+    public static void HideCanvas(Canvas canvas)
+    {
+        canvas.Close();
+        if (Active.Remove(canvas))
+            InvalidateCanvasCaches();
+    }
     public static Canvas? FindCanvas(string screenNameOrId, World.World? world = null) => Active.LastOrDefault(c => (world == null || c.World == world) && (string.Equals(c.Screen.Id, screenNameOrId, StringComparison.OrdinalIgnoreCase) || string.Equals(c.Screen.Name, screenNameOrId, StringComparison.OrdinalIgnoreCase)));
     public static Canvas? FindCanvasByRole(string role, World.World? world = null) => Active.LastOrDefault(c => (world == null || c.World == world) && string.Equals(c.OpenedRole, role, StringComparison.OrdinalIgnoreCase));
     public static void HideRole(string role, World.World? world = null)
@@ -635,12 +839,72 @@ public static class UiSystem
             {
                 Active[i].Close();
                 Active.RemoveAt(i);
+                InvalidateCanvasCaches();
             }
         }
     }
-    public static IReadOnlyList<Canvas> GetCanvases(World.World? world = null) => world == null ? Active : Active.Where(c => c.World == world).ToArray();
-    public static T? Query<T>(string nameOrId) where T : UiNode => Active.AsEnumerable().Reverse().Select(c => c.Query<T>(nameOrId)).FirstOrDefault(v => v != null);
-    public static UiNode? Query(string nameOrId) => Active.AsEnumerable().Reverse().Select(c => c.Query(nameOrId)).FirstOrDefault(v => v != null);
+
+    public static IReadOnlyList<Canvas> GetCanvases(World.World? world = null)
+    {
+        if (world == null)
+            return Active;
+
+        if (_worldCanvasCache.TryGetValue(world, out var cached))
+            return cached;
+
+        var canvases = new List<Canvas>();
+        for (int i = 0; i < Active.Count; i++)
+        {
+            var canvas = Active[i];
+            if (canvas.World == world)
+                canvases.Add(canvas);
+        }
+
+        _worldCanvasCache[world] = canvases;
+        return canvases;
+    }
+
+    public static T? Query<T>(string nameOrId) where T : UiNode
+    {
+        List<Canvas> canvases = RentCanvasList();
+        try
+        {
+            canvases.AddRange(Active);
+            for (int i = canvases.Count - 1; i >= 0; i--)
+            {
+                T? node = canvases[i].Query<T>(nameOrId);
+                if (node != null)
+                    return node;
+            }
+
+            return null;
+        }
+        finally
+        {
+            ReturnCanvasList(canvases);
+        }
+    }
+
+    public static UiNode? Query(string nameOrId)
+    {
+        List<Canvas> canvases = RentCanvasList();
+        try
+        {
+            canvases.AddRange(Active);
+            for (int i = canvases.Count - 1; i >= 0; i--)
+            {
+                UiNode? node = canvases[i].Query(nameOrId);
+                if (node != null)
+                    return node;
+            }
+
+            return null;
+        }
+        finally
+        {
+            ReturnCanvasList(canvases);
+        }
+    }
     public static void Bind(string path, object source) { if (!string.IsNullOrWhiteSpace(path) && source != null) BindingSources[path] = source; }
     public static void Unbind(string path) { if (!string.IsNullOrWhiteSpace(path)) BindingSources.Remove(path); }
     public static bool TryResolveBindingSource(string key, out object source) => BindingSources.TryGetValue(key, out source!);
@@ -649,8 +913,17 @@ public static class UiSystem
     {
         ViewportSize = new Vector2(Math.Max(1f, viewportWidth), Math.Max(1f, viewportHeight));
         PointerPosition = new Vector2(Verity.Input.Input.MousePosition.X, Verity.Input.Input.MousePosition.Y);
-        foreach (var canvas in Active.ToArray())
-            canvas.Update(viewportWidth, viewportHeight);
+        List<Canvas> canvases = RentCanvasList();
+        try
+        {
+            canvases.AddRange(Active);
+            for (int i = 0; i < canvases.Count; i++)
+                canvases[i].Update(viewportWidth, viewportHeight);
+        }
+        finally
+        {
+            ReturnCanvasList(canvases);
+        }
     }
 
     public static void Clear()
@@ -658,7 +931,22 @@ public static class UiSystem
         foreach (var canvas in Active)
             canvas.Close();
         Active.Clear();
+        InvalidateCanvasCaches();
         BindingSources.Clear();
+    }
+
+    private static List<Canvas> RentCanvasList()
+        => _canvasListPool.Count > 0 ? _canvasListPool.Pop() : new List<Canvas>(4);
+
+    private static void ReturnCanvasList(List<Canvas> canvases)
+    {
+        canvases.Clear();
+        _canvasListPool.Push(canvases);
+    }
+
+    private static void InvalidateCanvasCaches()
+    {
+        _worldCanvasCache.Clear();
     }
 
     public static Vector2 ViewportToCanvas(Vector2 viewportPosition, UIScreenAsset screen)

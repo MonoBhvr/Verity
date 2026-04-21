@@ -1,0 +1,24 @@
+  복원할 프로젝트를 확인하는 중...
+  복원할 모든 프로젝트가 최신 상태입니다.
+  Verity.Filter -> D:\Verity\Engine\Verity.Filter\bin\Debug\net9.0\Verity.Filter.dll
+  Verity.Input -> D:\Verity\Engine\Verity.Input\bin\Debug\net9.0\Verity.Input.dll
+  Verity.Core -> D:\Verity\Engine\Verity.Core\bin\Debug\net9.0\Verity.Core.dll
+  Verity.Graphics -> D:\Verity\Engine\Verity.Graphics\bin\Debug\net9.0\Verity.Graphics.dll
+D:\Verity\Editor\Verity.Editor\EditorApp.cs(546,24): warning CA1416: 이 호출 사이트에는 모든 플랫폼에서 연결할 수 있습니다. 'FontFamily.Name'은(는) 'windows' 6.1 이상에서만 지원됩니다. (https://learn.microsoft.com/dotnet/fundamentals/code-analysis/quality-rules/ca1416) [D:\Verity\Editor\Verity.Editor\Verity.Editor.csproj]
+D:\Verity\Editor\Verity.Editor\EditorApp.cs(545,36): warning CA1416: 이 호출 사이트에는 모든 플랫폼에서 연결할 수 있습니다. 'FontFamily'은(는) 'windows' 6.1 이상에서만 지원됩니다. (https://learn.microsoft.com/dotnet/fundamentals/code-analysis/quality-rules/ca1416) [D:\Verity\Editor\Verity.Editor\Verity.Editor.csproj]
+D:\Verity\Editor\Verity.Editor\Windows\UIEditorWindow.cs(2452,20): warning CA1416: 이 호출 사이트에는 모든 플랫폼에서 연결할 수 있습니다. 'FontFamily'은(는) 'windows' 6.1 이상에서만 지원됩니다. (https://learn.microsoft.com/dotnet/fundamentals/code-analysis/quality-rules/ca1416) [D:\Verity\Editor\Verity.Editor\Verity.Editor.csproj]
+D:\Verity\Editor\Verity.Editor\Windows\UIEditorWindow.cs(2453,42): warning CA1416: 이 호출 사이트에는 모든 플랫폼에서 연결할 수 있습니다. 'FontFamily.Name'은(는) 'windows' 6.1 이상에서만 지원됩니다. (https://learn.microsoft.com/dotnet/fundamentals/code-analysis/quality-rules/ca1416) [D:\Verity\Editor\Verity.Editor\Verity.Editor.csproj]
+D:\Verity\Editor\Verity.Editor\Windows\UIEditorWindow.cs(2452,20): warning CA1416: 이 호출 사이트에는 모든 플랫폼에서 연결할 수 있습니다. 'FontFamily.Families'은(는) 'windows' 6.1 이상에서만 지원됩니다. (https://learn.microsoft.com/dotnet/fundamentals/code-analysis/quality-rules/ca1416) [D:\Verity\Editor\Verity.Editor\Verity.Editor.csproj]
+  Verity.Editor -> D:\Verity\Editor\Verity.Editor\bin\Debug\net9.0\Verity.Editor.dll
+
+빌드했습니다.
+
+D:\Verity\Editor\Verity.Editor\EditorApp.cs(546,24): warning CA1416: 이 호출 사이트에는 모든 플랫폼에서 연결할 수 있습니다. 'FontFamily.Name'은(는) 'windows' 6.1 이상에서만 지원됩니다. (https://learn.microsoft.com/dotnet/fundamentals/code-analysis/quality-rules/ca1416) [D:\Verity\Editor\Verity.Editor\Verity.Editor.csproj]
+D:\Verity\Editor\Verity.Editor\EditorApp.cs(545,36): warning CA1416: 이 호출 사이트에는 모든 플랫폼에서 연결할 수 있습니다. 'FontFamily'은(는) 'windows' 6.1 이상에서만 지원됩니다. (https://learn.microsoft.com/dotnet/fundamentals/code-analysis/quality-rules/ca1416) [D:\Verity\Editor\Verity.Editor\Verity.Editor.csproj]
+D:\Verity\Editor\Verity.Editor\Windows\UIEditorWindow.cs(2452,20): warning CA1416: 이 호출 사이트에는 모든 플랫폼에서 연결할 수 있습니다. 'FontFamily'은(는) 'windows' 6.1 이상에서만 지원됩니다. (https://learn.microsoft.com/dotnet/fundamentals/code-analysis/quality-rules/ca1416) [D:\Verity\Editor\Verity.Editor\Verity.Editor.csproj]
+D:\Verity\Editor\Verity.Editor\Windows\UIEditorWindow.cs(2453,42): warning CA1416: 이 호출 사이트에는 모든 플랫폼에서 연결할 수 있습니다. 'FontFamily.Name'은(는) 'windows' 6.1 이상에서만 지원됩니다. (https://learn.microsoft.com/dotnet/fundamentals/code-analysis/quality-rules/ca1416) [D:\Verity\Editor\Verity.Editor\Verity.Editor.csproj]
+D:\Verity\Editor\Verity.Editor\Windows\UIEditorWindow.cs(2452,20): warning CA1416: 이 호출 사이트에는 모든 플랫폼에서 연결할 수 있습니다. 'FontFamily.Families'은(는) 'windows' 6.1 이상에서만 지원됩니다. (https://learn.microsoft.com/dotnet/fundamentals/code-analysis/quality-rules/ca1416) [D:\Verity\Editor\Verity.Editor\Verity.Editor.csproj]
+    경고 5개
+    오류 0개
+
+경과 시간: 00:00:04.09

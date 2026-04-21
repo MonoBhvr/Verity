@@ -91,6 +91,7 @@ public unsafe class ProjectWindow : EditorWindow
     public enum CreationType
     {
         Script,
+        LuaScript,
         World,
         Folder,
         Shader,
@@ -1426,6 +1427,8 @@ public unsafe class ProjectWindow : EditorWindow
             OpenCreatePopup(target, CreationType.World);
         if (ImGui.MenuItem(L10n.Tr("CreationType_Script")))
             OpenCreatePopup(target, CreationType.Script);
+        if (ImGui.MenuItem("Lua Script"))
+            OpenCreatePopup(target, CreationType.LuaScript);
         if (ImGui.MenuItem(L10n.Tr("CreationType_Folder"), "Ctrl+N"))
             OpenCreatePopup(target, CreationType.Folder);
         ImGui.Separator();
@@ -1789,6 +1792,7 @@ public unsafe class ProjectWindow : EditorWindow
         _inputBuffer = type switch
         {
             CreationType.Script => L10n.Tr("creation_default_script"),
+            CreationType.LuaScript => "NewLuaScript",
             CreationType.World => L10n.Tr("creation_default_world"),
             CreationType.Shader => L10n.Tr("creation_default_shader"),
             CreationType.Style => L10n.Tr("creation_default_style"),
@@ -1876,9 +1880,12 @@ public unsafe class ProjectWindow : EditorWindow
                 case CreationType.Script:
                     File.WriteAllText(fullPath + ".cs", $"// using Verity.Core;\n// using Verity.Graphics;\n// using Verity.Input;\n// using System.Numerics;\nusing Verity.Core.ECS;\n\npublic class {_inputBuffer} : Script\n{{\n    void Start()\n    {{\n    }}\n\n    void Update()\n    {{\n    }}\n}}");
                     break;
+                case CreationType.LuaScript:
+                    File.WriteAllText(fullPath + ".lua", "function Awake()\nend\n\nfunction Start()\nend\n\nfunction Update(deltaTime)\nend\n");
+                    break;
                 case CreationType.World:
                     var world = new World(_inputBuffer);
-                    var cameraEntity = world.CreateEntity("Main Camera");
+                    var cameraEntity = world.CreateEntity(L10n.Tr("creation_default_main_camera"));
                     cameraEntity.AddComponent<Camera>();
                     string worldPath = fullPath + ".verity";
                     File.WriteAllText(worldPath, SceneSerializer.Serialize(world));
@@ -2090,6 +2097,7 @@ public unsafe class ProjectWindow : EditorWindow
         }
 
         if (normalized.EndsWith(".cs", StringComparison.OrdinalIgnoreCase) ||
+            normalized.EndsWith(".lua", StringComparison.OrdinalIgnoreCase) ||
             normalized.EndsWith(".shader", StringComparison.OrdinalIgnoreCase) ||
             normalized.EndsWith(".style", StringComparison.OrdinalIgnoreCase))
         {
@@ -2428,7 +2436,7 @@ public unsafe class ProjectWindow : EditorWindow
     {
         string candidate = desiredName.Trim();
         if (string.IsNullOrWhiteSpace(candidate))
-            candidate = "Sprite";
+            candidate = L10n.Tr("CreationType_Sprite");
 
         string unique = candidate;
         int suffix = 1;
@@ -2588,10 +2596,13 @@ public unsafe class ProjectWindow : EditorWindow
     private string BuildEditorLocalizedCharacterSet()
     {
         var builder = new StringBuilder(SdfFontGenerationOptions.DefaultCharacterSet);
-        AppendLocaleCharacters(builder, Path.Combine(AppContext.BaseDirectory, "Locales", "en.json"));
-        AppendLocaleCharacters(builder, Path.Combine(AppContext.BaseDirectory, "Locales", "ko.json"));
-        AppendLocaleCharacters(builder, Path.Combine(Directory.GetCurrentDirectory(), "Editor", "Verity.Editor", "Locales", "en.json"));
-        AppendLocaleCharacters(builder, Path.Combine(Directory.GetCurrentDirectory(), "Editor", "Verity.Editor", "Locales", "ko.json"));
+        foreach (string lang in L10n.AvailableLanguages)
+        {
+            foreach (string path in L10n.EnumerateCandidatePaths(lang))
+            {
+                AppendLocaleCharacters(builder, path);
+            }
+        }
         return string.Concat(EnumerateDistinctRunes(builder.ToString()));
     }
 

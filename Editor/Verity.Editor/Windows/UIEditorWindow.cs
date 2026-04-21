@@ -1,4 +1,7 @@
 using System.Numerics;
+using System.Reflection;
+using System.Linq;
+using System.IO;
 using System.Text.Json;
 using Hexa.NET.ImGui;
 using Irodori.Backend.OpenGL;
@@ -54,6 +57,7 @@ public sealed unsafe class UIEditorWindow : EditorWindow
     private float _dragStartAngle;
     private readonly Stack<UiEditorUndoSnapshot> _undoStack = new();
     private readonly Stack<UiEditorUndoSnapshot> _redoStack = new();
+    private readonly Dictionary<UiBinding, bool> _bindingAdvancedModes = new();
     private string _lastCommittedScreenJson = string.Empty;
     private UiEditorUndoSnapshot? _pendingContinuousUndoSnapshot;
     private FramebufferObject.Uploaded? _previewFbo;
@@ -61,7 +65,10 @@ public sealed unsafe class UIEditorWindow : EditorWindow
     private int _previewRenderWidth;
     private int _previewRenderHeight;
     private bool _restoringUndo;
+    private string _fontAssetSearchFilter = string.Empty;
+    private string _fontFamilySearchFilter = string.Empty;
     private const int MaxUndoHistory = 100;
+    private const string FontAssetExtensions = ".fontasset;.sdfont";
 
     private readonly (string LabelKey, Vector2 Size)[] _presets =
     [
@@ -191,11 +198,11 @@ public sealed unsafe class UIEditorWindow : EditorWindow
             ResetCanvasView();
 
         ImGui.SameLine();
-        DrawToolButton("Move", CanvasTool.Move, new Vector2(56f, 0f));
+        DrawToolButton(L10n.Tr("ui_tool_move"), CanvasTool.Move, new Vector2(56f, 0f));
         ImGui.SameLine();
-        DrawToolButton("Scale", CanvasTool.Scale, new Vector2(56f, 0f));
+        DrawToolButton(L10n.Tr("ui_tool_scale"), CanvasTool.Scale, new Vector2(56f, 0f));
         ImGui.SameLine();
-        DrawToolButton("Rotate", CanvasTool.Rotate, new Vector2(60f, 0f));
+        DrawToolButton(L10n.Tr("ui_tool_rotate"), CanvasTool.Rotate, new Vector2(60f, 0f));
 
         ImGui.SameLine();
         if (ImGui.Button("-", new Vector2(24, 0)))
@@ -445,10 +452,10 @@ public sealed unsafe class UIEditorWindow : EditorWindow
     {
         string toolName = _activeCanvasTool switch
         {
-            CanvasTool.Move => "Move",
-            CanvasTool.Scale => "Scale",
-            CanvasTool.Rotate => "Rotate",
-            _ => "Move"
+            CanvasTool.Move => L10n.Tr("ui_tool_move"),
+            CanvasTool.Scale => L10n.Tr("ui_tool_scale"),
+            CanvasTool.Rotate => L10n.Tr("ui_tool_rotate"),
+            _ => L10n.Tr("ui_tool_move")
         };
         string info = $"{(int)_screen!.ReferenceResolution.X} x {(int)_screen.ReferenceResolution.Y}  |  {L10n.Tr("ui_label_zoom", _canvasZoom.ToString("F2"))}  |  {toolName}";
         draw.AddText(origin + new Vector2(12f, 10f), ImGui.GetColorU32(new Vector4(1f, 1f, 1f, 0.85f)), info);
@@ -787,10 +794,38 @@ public sealed unsafe class UIEditorWindow : EditorWindow
                 Save();
             }
 
-            string typeName = Coerce(variable.TypeName);
-            if (ImGui.InputText(TrId("label_type", "ScreenVariableType"), ref typeName, 128))
+            string[] variableTypes = GetAvailableScreenVariableTypes();
+            int typeIndex = Array.FindIndex(variableTypes, type => string.Equals(type, variable.TypeName, StringComparison.OrdinalIgnoreCase));
+            typeIndex = typeIndex < 0 ? 0 : typeIndex;
+            if (ImGui.BeginCombo(TrId("label_type", "ScreenVariableType"), GetLocalizedVariableType(variableTypes[typeIndex])))
             {
-                variable.TypeName = typeName;
+                for (int typeOptionIndex = 0; typeOptionIndex < variableTypes.Length; typeOptionIndex++)
+                {
+                    bool selected = typeOptionIndex == typeIndex;
+                    if (ImGui.Selectable(GetLocalizedVariableType(variableTypes[typeOptionIndex]), selected))
+                    {
+                        variable.TypeName = variableTypes[typeOptionIndex];
+                        Save();
+                    }
+
+                    if (selected)
+                        ImGui.SetItemDefaultFocus();
+                }
+
+                ImGui.EndCombo();
+            }
+
+            string defaultValue = Coerce(variable.DefaultValue);
+            if (ImGui.InputText(TrId("ui_field_default_value", "ScreenVariableDefaultValue"), ref defaultValue, 256))
+            {
+                variable.DefaultValue = defaultValue;
+                Save();
+            }
+
+            string expression = Coerce(variable.Expression);
+            if (ImGui.InputText(TrId("ui_field_expression", "ScreenVariableExpression"), ref expression, 256))
+            {
+                variable.Expression = expression;
                 Save();
             }
 
@@ -969,10 +1004,16 @@ public sealed unsafe class UIEditorWindow : EditorWindow
         Vector4 border = visual.BorderColor;
         if (ImGui.ColorEdit4(TrId("ui_field_border", "VisualBorder"), ref border)) { visual.BorderColor = border; Save(); }
 
-        string fontPath = Coerce(visual.FontPath);
-        if (ImGui.InputText(TrId("ui_field_font_path", "VisualFontPath"), ref fontPath, 260)) { visual.FontPath = fontPath; Save(); }
-        string fontFamily = Coerce(visual.FontFamily);
-        if (ImGui.InputText(TrId("ui_field_font_family", "VisualFontFamily"), ref fontFamily, 128)) { visual.FontFamily = fontFamily; Save(); }
+        DrawFontPathSelector(TrId("ui_field_font_path", "VisualFontPath"), visual.FontPath, value =>
+        {
+            visual.FontPath = value;
+            Save();
+        });
+        DrawFontFamilySelector(TrId("ui_field_font_family", "VisualFontFamily"), visual.FontFamily, value =>
+        {
+            visual.FontFamily = value;
+            Save();
+        });
 
         int horizontalAlignment = (int)visual.TextHorizontalAlignment;
         string[] horizontalAlignmentItems =
@@ -1020,10 +1061,37 @@ public sealed unsafe class UIEditorWindow : EditorWindow
         {
             var binding = node.Bindings[i];
             ImGui.PushID($"binding-{i}");
-            string path = Coerce(binding.Path);
-            if (ImGui.InputText(TrId("ui_field_path", "BindingPath"), ref path, 256)) { binding.Path = path; Save(); }
-            string targetProperty = Coerce(binding.TargetProperty);
-            if (ImGui.InputText(TrId("ui_field_property", "BindingProperty"), ref targetProperty, 128)) { binding.TargetProperty = targetProperty; Save(); }
+
+            bool isAdvanced = IsBindingAdvanced(binding);
+            if (ImGui.SmallButton(WithId(isAdvanced ? L10n.Tr("ui_btn_binding_basic") : L10n.Tr("ui_btn_binding_advanced"), "BindingModeToggle")))
+            {
+                SetBindingAdvanced(binding, !isAdvanced);
+                if (!IsBindingAdvanced(binding) && !TryParseBasicBindingPath(binding.Path, out _, out _))
+                {
+                    binding.Path = L10n.Tr("ui_default_binding_path");
+                    if (string.IsNullOrWhiteSpace(binding.TargetProperty))
+                        binding.TargetProperty = L10n.Tr("ui_default_binding_target_property");
+                }
+
+                Save();
+                isAdvanced = IsBindingAdvanced(binding);
+            }
+
+            ImGui.SameLine();
+            ImGui.TextDisabled(isAdvanced ? L10n.Tr("ui_label_binding_advanced_hint") : L10n.Tr("ui_label_binding_basic_hint"));
+
+            if (isAdvanced)
+            {
+                string path = binding.Path ?? string.Empty;
+                if (ImGui.InputText(TrId("ui_field_path", "BindingPath"), ref path, 256)) { binding.Path = path; Save(); }
+                string targetProperty = binding.TargetProperty ?? string.Empty;
+                if (ImGui.InputText(TrId("ui_field_property", "BindingProperty"), ref targetProperty, 128)) { binding.TargetProperty = targetProperty; Save(); }
+            }
+            else
+            {
+                DrawBasicBindingEditor(node, binding);
+            }
+
             int mode = (int)binding.Mode;
             if (ImGui.Combo(TrId("ui_field_mode", "BindingMode"), ref mode, $"{L10n.Tr("ui_binding_mode_one_way")}\0{L10n.Tr("ui_binding_mode_two_way")}\0")) { binding.Mode = (UiBindingMode)mode; Save(); }
             if (ImGui.SmallButton(TrId("ctx_remove", "BindingRemove"))) { node.Bindings.RemoveAt(i); Save(); ImGui.PopID(); break; }
@@ -1037,6 +1105,346 @@ public sealed unsafe class UIEditorWindow : EditorWindow
             Save();
         }
     }
+
+    private void DrawBasicBindingEditor(UiNode node, UiBinding binding)
+    {
+        string[] sourceKeys =
+        [
+            "Screen",
+            "Param",
+            "Params",
+            "Item",
+            "State"
+        ];
+
+        if (!TryParseBasicBindingPath(binding.Path, out string sourceKey, out string memberPath))
+        {
+            sourceKey = "Screen";
+            memberPath = string.Empty;
+        }
+
+        int sourceIndex = Array.FindIndex(sourceKeys, option => string.Equals(option, sourceKey, StringComparison.OrdinalIgnoreCase));
+        sourceIndex = sourceIndex < 0 ? 0 : sourceIndex;
+        if (ImGui.BeginCombo(TrId("ui_field_binding_source", "BindingSource"), GetLocalizedSourceName(sourceKeys[sourceIndex])))
+        {
+            for (int optionIndex = 0; optionIndex < sourceKeys.Length; optionIndex++)
+            {
+                bool selected = optionIndex == sourceIndex;
+                if (ImGui.Selectable(GetLocalizedSourceName(sourceKeys[optionIndex]), selected))
+                {
+                    sourceIndex = optionIndex;
+                    sourceKey = sourceKeys[optionIndex];
+                    binding.Path = BuildBasicBindingPath(sourceKey, memberPath);
+                    Save();
+                }
+
+                if (selected)
+                    ImGui.SetItemDefaultFocus();
+            }
+
+            ImGui.EndCombo();
+        }
+
+        var targetOptions = GetBindableTargetOptions(node);
+        ParseBindableTargetProperty(binding.TargetProperty, targetOptions, out string selectedGroup, out string selectedPropertyPath);
+
+        string[] groups = targetOptions.Select(option => option.Group).Distinct(StringComparer.Ordinal).ToArray();
+        if (groups.Length == 0)
+            return;
+
+        string groupPreview = string.IsNullOrWhiteSpace(selectedGroup) ? GetLocalizedGroupName(groups[0]) : GetLocalizedGroupName(selectedGroup);
+        if (ImGui.BeginCombo(TrId("ui_field_binding_target_group", "BindingTargetGroup"), groupPreview))
+        {
+            foreach (string group in groups)
+            {
+                bool selected = string.Equals(selectedGroup, group, StringComparison.Ordinal);
+                if (ImGui.Selectable(GetLocalizedGroupName(group), selected))
+                {
+                    selectedGroup = group;
+                    var firstOption = targetOptions.First(option => string.Equals(option.Group, selectedGroup, StringComparison.Ordinal));
+                    binding.TargetProperty = firstOption.Path;
+                    Save();
+                }
+
+                if (selected)
+                    ImGui.SetItemDefaultFocus();
+            }
+
+            ImGui.EndCombo();
+        }
+
+        var detailOptions = targetOptions.Where(option => string.Equals(option.Group, selectedGroup, StringComparison.Ordinal)).ToArray();
+        if (detailOptions.Length == 0)
+        {
+            selectedGroup = groups[0];
+            detailOptions = targetOptions.Where(option => string.Equals(option.Group, selectedGroup, StringComparison.Ordinal)).ToArray();
+        }
+
+        string detailPreview = detailOptions.FirstOrDefault(option => string.Equals(option.Path, binding.TargetProperty, StringComparison.Ordinal)).Label
+            ?? detailOptions[0].Label;
+        if (ImGui.BeginCombo(TrId("ui_field_property", "BindingPropertyCombo"), detailPreview))
+        {
+            foreach (var option in detailOptions)
+            {
+                bool selected = string.Equals(binding.TargetProperty, option.Path, StringComparison.Ordinal);
+                if (ImGui.Selectable(option.Label, selected))
+                {
+                    binding.TargetProperty = option.Path;
+                    Save();
+                }
+
+                if (selected)
+                    ImGui.SetItemDefaultFocus();
+            }
+
+            ImGui.EndCombo();
+        }
+
+        List<string> suggestions = GetBindingSuggestions(sourceKey, memberPath);
+        string suggestionPreview = suggestions.Count == 0
+            ? L10n.Tr("ui_msg_no_binding_candidates")
+            : (string.IsNullOrWhiteSpace(memberPath) ? suggestions[0] : memberPath);
+        if (ImGui.BeginCombo(TrId("ui_field_binding_data", "BindingDataCombo"), suggestionPreview))
+        {
+            foreach (string suggestion in suggestions)
+            {
+                bool selected = string.Equals(memberPath, suggestion, StringComparison.OrdinalIgnoreCase);
+                if (ImGui.Selectable(suggestion, selected))
+                {
+                    memberPath = suggestion;
+                    binding.Path = BuildBasicBindingPath(sourceKey, memberPath);
+                    Save();
+                }
+
+                if (selected)
+                    ImGui.SetItemDefaultFocus();
+            }
+
+            ImGui.EndCombo();
+        }
+
+        ImGui.TextDisabled(L10n.Tr("ui_msg_binding_pick_hint"));
+
+        string pathValue = memberPath;
+        if (ImGui.InputText(TrId("ui_field_binding_value", "BindingValue"), ref pathValue, 256))
+        {
+            memberPath = pathValue;
+            binding.Path = BuildBasicBindingPath(sourceKey, memberPath);
+            Save();
+        }
+
+        ImGui.TextDisabled(L10n.Tr("ui_msg_binding_value_hint"));
+
+        List<string> filteredSuggestions = GetBindingSuggestions(sourceKey, pathValue);
+        if (filteredSuggestions.Count > 0)
+        {
+            float height = MathF.Min(104f, 24f + (filteredSuggestions.Count * 18f));
+            if (ImGui.BeginListBox("##binding-autocomplete", new Vector2(-1f, height)))
+            {
+                foreach (string suggestion in filteredSuggestions)
+                {
+                    bool selected = string.Equals(pathValue, suggestion, StringComparison.OrdinalIgnoreCase);
+                    if (ImGui.Selectable(suggestion, selected))
+                    {
+                        binding.Path = BuildBasicBindingPath(sourceKey, suggestion);
+                        Save();
+                    }
+                }
+
+                ImGui.EndListBox();
+            }
+        }
+    }
+
+    private bool IsBindingAdvanced(UiBinding binding)
+    {
+        if (_bindingAdvancedModes.TryGetValue(binding, out bool isAdvanced))
+            return isAdvanced;
+
+        return !TryParseBasicBindingPath(binding.Path, out _, out _);
+    }
+
+    private void SetBindingAdvanced(UiBinding binding, bool isAdvanced)
+    {
+        _bindingAdvancedModes[binding] = isAdvanced;
+    }
+
+    private static bool TryParseBasicBindingPath(string? path, out string sourceKey, out string memberPath)
+    {
+        sourceKey = "Screen";
+        memberPath = string.Empty;
+        if (string.IsNullOrWhiteSpace(path))
+            return true;
+
+        string value = path.Trim();
+        if (value.StartsWith("="))
+            return false;
+
+        string[] roots = ["Screen", "Param", "Params", "Item", "State"];
+        foreach (string root in roots)
+        {
+            string prefix = $"{root}.";
+            if (value.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+            {
+                sourceKey = root;
+                memberPath = value[prefix.Length..];
+                return true;
+            }
+        }
+
+        if (value.Contains('(') || value.Contains(')') || value.Contains('+') || value.Contains('*') || value.Contains('/') || value.Contains('%'))
+            return false;
+
+        memberPath = value;
+        return true;
+    }
+
+    private static string BuildBasicBindingPath(string sourceKey, string? memberPath)
+    {
+        string value = (memberPath ?? string.Empty).Trim();
+        return string.IsNullOrWhiteSpace(value)
+            ? string.Empty
+            : $"{sourceKey}.{value}";
+    }
+
+    private List<string> GetBindingSuggestions(string sourceKey, string? filter)
+    {
+        IEnumerable<string> candidates = sourceKey switch
+        {
+            "Screen" or "Param" or "Params" => _screen?.Variables.Select(variable => variable.Name).Where(name => !string.IsNullOrWhiteSpace(name)) ?? [],
+            "Item" => ["Name", "Title", "Text", "Value", "Id", "Description", "Count", "Index", "X", "Y"],
+            "State" => ["SelectedIndex", "CurrentTab", "VisibleCount", "HealthRatio", "LastCommand"],
+            _ => []
+        };
+
+        string text = (filter ?? string.Empty).Trim();
+        return candidates
+            .Where(candidate => !string.IsNullOrWhiteSpace(candidate))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Where(candidate => string.IsNullOrWhiteSpace(text) || candidate.Contains(text, StringComparison.OrdinalIgnoreCase))
+            .OrderBy(candidate => candidate, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+    }
+
+    private static string[] GetAvailableScreenVariableTypes()
+    {
+        return ["object", "string", "bool", "int", "float", "double", "vector2"];
+    }
+
+    private static void ParseBindableTargetProperty(string? targetProperty, IReadOnlyList<BindingTargetOption> options, out string group, out string propertyPath)
+    {
+        BindingTargetOption? selected = options.FirstOrDefault(option => string.Equals(option.Path, targetProperty, StringComparison.Ordinal));
+        if (selected != null)
+        {
+            group = selected.Value.Group;
+            propertyPath = selected.Value.Path;
+            return;
+        }
+
+        group = options[0].Group;
+        propertyPath = options[0].Path;
+    }
+
+    private static BindingTargetOption[] GetBindableTargetOptions(UiNode node)
+    {
+        var options = new List<BindingTargetOption>
+        {
+            new("Node", L10n.Tr("ui_binding_target_active"), "Active"),
+            new("Node", L10n.Tr("ui_binding_target_visible"), "Visible"),
+            new("Transform", L10n.Tr("ui_binding_target_position_x"), "Transform.Position.X"),
+            new("Transform", L10n.Tr("ui_binding_target_position_y"), "Transform.Position.Y"),
+            new("Transform", L10n.Tr("ui_binding_target_size_x"), "Transform.Size.X"),
+            new("Transform", L10n.Tr("ui_binding_target_size_y"), "Transform.Size.Y"),
+            new("Transform", L10n.Tr("ui_binding_target_rotation"), "Transform.Rotation"),
+            new("Transform", L10n.Tr("ui_binding_target_scale"), "Transform.Scale"),
+            new("Visual", L10n.Tr("ui_binding_target_background_color"), "Visual.BackgroundColor"),
+            new("Visual", L10n.Tr("ui_binding_target_foreground_color"), "Visual.ForegroundColor"),
+            new("Visual", L10n.Tr("ui_binding_target_default_font_size"), "Visual.FontSize")
+        };
+
+        switch (node)
+        {
+            case TextNode:
+                options.AddRange([
+                    new("Text", L10n.Tr("ui_binding_target_text"), "Text"),
+                    new("Text", L10n.Tr("ui_binding_target_text_font_size"), "FontSize"),
+                    new("Text", L10n.Tr("ui_binding_target_word_wrap"), "WordWrap"),
+                    new("Text", L10n.Tr("ui_binding_target_localization_key"), "LocalizationKey")
+                ]);
+                break;
+            case Button:
+                options.Add(new("Text", L10n.Tr("ui_binding_target_button_text"), "Text"));
+                break;
+            case Toggle:
+                options.AddRange([new("Text", L10n.Tr("ui_binding_target_toggle_text"), "Text"), new("Toggle", L10n.Tr("ui_binding_target_checked"), "IsChecked")]);
+                break;
+            case InputField:
+            case TextArea:
+                options.AddRange([new("Input", L10n.Tr("ui_binding_target_input_value"), "Value"), new("Input", L10n.Tr("ui_binding_target_placeholder"), "Placeholder")]);
+                break;
+            case Slider:
+                options.AddRange([new("Value", L10n.Tr("ui_binding_target_current_value"), "Value"), new("Value", L10n.Tr("ui_binding_target_min_value"), "Min"), new("Value", L10n.Tr("ui_binding_target_max_value"), "Max")]);
+                break;
+            case ProgressBar:
+                options.AddRange([new("Value", L10n.Tr("ui_binding_target_current_value"), "Value"), new("Value", L10n.Tr("ui_binding_target_min_value"), "Min"), new("Value", L10n.Tr("ui_binding_target_max_value"), "Max")]);
+                break;
+            case Dropdown:
+                options.Add(new("Dropdown", L10n.Tr("ui_binding_target_selected_index"), "SelectedIndex"));
+                break;
+            case Scrollbar:
+                options.Add(new("Value", L10n.Tr("ui_binding_target_scroll_value"), "Value"));
+                break;
+            case Window:
+                options.Add(new("Text", L10n.Tr("ui_binding_target_window_title"), "Title"));
+                break;
+            case Image:
+                options.AddRange([new("Image", L10n.Tr("ui_binding_target_preserve_aspect"), "PreserveAspect"), new("Image", L10n.Tr("ui_binding_target_sprite_path"), "Sprite.Path")]);
+                break;
+        }
+
+        return options
+            .GroupBy(option => option.Path, StringComparer.Ordinal)
+            .Select(group => group.First())
+            .ToArray();
+    }
+
+    private readonly record struct BindingTargetOption(string Group, string Label, string Path);
+
+    private static string GetLocalizedGroupName(string group) => group switch
+    {
+        "Node" => L10n.Tr("ui_binding_group_node"),
+        "Transform" => L10n.Tr("ui_binding_group_transform"),
+        "Visual" => L10n.Tr("ui_binding_group_visual"),
+        "Text" => L10n.Tr("ui_binding_group_text"),
+        "Toggle" => L10n.Tr("ui_binding_group_toggle"),
+        "Input" => L10n.Tr("ui_binding_group_input"),
+        "Value" => L10n.Tr("ui_binding_group_value"),
+        "Dropdown" => L10n.Tr("ui_binding_group_dropdown"),
+        "Image" => L10n.Tr("ui_binding_group_image"),
+        _ => group
+    };
+
+    private static string GetLocalizedSourceName(string sourceKey) => sourceKey switch
+    {
+        "Screen" => L10n.Tr("ui_binding_source_screen"),
+        "Param" => L10n.Tr("ui_binding_source_param"),
+        "Params" => L10n.Tr("ui_binding_source_params"),
+        "Item" => L10n.Tr("ui_binding_source_item"),
+        "State" => L10n.Tr("ui_binding_source_state"),
+        _ => sourceKey
+    };
+
+    private static string GetLocalizedVariableType(string typeName) => typeName switch
+    {
+        "object" => L10n.Tr("ui_var_type_object"),
+        "string" => L10n.Tr("ui_var_type_string"),
+        "bool" => L10n.Tr("ui_var_type_bool"),
+        "int" => L10n.Tr("ui_var_type_int"),
+        "float" => L10n.Tr("ui_var_type_float"),
+        "double" => L10n.Tr("ui_var_type_double"),
+        "vector2" => L10n.Tr("ui_var_type_vector2"),
+        _ => typeName
+    };
 
     private void DrawEventsEditor(UiNode node)
     {
@@ -1087,6 +1495,19 @@ public sealed unsafe class UIEditorWindow : EditorWindow
             Save(deferUndo: fontSizeDeferred);
         }
         FinalizeContinuousInspectorEdit();
+
+        DrawFontPathSelector(TrId("ui_field_font_path", "TextFontPath"), text.FontPath, value =>
+        {
+            text.FontPath = value;
+            Save();
+        });
+
+        DrawFontFamilySelector(TrId("ui_field_font_family", "TextFontFamily"), text.FontFamily, value =>
+        {
+            text.FontFamily = value;
+            Save();
+        });
+
         bool wrap = text.WordWrap;
         if (ImGui.Checkbox(TrId("ui_field_word_wrap", "TextWordWrap"), ref wrap)) { text.WordWrap = wrap; Save(); }
     }
@@ -1913,85 +2334,227 @@ public sealed unsafe class UIEditorWindow : EditorWindow
 
     private static string Coerce(string? value) => value ?? string.Empty;
 
+    private void DrawFontPathSelector(string label, string? currentPath, Action<string> onUpdate)
+    {
+        string normalizedCurrent = Coerce(currentPath);
+        string preview = string.IsNullOrWhiteSpace(normalizedCurrent)
+            ? L10n.Tr("msg_none")
+            : Path.GetFileName(normalizedCurrent);
+
+        if (ImGui.BeginCombo(label, preview))
+        {
+            ImGui.InputText("##font-path-search", ref _fontAssetSearchFilter, 128);
+            ImGui.Separator();
+
+            bool currentSelected = string.IsNullOrWhiteSpace(normalizedCurrent);
+            if (ImGui.Selectable(L10n.Tr("msg_none"), currentSelected))
+                onUpdate(string.Empty);
+            if (currentSelected)
+                ImGui.SetItemDefaultFocus();
+
+            string[] fontAssets = GetAvailableFontAssetPaths();
+            bool hasCurrentEntry = string.IsNullOrWhiteSpace(normalizedCurrent)
+                || fontAssets.Contains(normalizedCurrent, StringComparer.OrdinalIgnoreCase);
+            if (!hasCurrentEntry && FontEntryMatchesFilter(normalizedCurrent, _fontAssetSearchFilter))
+            {
+                bool selected = true;
+                if (ImGui.Selectable(normalizedCurrent, selected))
+                    onUpdate(normalizedCurrent);
+            }
+
+            foreach (string assetPath in fontAssets)
+            {
+                if (!FontEntryMatchesFilter(assetPath, _fontAssetSearchFilter))
+                    continue;
+
+                bool selected = string.Equals(assetPath, normalizedCurrent, StringComparison.OrdinalIgnoreCase);
+                if (ImGui.Selectable(assetPath, selected))
+                    onUpdate(assetPath);
+
+                if (selected)
+                    ImGui.SetItemDefaultFocus();
+            }
+
+            ImGui.EndCombo();
+        }
+
+        if (ImGui.BeginDragDropTarget())
+        {
+            var payload = ImGui.AcceptDragDropPayload("ASSET_PATH");
+            if (payload.Handle != null && !string.IsNullOrWhiteSpace(EditorSelection.DraggedAssetPath) && IsAllowedFontAsset(EditorSelection.DraggedAssetPath))
+                onUpdate(Coerce(EditorSelection.DraggedAssetPath));
+            ImGui.EndDragDropTarget();
+        }
+    }
+
+    private void DrawFontFamilySelector(string label, string? currentFamily, Action<string> onUpdate)
+    {
+        string normalizedCurrent = Coerce(currentFamily);
+        string preview = string.IsNullOrWhiteSpace(normalizedCurrent)
+            ? L10n.Tr("msg_none")
+            : normalizedCurrent;
+
+        if (!ImGui.BeginCombo(label, preview))
+            return;
+
+        ImGui.InputText("##font-family-search", ref _fontFamilySearchFilter, 128);
+        ImGui.Separator();
+
+        bool noneSelected = string.IsNullOrWhiteSpace(normalizedCurrent);
+        if (ImGui.Selectable(L10n.Tr("msg_none"), noneSelected))
+            onUpdate(string.Empty);
+        if (noneSelected)
+            ImGui.SetItemDefaultFocus();
+
+        string[] families = GetAvailableFontFamilies();
+        bool hasCurrentEntry = string.IsNullOrWhiteSpace(normalizedCurrent)
+            || families.Contains(normalizedCurrent, StringComparer.OrdinalIgnoreCase);
+        if (!hasCurrentEntry && FontEntryMatchesFilter(normalizedCurrent, _fontFamilySearchFilter))
+        {
+            if (ImGui.Selectable(normalizedCurrent, true))
+                onUpdate(normalizedCurrent);
+        }
+
+        foreach (string family in families)
+        {
+            if (!FontEntryMatchesFilter(family, _fontFamilySearchFilter))
+                continue;
+
+            bool selected = string.Equals(family, normalizedCurrent, StringComparison.OrdinalIgnoreCase);
+            if (ImGui.Selectable(family, selected))
+                onUpdate(family);
+
+            if (selected)
+                ImGui.SetItemDefaultFocus();
+        }
+
+        ImGui.EndCombo();
+    }
+
+    private string[] GetAvailableFontAssetPaths()
+    {
+        if (string.IsNullOrWhiteSpace(_app.AssetsPath) || !Directory.Exists(_app.AssetsPath))
+            return [];
+
+        string[] allowedExtensions = FontAssetExtensions.Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        return Directory.EnumerateFiles(_app.AssetsPath, "*", SearchOption.AllDirectories)
+            .Where(path => allowedExtensions.Contains(Path.GetExtension(path), StringComparer.OrdinalIgnoreCase))
+            .Select(AssetPathUtility.Normalize)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(path => path, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+    }
+
+    private static string[] GetAvailableFontFamilies()
+    {
+        try
+        {
+            return System.Drawing.FontFamily.Families
+                .Select(static family => family.Name)
+                .Where(static name => !string.IsNullOrWhiteSpace(name))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .OrderBy(static name => name, StringComparer.OrdinalIgnoreCase)
+                .ToArray();
+        }
+        catch
+        {
+            return [];
+        }
+    }
+
+    private static bool FontEntryMatchesFilter(string value, string filter)
+    {
+        return string.IsNullOrWhiteSpace(filter)
+            || value.Contains(filter, StringComparison.OrdinalIgnoreCase)
+            || Path.GetFileName(value).Contains(filter, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool IsAllowedFontAsset(string assetPath)
+    {
+        string extension = Path.GetExtension(assetPath);
+        return extension.Equals(".fontasset", StringComparison.OrdinalIgnoreCase)
+            || extension.Equals(".sdfont", StringComparison.OrdinalIgnoreCase);
+    }
+
     private static void ApplyLocalizedDisplayDefaults(UiNode node)
     {
         switch (node)
         {
-            case UiContainer container when string.Equals(container.Name, "Container", StringComparison.Ordinal):
+            case UiContainer container when string.Equals(container.Name, UiDefaultDisplayStrings.Container, StringComparison.Ordinal):
                 container.Name = L10n.Tr("ui_node_container");
                 break;
-            case Panel panel when string.Equals(panel.Name, "Panel", StringComparison.Ordinal):
+            case Panel panel when string.Equals(panel.Name, UiDefaultDisplayStrings.Panel, StringComparison.Ordinal):
                 panel.Name = L10n.Tr("ui_node_panel");
                 break;
-            case Label label when string.Equals(label.Text, "Label", StringComparison.Ordinal):
+            case Label label when string.Equals(label.Text, UiDefaultDisplayStrings.Label, StringComparison.Ordinal):
                 label.Name = L10n.Tr("ui_node_label");
                 label.Text = L10n.Tr("ui_default_label_text");
                 break;
-            case RichText richText when string.Equals(richText.Text, "<b>Rich Text</b>", StringComparison.Ordinal):
+            case RichText richText when string.Equals(richText.Text, UiDefaultDisplayStrings.RichTextMarkup, StringComparison.Ordinal):
                 richText.Name = L10n.Tr("ui_node_rich_text");
                 richText.Text = L10n.Tr("ui_default_rich_text");
                 break;
-            case Image image when string.Equals(image.Name, "Image", StringComparison.Ordinal):
+            case Image image when string.Equals(image.Name, UiDefaultDisplayStrings.Image, StringComparison.Ordinal):
                 image.Name = L10n.Tr("ui_node_image");
                 break;
-            case Button button when string.Equals(button.Text, "Button", StringComparison.Ordinal):
+            case Button button when string.Equals(button.Text, UiDefaultDisplayStrings.Button, StringComparison.Ordinal):
                 button.Name = L10n.Tr("ui_node_button");
                 button.Text = L10n.Tr("ui_default_button_text");
                 break;
-            case IconButton iconButton when string.Equals(iconButton.Name, "IconButton", StringComparison.Ordinal):
+            case IconButton iconButton when string.Equals(iconButton.Name, UiDefaultDisplayStrings.IconButton, StringComparison.Ordinal):
                 iconButton.Name = L10n.Tr("ui_node_icon_button");
                 break;
-            case Toggle toggle when string.Equals(toggle.Text, "Toggle", StringComparison.Ordinal):
+            case Toggle toggle when string.Equals(toggle.Text, UiDefaultDisplayStrings.Toggle, StringComparison.Ordinal):
                 toggle.Name = L10n.Tr("ui_node_toggle");
                 toggle.Text = L10n.Tr("ui_default_toggle_text");
                 break;
-            case Dropdown dropdown:
+            case Dropdown dropdown when dropdown.Options.SequenceEqual(UiDefaultDisplayStrings.DropdownOptions):
                 dropdown.Name = L10n.Tr("ui_node_dropdown");
                 dropdown.Options =
                 [
-                    L10n.Tr("ui_option_n", 1),
-                    L10n.Tr("ui_option_n", 2),
-                    L10n.Tr("ui_option_n", 3)
+                    L10n.Tr("ui_default_option_a"),
+                    L10n.Tr("ui_default_option_b"),
+                    L10n.Tr("ui_default_option_c")
                 ];
                 break;
-            case InputField inputField when string.Equals(inputField.Placeholder, "Type here...", StringComparison.Ordinal):
+            case InputField inputField when string.Equals(inputField.Placeholder, UiDefaultDisplayStrings.Placeholder, StringComparison.Ordinal):
                 inputField.Name = L10n.Tr("ui_node_input_field");
                 inputField.Placeholder = L10n.Tr("ui_default_placeholder");
                 break;
-            case TextArea textArea when string.Equals(textArea.Placeholder, "Type here...", StringComparison.Ordinal):
+            case TextArea textArea when string.Equals(textArea.Placeholder, UiDefaultDisplayStrings.Placeholder, StringComparison.Ordinal):
                 textArea.Name = L10n.Tr("ui_node_text_area");
                 textArea.Placeholder = L10n.Tr("ui_default_placeholder");
                 break;
-            case Slider slider when string.Equals(slider.Name, "Slider", StringComparison.Ordinal):
+            case Slider slider when string.Equals(slider.Name, UiDefaultDisplayStrings.Slider, StringComparison.Ordinal):
                 slider.Name = L10n.Tr("ui_node_slider");
                 break;
-            case ProgressBar progressBar when string.Equals(progressBar.Name, "ProgressBar", StringComparison.Ordinal):
+            case ProgressBar progressBar when string.Equals(progressBar.Name, UiDefaultDisplayStrings.ProgressBar, StringComparison.Ordinal):
                 progressBar.Name = L10n.Tr("ui_node_progress_bar");
                 break;
-            case Scrollbar scrollbar when string.Equals(scrollbar.Name, "Scrollbar", StringComparison.Ordinal):
+            case Scrollbar scrollbar when string.Equals(scrollbar.Name, UiDefaultDisplayStrings.Scrollbar, StringComparison.Ordinal):
                 scrollbar.Name = L10n.Tr("ui_node_scrollbar");
                 break;
-            case ScrollView scrollView when string.Equals(scrollView.Name, "ScrollView", StringComparison.Ordinal):
+            case ScrollView scrollView when string.Equals(scrollView.Name, UiDefaultDisplayStrings.ScrollView, StringComparison.Ordinal):
                 scrollView.Name = L10n.Tr("ui_node_scroll_view");
                 break;
-            case ListView listView when string.Equals(listView.Name, "ListView", StringComparison.Ordinal):
+            case ListView listView when string.Equals(listView.Name, UiDefaultDisplayStrings.ListView, StringComparison.Ordinal):
                 listView.Name = L10n.Tr("ui_node_list_view");
                 break;
-            case GridView gridView when string.Equals(gridView.Name, "GridView", StringComparison.Ordinal):
+            case GridView gridView when string.Equals(gridView.Name, UiDefaultDisplayStrings.GridView, StringComparison.Ordinal):
                 gridView.Name = L10n.Tr("ui_node_grid_view");
                 break;
-            case Window window when string.Equals(window.Title, "Window", StringComparison.Ordinal):
+            case Window window when string.Equals(window.Title, UiDefaultDisplayStrings.Window, StringComparison.Ordinal):
                 window.Name = L10n.Tr("ui_node_window");
                 window.Title = L10n.Tr("ui_default_window_title");
                 break;
-            case Modal modal when string.Equals(modal.Name, "Modal", StringComparison.Ordinal):
+            case Modal modal when string.Equals(modal.Name, UiDefaultDisplayStrings.Modal, StringComparison.Ordinal):
                 modal.Name = L10n.Tr("ui_node_modal");
                 break;
-            case Tooltip tooltip when string.Equals(tooltip.Text, "Tooltip", StringComparison.Ordinal):
+            case Tooltip tooltip when string.Equals(tooltip.Text, UiDefaultDisplayStrings.Tooltip, StringComparison.Ordinal):
                 tooltip.Name = L10n.Tr("ui_node_tooltip");
                 tooltip.Text = L10n.Tr("ui_default_tooltip_text");
                 break;
-            case Tabs tabs:
+            case Tabs tabs when tabs.Titles.SequenceEqual(UiDefaultDisplayStrings.TabTitles):
                 tabs.Name = L10n.Tr("ui_node_tabs");
                 tabs.Titles =
                 [
@@ -1999,13 +2562,13 @@ public sealed unsafe class UIEditorWindow : EditorWindow
                     L10n.Tr("ui_default_tab_n", 2)
                 ];
                 break;
-            case ToggleGroup toggleGroup when string.Equals(toggleGroup.Name, "ToggleGroup", StringComparison.Ordinal):
+            case ToggleGroup toggleGroup when string.Equals(toggleGroup.Name, UiDefaultDisplayStrings.ToggleGroup, StringComparison.Ordinal):
                 toggleGroup.Name = L10n.Tr("ui_node_toggle_group");
                 break;
-            case Spacer spacer when string.Equals(spacer.Name, "Spacer", StringComparison.Ordinal):
+            case Spacer spacer when string.Equals(spacer.Name, UiDefaultDisplayStrings.Spacer, StringComparison.Ordinal):
                 spacer.Name = L10n.Tr("ui_node_spacer");
                 break;
-            case DynamicArea dynamicArea when string.Equals(dynamicArea.Name, "DynamicArea", StringComparison.Ordinal):
+            case DynamicArea dynamicArea when string.Equals(dynamicArea.Name, UiDefaultDisplayStrings.DynamicArea, StringComparison.Ordinal):
                 dynamicArea.Name = L10n.Tr("ui_node_dynamic_area");
                 dynamicArea.ItemsSource = L10n.Tr("ui_default_dynamic_area_items_source");
                 break;

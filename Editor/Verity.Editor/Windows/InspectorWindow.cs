@@ -9,11 +9,13 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Diagnostics;
 using Hexa.NET.ImGui;
+using Lua;
 using Verity.Core;
 using Verity.Core.ECS;
 using Verity.Core.World;
 using Verity.Graphics;
-using Verity.Input;
+using Verity.Filter;
+using FilterType = Verity.Filter.Filter;
 using Verity.Editor;
 using Irodori.Backend.OpenGL;
 using Irodori.Texture;
@@ -122,7 +124,7 @@ public unsafe class InspectorWindow : EditorWindow
         }
         catch (Exception e)
         {
-            ImGui.TextColored(new Vector4(1, 0, 0, 1), $"[Inspector] Error: {e.Message}");
+            ImGui.TextColored(new Vector4(1, 0, 0, 1), $"{L10n.Tr("msg_inspectorError")} {e.Message}");
         }
     }
 
@@ -185,6 +187,71 @@ public unsafe class InspectorWindow : EditorWindow
                 ImGui.Unindent();
             }
             ImGui.PopID();
+        }
+    }
+
+    private void DrawLuaScriptComponentInspector(LuaScriptComponent component)
+    {
+        DrawGenericInspector(component);
+
+        if (component.State != null)
+        {
+            var exportTableCheck = component.State.DoStringAsync("return type(Export) == 'table'").GetAwaiter().GetResult();
+            if (exportTableCheck.Length > 0 && exportTableCheck[0].TryRead<bool>(out var isTable) && isTable)
+            {
+                ImGui.Separator();
+                ImGui.Text(L10n.Tr("msg_exported_variables"));
+
+                var keysQuery = component.State.DoStringAsync(@"
+                    local res = ''
+                    for k, v in pairs(Export) do
+                        res = res .. tostring(k) .. '|' .. type(v) .. '\n'
+                    end
+                    return res
+                ").GetAwaiter().GetResult();
+
+                if (keysQuery.Length > 0 && keysQuery[0].TryRead<string>(out var keysStr) && !string.IsNullOrWhiteSpace(keysStr))
+                {
+                    var lines = keysStr.Split('\n', StringSplitOptions.RemoveEmptyEntries);
+                    foreach (var line in lines)
+                    {
+                        var parts = line.Split('|');
+                        if (parts.Length != 2) continue;
+
+                        string key = parts[0];
+                        string luaType = parts[1];
+
+                        var valResult = component.State.DoStringAsync($"return Export['{key}']").GetAwaiter().GetResult();
+                        if (valResult.Length == 0) continue;
+                        
+                        var val = valResult[0];
+
+                        if (luaType == "number" && val.TryRead<double>(out var numVal))
+                        {
+                            float floatVal = (float)numVal;
+                            if (ImGui.DragFloat(key, ref floatVal))
+                            {
+                                component.State.DoStringAsync($"Export['{key}'] = {floatVal}").GetAwaiter().GetResult();
+                            }
+                        }
+                        else if (luaType == "string" && val.TryRead<string>(out var strVal))
+                        {
+                            if (ImGui.InputText(key, ref strVal, 256))
+                            {
+                                string escaped = strVal.Replace("\"", "\\\"");
+                                component.State.DoStringAsync($"Export['{key}'] = \"{escaped}\"").GetAwaiter().GetResult();
+                            }
+                        }
+                        else if (luaType == "boolean" && val.TryRead<bool>(out var boolVal))
+                        {
+                            if (ImGui.Checkbox(key, ref boolVal))
+                            {
+                                component.State.DoStringAsync($"Export['{key}'] = {(boolVal ? "true" : "false")}").GetAwaiter().GetResult();
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
 
@@ -276,7 +343,7 @@ public unsafe class InspectorWindow : EditorWindow
             return;
         }
 
-        if (targetType == typeof(Light2D) && type == typeof(Filter))
+        if (targetType == typeof(Light2D) && type == typeof(FilterType))
         {
             var lights = components.OfType<Light2D>().ToList();
             Type? requiredType = GetLightFilterType(member.Name, lights);
@@ -287,7 +354,7 @@ public unsafe class InspectorWindow : EditorWindow
                 return;
             }
 
-            DrawFilterField("", mixed ? null : val as Filter, onUpdate, true, mixed, requiredType);
+            DrawFilterField("", mixed ? null : val as FilterType, onUpdate, true, mixed, requiredType);
             ImGui.PopID();
             return;
         }
@@ -341,21 +408,91 @@ public unsafe class InspectorWindow : EditorWindow
         if (ImGui.BeginPopup("AddComponentPopup")) {
             ImGui.InputText(L10n.Tr("label_search"), ref _searchFilter, 64); ImGui.Separator();
             var types = _app.ScriptCompiler?.GetAllAddableComponentTypes() ?? new List<Type>();
-            foreach (var type in types) {
-                string typeName = type.Name;
-                string localizedName = L10n.Tr($"type_{typeName}");
-                if (localizedName == $"type_{typeName}") localizedName = type.Name;
+            _assetPickerCache.Remove("lua-add-component");
+            var luaEntries = GetAssetPickerEntries("lua-add-component", static path => Path.GetExtension(path).Equals(".lua", StringComparison.OrdinalIgnoreCase))
+                .OrderBy(entry => entry.RelativePath, StringComparer.OrdinalIgnoreCase)
+                .ToList();
 
-                if (string.IsNullOrEmpty(_searchFilter) || typeName.Contains(_searchFilter, StringComparison.OrdinalIgnoreCase) || localizedName.Contains(_searchFilter, StringComparison.OrdinalIgnoreCase))
+            foreach (var type in types.OrderBy(static type => type.Name, StringComparer.OrdinalIgnoreCase)) {
+                string typeName = type.Name;
+                string displayName = GetAddComponentTypeDisplayName(type);
+
+                if (MatchesAddComponentSearch(_searchFilter, typeName, displayName))
                 {
                     bool canAdd = entity.CanAddComponent(type, out _);
                     if (!canAdd) ImGui.BeginDisabled();
-                    if (ImGui.MenuItem(localizedName) && canAdd) { _app.BeginUndoAction(); entity.AddComponent(type); _app.EndUndoAction(); ImGui.CloseCurrentPopup(); }
+                    if (ImGui.MenuItem(displayName) && canAdd) { _app.BeginUndoAction(); entity.AddComponent(type); _app.EndUndoAction(); ImGui.CloseCurrentPopup(); }
                     if (!canAdd) ImGui.EndDisabled();
                 }
             }
+
+            bool canAddLuaScript = entity.CanAddComponent(typeof(LuaScriptComponent), out _);
+            foreach (var entry in luaEntries)
+            {
+                string luaScriptName = Path.GetFileNameWithoutExtension(entry.RelativePath);
+                string displayName = $"{luaScriptName} (Lua Script)";
+                string detailLabel = $"{displayName}##{entry.RelativePath}";
+
+                if (!MatchesAddComponentSearch(_searchFilter, luaScriptName, entry.RelativePath, displayName))
+                    continue;
+
+                if (!canAddLuaScript) ImGui.BeginDisabled();
+                if (ImGui.MenuItem(detailLabel) && canAddLuaScript)
+                {
+                    _app.BeginUndoAction();
+                    var luaScript = entity.AddComponent<LuaScriptComponent>();
+                    luaScript.ScriptPath = entry.RelativePath;
+                    luaScript.ScriptGuid = AssetPathUtility.TryGetGuid(entry.FullPath) ?? string.Empty;
+                    _app.EndUndoAction();
+                    ImGui.CloseCurrentPopup();
+                }
+                if (!canAddLuaScript) ImGui.EndDisabled();
+
+                if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
+                    ImGui.SetTooltip(entry.RelativePath);
+            }
+
             ImGui.EndPopup();
         }
+    }
+
+    private static bool MatchesAddComponentSearch(string filter, params string?[] candidates)
+    {
+        if (string.IsNullOrWhiteSpace(filter))
+            return true;
+
+        foreach (string? candidate in candidates)
+        {
+            if (!string.IsNullOrWhiteSpace(candidate) &&
+                candidate.Contains(filter, StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static string GetAddComponentTypeDisplayName(Type type)
+    {
+        string typeName = type.Name;
+        string localizedName = L10n.Tr($"type_{typeName}");
+        if (localizedName == $"type_{typeName}")
+            localizedName = typeName;
+
+        return IsUserCSharpScriptType(type)
+            ? $"{localizedName} (C# Script)"
+            : localizedName;
+    }
+
+    private static bool IsUserCSharpScriptType(Type type)
+    {
+        if (!typeof(Script).IsAssignableFrom(type) || type == typeof(LuaScriptComponent))
+            return false;
+
+        string assemblyName = type.Assembly.GetName().Name ?? string.Empty;
+        return !assemblyName.StartsWith("Verity.Core", StringComparison.Ordinal) &&
+               !assemblyName.StartsWith("Verity.Graphics", StringComparison.Ordinal);
     }
 
     private void DrawBlueprintInstanceInspectorHeader(Entity entity)
@@ -472,7 +609,7 @@ public unsafe class InspectorWindow : EditorWindow
         else if (string.Equals(fileName, "BuildSettings.json", StringComparison.OrdinalIgnoreCase)) DrawBuildSettingsInspector(path);
         else if (string.Equals(fileName, "Filters.json", StringComparison.OrdinalIgnoreCase)) _app.GetWindow<FilterEditorWindow>()?.DrawFilterEditor(true);
         else if (extension == ".blueprint") DrawBlueprintAssetInspector(path);
-        else if (extension == ".cs" || extension == ".shader") DrawScriptPreview(path);
+        else if (extension == ".cs" || extension == ".shader" || extension == ".lua") DrawScriptPreview(path);
         else if (extension == ".png" || extension == ".jpg" || extension == ".jpeg") DrawImagePreview(path);
         else if (extension is ".wav" or ".ogg" or ".mp3" or ".flac" or ".mod") DrawAudioFileInspector(path);
         else if (extension == ".verity") DrawWorldSettingsInspector(path);
@@ -683,10 +820,10 @@ public unsafe class InspectorWindow : EditorWindow
         settings.StartupUiRoles ??= new List<string>();
         bool changed = false;
         if (ImGui.CollapsingHeader(L10n.Tr("header_general"), ImGuiTreeNodeFlags.DefaultOpen)) {
-            float fontSize = settings.EditorFontSize; if (ImGui.DragFloat(L10n.Tr("field_EditorFontSize"), ref fontSize, 0.5f, 8f, 72f)) { settings.EditorFontSize = fontSize; changed = true; }
-            int targetTps = settings.TargetTPS; if (ImGui.DragInt(L10n.Tr("field_TargetTPS"), ref targetTps, 1, 1, 1000)) { settings.TargetTPS = targetTps; changed = true; }
-            int targetPtps = settings.TargetPTPS; if (ImGui.DragInt(L10n.Tr("field_TargetPTPS"), ref targetPtps, 1, 1, 1000)) { settings.TargetPTPS = targetPtps; changed = true; }
-            var bgColor = (Vector4)settings.EditorWorldBackgroundColor; if (ImGui.ColorEdit4(L10n.Tr("field_EditorWorldBackgroundColor"), ref bgColor)) { settings.EditorWorldBackgroundColor = (Color)bgColor; changed = true; }
+            float fontSize = settings.EditorFontSize; ImGui.Text(L10n.Tr("field_EditorFontSize")); ImGui.SameLine(120); if (ImGui.DragFloat("##v_editor_font_size", ref fontSize, 0.5f, 8f, 72f)) { settings.EditorFontSize = fontSize; changed = true; }
+            int targetTps = settings.TargetTPS; ImGui.Text(L10n.Tr("field_TargetTPS")); ImGui.SameLine(120); if (ImGui.DragInt("##v_target_tps", ref targetTps, 1, 1, 1000)) { settings.TargetTPS = targetTps; changed = true; }
+            int targetPtps = settings.TargetPTPS; ImGui.Text(L10n.Tr("field_TargetPTPS")); ImGui.SameLine(120); if (ImGui.DragInt("##v_target_ptps", ref targetPtps, 1, 1, 1000)) { settings.TargetPTPS = targetPtps; changed = true; }
+            var bgColor = (Vector4)settings.EditorWorldBackgroundColor; ImGui.Text(L10n.Tr("field_EditorWorldBackgroundColor")); ImGui.SameLine(120); if (ImGui.ColorEdit4("##v_editor_world_background_color", ref bgColor)) { settings.EditorWorldBackgroundColor = (Color)bgColor; changed = true; }
             DrawAssetReferenceField(L10n.Tr("ui_field_default_ui_font"), settings.DefaultUiFontPath, ".fontasset;.sdfont", value =>
             {
                 string path = value as string ?? string.Empty;
@@ -696,14 +833,14 @@ public unsafe class InspectorWindow : EditorWindow
             });
         }
         if (ImGui.CollapsingHeader(L10n.Tr("header_physics"), ImGuiTreeNodeFlags.DefaultOpen)) {
-            Vector2 gravity = settings.DefaultGravity; if (ImGui.DragFloat2(L10n.Tr("field_DefaultGravity"), (float*)&gravity, 0.1f)) { settings.DefaultGravity = gravity; changed = true; }
-            float friction = settings.DefaultFriction; if (ImGui.DragFloat(L10n.Tr("field_DefaultFriction"), ref friction, 0.01f, 0f, 1f)) { settings.DefaultFriction = friction; changed = true; }
-            float bounciness = settings.DefaultBounciness; if (ImGui.DragFloat(L10n.Tr("field_DefaultBounciness"), ref bounciness, 0.01f, 0f, 1f)) { settings.DefaultBounciness = bounciness; changed = true; }
+            Vector2 gravity = settings.DefaultGravity; ImGui.Text(L10n.Tr("field_DefaultGravity")); ImGui.SameLine(120); if (ImGui.DragFloat2("##v_default_gravity", (float*)&gravity, 0.1f)) { settings.DefaultGravity = gravity; changed = true; }
+            float friction = settings.DefaultFriction; ImGui.Text(L10n.Tr("field_DefaultFriction")); ImGui.SameLine(120); if (ImGui.DragFloat("##v_default_friction", ref friction, 0.01f, 0f, 1f)) { settings.DefaultFriction = friction; changed = true; }
+            float bounciness = settings.DefaultBounciness; ImGui.Text(L10n.Tr("field_DefaultBounciness")); ImGui.SameLine(120); if (ImGui.DragFloat("##v_default_bounciness", ref bounciness, 0.01f, 0f, 1f)) { settings.DefaultBounciness = bounciness; changed = true; }
         }
         if (ImGui.CollapsingHeader(L10n.Tr("header_sprite_import"), ImGuiTreeNodeFlags.DefaultOpen)) {
-            int ppu = settings.DefaultSpritePixelsPerUnit; if (ImGui.DragInt(L10n.Tr("field_DefaultSpritePixelsPerUnit"), ref ppu, 1f, 1, 4096)) { settings.DefaultSpritePixelsPerUnit = Math.Max(1, ppu); changed = true; }
-            int threshold = settings.DefaultPointFilterMaxDimension; if (ImGui.DragInt(L10n.Tr("field_DefaultPointFilterMaxDimension"), ref threshold, 1f, 1, 8192)) { settings.DefaultPointFilterMaxDimension = Math.Max(1, threshold); changed = true; }
-            int sizeMode = settings.DefaultSpriteSizeMode == SpriteSizingMode.FitInsideUnit ? 0 : 1; if (ImGui.Combo(L10n.Tr("field_DefaultSpriteSizeMode"), ref sizeMode, $"{L10n.Tr("sprite_size_mode_fit_inside_unit")}\0{L10n.Tr("sprite_size_mode_pixels_per_unit")}\0")) { settings.DefaultSpriteSizeMode = sizeMode == 0 ? SpriteSizingMode.FitInsideUnit : SpriteSizingMode.PixelsPerUnit; changed = true; }
+            int ppu = settings.DefaultSpritePixelsPerUnit; ImGui.Text(L10n.Tr("field_DefaultSpritePixelsPerUnit")); ImGui.SameLine(120); if (ImGui.DragInt("##v_default_sprite_pixels_per_unit", ref ppu, 1f, 1, 4096)) { settings.DefaultSpritePixelsPerUnit = Math.Max(1, ppu); changed = true; }
+            int threshold = settings.DefaultPointFilterMaxDimension; ImGui.Text(L10n.Tr("field_DefaultPointFilterMaxDimension")); ImGui.SameLine(120); if (ImGui.DragInt("##v_default_point_filter_max_dimension", ref threshold, 1f, 1, 8192)) { settings.DefaultPointFilterMaxDimension = Math.Max(1, threshold); changed = true; }
+            int sizeMode = settings.DefaultSpriteSizeMode == SpriteSizingMode.FitInsideUnit ? 0 : 1; ImGui.Text(L10n.Tr("field_DefaultSpriteSizeMode")); ImGui.SameLine(120); if (ImGui.Combo("##v_default_sprite_size_mode", ref sizeMode, $"{L10n.Tr("sprite_size_mode_fit_inside_unit")}\0{L10n.Tr("sprite_size_mode_pixels_per_unit")}\0")) { settings.DefaultSpriteSizeMode = sizeMode == 0 ? SpriteSizingMode.FitInsideUnit : SpriteSizingMode.PixelsPerUnit; changed = true; }
         }
         changed |= DrawProjectSettingsList(L10n.Tr("header_tags"), settings.Tags, "Tag", false);
         changed |= DrawProjectSettingsList(L10n.Tr("header_sorting_layers"), settings.SortingLayers, "Layer", true);
@@ -909,14 +1046,30 @@ public unsafe class InspectorWindow : EditorWindow
             ImGui.Indent();
             for (int i = 0; i < list.Count; i++) {
                 ImGui.PushID($"{idPrefix}_{i}");
+                ImGui.BeginGroup();
                 ImGui.PushStyleColor(ImGuiCol.Button, new Vector4(0.6f, 0.2f, 0.2f, 1.0f));
-                if (ImGui.Button("X", new Vector2(25, 0))) { list.RemoveAt(i); changed = true; ImGui.PopStyleColor(); ImGui.PopID(); break; }
+                bool removed = false;
+                if (ImGui.Button("X", new Vector2(25, 0))) { list.RemoveAt(i); changed = true; removed = true; }
                 ImGui.PopStyleColor();
-                if (allowReorder) {
+                if (!removed && allowReorder) {
                     ImGui.SameLine(); if (ImGui.Button("^", new Vector2(25, 0)) && i > 0) { (list[i], list[i - 1]) = (list[i - 1], list[i]); changed = true; }
                     ImGui.SameLine(); if (ImGui.Button("v", new Vector2(25, 0)) && i < list.Count - 1) { (list[i], list[i + 1]) = (list[i + 1], list[i]); changed = true; }
                 }
-                ImGui.SameLine(); string val = list[i]; ImGui.SetNextItemWidth(-1); if (ImGui.InputText("##edit", ref val, 64)) { list[i] = val; changed = true; }
+                if (!removed) { ImGui.SameLine(); string val = list[i]; ImGui.SetNextItemWidth(-1); if (ImGui.InputText("##edit", ref val, 64)) { list[i] = val; changed = true; } }
+                ImGui.EndGroup();
+
+                if (removed)
+                {
+                    ImGui.PopID();
+                    break;
+                }
+
+                if (DrawCollectionItemContextMenu(i, list, idPrefix, () => changed = true, CloneCollectionItem, allowReorder))
+                {
+                    ImGui.PopID();
+                    break;
+                }
+
                 ImGui.PopID();
             }
             ImGui.Dummy(new Vector2(0, 5));
@@ -936,6 +1089,8 @@ public unsafe class InspectorWindow : EditorWindow
         {
             UiAssetReference entry = list[i];
             ImGui.PushID($"ui-catalog-{i}");
+            ImGui.BeginGroup();
+            bool removed = false;
 
             string name = entry.Name ?? string.Empty;
             if (ImGui.InputText(L10n.Tr("label_name"), ref name, 128))
@@ -956,6 +1111,19 @@ public unsafe class InspectorWindow : EditorWindow
             {
                 list.RemoveAt(i);
                 changed = true;
+                removed = true;
+            }
+
+            ImGui.EndGroup();
+
+            if (removed)
+            {
+                ImGui.PopID();
+                break;
+            }
+
+            if (DrawCollectionItemContextMenu(i, list, "ui-catalog", () => changed = true, CloneCollectionItem))
+            {
                 ImGui.PopID();
                 break;
             }
@@ -983,6 +1151,8 @@ public unsafe class InspectorWindow : EditorWindow
         {
             UiRoleBinding binding = list[i];
             ImGui.PushID($"ui-role-{i}");
+            ImGui.BeginGroup();
+            bool removed = false;
 
             string role = binding.Role ?? string.Empty;
             if (ImGui.InputText(L10n.Tr("ui_field_role"), ref role, 128))
@@ -1001,6 +1171,19 @@ public unsafe class InspectorWindow : EditorWindow
             {
                 list.RemoveAt(i);
                 changed = true;
+                removed = true;
+            }
+
+            ImGui.EndGroup();
+
+            if (removed)
+            {
+                ImGui.PopID();
+                break;
+            }
+
+            if (DrawCollectionItemContextMenu(i, list, "ui-role", () => changed = true, CloneCollectionItem))
+            {
                 ImGui.PopID();
                 break;
             }
@@ -1180,14 +1363,18 @@ public unsafe class InspectorWindow : EditorWindow
         bool changed = false;
 
         int filterIndex = settings.Filter == SpriteTextureFilter.Point ? 0 : 1;
-        if (ImGui.Combo(L10n.Tr("field_SpriteFilter"), ref filterIndex, $"{L10n.Tr("sprite_filter_point")}\0{L10n.Tr("sprite_filter_linear")}\0"))
+        ImGui.Text(L10n.Tr("field_SpriteFilter"));
+        ImGui.SameLine(120);
+        if (ImGui.Combo("##v_sprite_filter", ref filterIndex, $"{L10n.Tr("sprite_filter_point")}\0{L10n.Tr("sprite_filter_linear")}\0"))
         {
             settings.Filter = filterIndex == 0 ? SpriteTextureFilter.Point : SpriteTextureFilter.Linear;
             changed = true;
         }
 
         int modeIndex = settings.SpriteMode == SpriteImportMode.Single ? 0 : 1;
-        if (ImGui.Combo(L10n.Tr("field_SpriteMode"), ref modeIndex, $"{L10n.Tr("sprite_mode_single")}\0{L10n.Tr("sprite_mode_multiple")}\0"))
+        ImGui.Text(L10n.Tr("field_SpriteMode"));
+        ImGui.SameLine(120);
+        if (ImGui.Combo("##v_sprite_mode", ref modeIndex, $"{L10n.Tr("sprite_mode_single")}\0{L10n.Tr("sprite_mode_multiple")}\0"))
         {
             settings.SpriteMode = modeIndex == 0 ? SpriteImportMode.Single : SpriteImportMode.Multiple;
             if (settings.SpriteMode == SpriteImportMode.Single)
@@ -1199,21 +1386,27 @@ public unsafe class InspectorWindow : EditorWindow
         }
 
         int sizeMode = settings.SizeMode == SpriteSizingMode.FitInsideUnit ? 0 : 1;
-        if (ImGui.Combo(L10n.Tr("field_SpriteSizeMode"), ref sizeMode, $"{L10n.Tr("sprite_size_mode_fit_inside_unit")}\0{L10n.Tr("sprite_size_mode_pixels_per_unit")}\0"))
+        ImGui.Text(L10n.Tr("field_SpriteSizeMode"));
+        ImGui.SameLine(120);
+        if (ImGui.Combo("##v_sprite_size_mode", ref sizeMode, $"{L10n.Tr("sprite_size_mode_fit_inside_unit")}\0{L10n.Tr("sprite_size_mode_pixels_per_unit")}\0"))
         {
             settings.SizeMode = sizeMode == 0 ? SpriteSizingMode.FitInsideUnit : SpriteSizingMode.PixelsPerUnit;
             changed = true;
         }
 
         int ppu = settings.PixelsPerUnit;
-        if (ImGui.DragInt(L10n.Tr("field_PixelsPerUnit"), ref ppu, 1f, 1, 4096))
+        ImGui.Text(L10n.Tr("field_PixelsPerUnit"));
+        ImGui.SameLine(120);
+        if (ImGui.DragInt("##v_pixels_per_unit", ref ppu, 1f, 1, 4096))
         {
             settings.PixelsPerUnit = Math.Max(1, ppu);
             changed = true;
         }
 
         Vector2 defaultPivot = settings.DefaultPivot;
-        if (ImGui.DragFloat2(L10n.Tr("field_DefaultPivot"), (float*)&defaultPivot, 0.01f, 0f, 1f))
+        ImGui.Text(L10n.Tr("field_DefaultPivot"));
+        ImGui.SameLine(120);
+        if (ImGui.DragFloat2("##v_default_pivot", (float*)&defaultPivot, 0.01f, 0f, 1f))
         {
             settings.DefaultPivot = SpriteImportUtility.ClampPivot(defaultPivot);
             changed = true;
@@ -1276,7 +1469,7 @@ public unsafe class InspectorWindow : EditorWindow
         {
             settings.Slices.Add(new SpriteSlice
             {
-                Name = $"Sprite {settings.Slices.Count + 1}",
+                Name = L10n.Tr("sprite_default_name_n", settings.Slices.Count + 1),
                 X = 0,
                 Y = 0,
                 Width = Math.Max(1, Math.Min(textureWidth, _sliceGridCellWidth)),
@@ -1352,42 +1545,54 @@ public unsafe class InspectorWindow : EditorWindow
         ImGui.Text(label);
 
         string name = working.Name;
-        if (ImGui.InputText($"Name##{working.Id}", ref name, 128))
+        ImGui.Text("Name");
+        ImGui.SameLine(120);
+        if (ImGui.InputText($"##name_{working.Id}", ref name, 128))
         {
             working.Name = name;
             onUpdate(working);
         }
 
         int x = working.X;
-        if (ImGui.DragInt($"X##{working.Id}", ref x, 1f, 0, Math.Max(0, textureWidth - 1)))
+        ImGui.Text("X");
+        ImGui.SameLine(120);
+        if (ImGui.DragInt($"##x_{working.Id}", ref x, 1f, 0, Math.Max(0, textureWidth - 1)))
         {
             working.X = x;
             onUpdate(working);
         }
 
         int y = working.Y;
-        if (ImGui.DragInt($"Y##{working.Id}", ref y, 1f, 0, Math.Max(0, textureHeight - 1)))
+        ImGui.Text("Y");
+        ImGui.SameLine(120);
+        if (ImGui.DragInt($"##y_{working.Id}", ref y, 1f, 0, Math.Max(0, textureHeight - 1)))
         {
             working.Y = y;
             onUpdate(working);
         }
 
         int width = working.Width;
-        if (ImGui.DragInt($"Width##{working.Id}", ref width, 1f, 1, textureWidth))
+        ImGui.Text("Width");
+        ImGui.SameLine(120);
+        if (ImGui.DragInt($"##width_{working.Id}", ref width, 1f, 1, textureWidth))
         {
             working.Width = width;
             onUpdate(working);
         }
 
         int height = working.Height;
-        if (ImGui.DragInt($"Height##{working.Id}", ref height, 1f, 1, textureHeight))
+        ImGui.Text("Height");
+        ImGui.SameLine(120);
+        if (ImGui.DragInt($"##height_{working.Id}", ref height, 1f, 1, textureHeight))
         {
             working.Height = height;
             onUpdate(working);
         }
 
         Vector2 pivot = working.Pivot;
-        if (ImGui.DragFloat2($"Pivot##{working.Id}", (float*)&pivot, 0.01f, 0f, 1f))
+        ImGui.Text("Pivot");
+        ImGui.SameLine(120);
+        if (ImGui.DragFloat2($"##pivot_{working.Id}", (float*)&pivot, 0.01f, 0f, 1f))
         {
             working.Pivot = SpriteImportUtility.ClampPivot(pivot);
             onUpdate(working);
@@ -1412,7 +1617,7 @@ public unsafe class InspectorWindow : EditorWindow
             {
                 slices.Add(new SpriteSlice
                 {
-                    Name = $"Slice_{row}_{col}",
+                    Name = L10n.Tr("sprite_grid_name_format", row, col),
                     X = x,
                     Y = y,
                     Width = cellWidth,
@@ -1484,6 +1689,7 @@ public unsafe class InspectorWindow : EditorWindow
             if (component is AudioManager audioManager) DrawAudioManagerInspector(audioManager);
             else if (component is UiDocument uiDocument) DrawUiDocumentInspector(uiDocument);
             else if (component is Tilemap tilemap) DrawTilemapInspector(tilemap);
+            else if (component is LuaScriptComponent luaScriptComponent) DrawLuaScriptComponentInspector(luaScriptComponent);
             else DrawGenericInspector(component); 
             
             ImGui.Unindent();
@@ -1496,7 +1702,9 @@ public unsafe class InspectorWindow : EditorWindow
         manager.EnsureDefaultGroups();
 
         float masterVolume = manager.MasterVolume;
-        if (ImGui.DragFloat(L10n.Tr("field_MasterVolume"), ref masterVolume, 0.01f, 0f, 1f))
+        ImGui.Text(L10n.Tr("field_MasterVolume"));
+        ImGui.SameLine(120);
+        if (ImGui.DragFloat("##v_master_volume", ref masterVolume, 0.01f, 0f, 1f))
         {
             manager.MasterVolume = masterVolume;
         }
@@ -1511,23 +1719,33 @@ public unsafe class InspectorWindow : EditorWindow
             if (ImGui.TreeNodeEx(group.Name, ImGuiTreeNodeFlags.DefaultOpen))
             {
                 string name = group.Name;
-            if (ImGui.InputText(L10n.Tr("label_name"), ref name, 64))
+                ImGui.Text(L10n.Tr("label_name"));
+                ImGui.SameLine(120);
+            if (ImGui.InputText($"##name_{i}", ref name, 64))
                     group.Name = name;
 
                 float volume = group.Volume;
-            if (ImGui.DragFloat(L10n.Tr("field_Volume"), ref volume, 0.01f, 0f, 1f))
+                ImGui.Text(L10n.Tr("field_Volume"));
+                ImGui.SameLine(120);
+            if (ImGui.DragFloat($"##volume_{i}", ref volume, 0.01f, 0f, 1f))
                     group.Volume = volume;
 
                 float pitch = group.Pitch;
-            if (ImGui.DragFloat(L10n.Tr("field_Pitch"), ref pitch, 0.01f, 0.1f, 4f))
+                ImGui.Text(L10n.Tr("field_Pitch"));
+                ImGui.SameLine(120);
+            if (ImGui.DragFloat($"##pitch_{i}", ref pitch, 0.01f, 0.1f, 4f))
                     group.Pitch = pitch;
 
                 bool muted = group.IsMuted;
-            if (ImGui.Checkbox(L10n.Tr("field_Muted"), ref muted))
+                ImGui.Text(L10n.Tr("field_Muted"));
+                ImGui.SameLine(120);
+            if (ImGui.Checkbox($"##muted_{i}", ref muted))
                     group.IsMuted = muted;
 
                 int maxVoices = group.MaxVoices;
-            if (ImGui.DragInt(L10n.Tr("field_MaxVoices"), ref maxVoices, 1, 1, 256))
+                ImGui.Text(L10n.Tr("field_MaxVoices"));
+                ImGui.SameLine(120);
+            if (ImGui.DragInt($"##max_voices_{i}", ref maxVoices, 1, 1, 256))
                     group.MaxVoices = maxVoices;
 
                 bool protectedGroup = group.Name is "Master" or "BGM" or "SFX" or "UI";
@@ -1567,15 +1785,21 @@ public unsafe class InspectorWindow : EditorWindow
         });
 
         string bindingNamespace = document.BindingNamespace;
-        if (ImGui.InputText(L10n.Tr("ui_field_binding_namespace"), ref bindingNamespace, 128))
+        ImGui.Text(L10n.Tr("ui_field_binding_namespace"));
+        ImGui.SameLine(120);
+        if (ImGui.InputText("##v_binding_namespace", ref bindingNamespace, 128))
             document.BindingNamespace = bindingNamespace;
 
         bool autoShow = document.AutoShow;
-        if (ImGui.Checkbox(L10n.Tr("ui_field_auto_show"), ref autoShow))
+        ImGui.Text(L10n.Tr("ui_field_auto_show"));
+        ImGui.SameLine(120);
+        if (ImGui.Checkbox("##v_auto_show", ref autoShow))
             document.AutoShow = autoShow;
 
         bool visible = document.Visible;
-        if (ImGui.Checkbox(L10n.Tr("label_visible"), ref visible))
+        ImGui.Text(L10n.Tr("label_visible"));
+        ImGui.SameLine(120);
+        if (ImGui.Checkbox("##v_visible", ref visible))
         {
             document.Visible = visible;
             if (document.Canvas != null)
@@ -1583,11 +1807,15 @@ public unsafe class InspectorWindow : EditorWindow
         }
 
         bool bindOwnerEntity = document.BindOwnerEntity;
-        if (ImGui.Checkbox(L10n.Tr("ui_field_bind_owner_entity"), ref bindOwnerEntity))
+        ImGui.Text(L10n.Tr("ui_field_bind_owner_entity"));
+        ImGui.SameLine(120);
+        if (ImGui.Checkbox("##v_bind_owner_entity", ref bindOwnerEntity))
             document.BindOwnerEntity = bindOwnerEntity;
 
         bool bindOwnerComponents = document.BindOwnerComponents;
-        if (ImGui.Checkbox(L10n.Tr("ui_field_bind_owner_components"), ref bindOwnerComponents))
+        ImGui.Text(L10n.Tr("ui_field_bind_owner_components"));
+        ImGui.SameLine(120);
+        if (ImGui.Checkbox("##v_bind_owner_components", ref bindOwnerComponents))
             document.BindOwnerComponents = bindOwnerComponents;
 
         if (ImGui.Button(L10n.Tr("ui_btn_reload_ui"), new Vector2(-1, 0)))
@@ -1603,7 +1831,9 @@ public unsafe class InspectorWindow : EditorWindow
     private void DrawTilemapInspector(Tilemap tilemap)
     {
         Vector2 tileSize = tilemap.TileSize;
-        if (ImGui.DragFloat2(L10n.Tr("field_TileSize"), (float*)&tileSize, 0.05f)) { tilemap.TileSize = tileSize; }
+        ImGui.Text(L10n.Tr("field_TileSize"));
+        ImGui.SameLine(120);
+        if (ImGui.DragFloat2("##v_tile_size", (float*)&tileSize, 0.05f)) { tilemap.TileSize = tileSize; }
         
         ImGui.Text($"{L10n.Tr("label_tiles")}: {tilemap.Tiles.Count}");
         var tilePalette = _app.GetWindow<TilePaletteWindow>();
@@ -1735,12 +1965,12 @@ public unsafe class InspectorWindow : EditorWindow
             return;
         }
 
-        if (target is Light2D lightTarget && type == typeof(Filter))
+        if (target is Light2D lightTarget && type == typeof(FilterType))
         {
             Type? requiredType = GetLightFilterType(member.Name, lightTarget);
             if (requiredType != null)
             {
-                DrawFilterField(name, value as Filter, onUpdate, false, false, requiredType);
+                DrawFilterField(name, value as FilterType, onUpdate, false, false, requiredType);
                 return;
             }
         }
@@ -1834,8 +2064,8 @@ public unsafe class InspectorWindow : EditorWindow
                     bool removed = false;
                     if (ImGui.BeginTable("##postprocess_effect_row", 2, ImGuiTableFlags.SizingStretchProp))
                     {
-                        ImGui.TableSetupColumn("Effect", ImGuiTableColumnFlags.WidthStretch);
-                        ImGui.TableSetupColumn("Actions", ImGuiTableColumnFlags.WidthFixed, 72f);
+                        ImGui.TableSetupColumn(L10n.Tr("header_effect"), ImGuiTableColumnFlags.WidthStretch);
+                        ImGui.TableSetupColumn(L10n.Tr("header_actions"), ImGuiTableColumnFlags.WidthFixed, 72f);
                         ImGui.TableNextRow();
 
                         ImGui.TableNextColumn();
@@ -2338,7 +2568,7 @@ public unsafe class InspectorWindow : EditorWindow
         ImGui.PopID();
     }
 
-    private void DrawFilterField(string name, Filter? current, Action<object?> onUpdate, bool noLabel = false, bool mixed = false, Type? requiredType = null) {
+    private void DrawFilterField(string name, FilterType? current, Action<object?> onUpdate, bool noLabel = false, bool mixed = false, Type? requiredType = null) {
         if (!noLabel) { ImGui.PushID(name); ImGui.Text(name); ImGui.SameLine(120); }
         else ImGui.PushID($"{name}_filter");
         string preview = mixed ? L10n.Tr("msg_mixed") : (current?.Name ?? L10n.Tr("msg_none"));
@@ -2362,7 +2592,7 @@ public unsafe class InspectorWindow : EditorWindow
         ImGui.PopID();
     }
 
-    private static bool IsCompatibleSingleTypeFilter(Filter filter, Type requiredType)
+    private static bool IsCompatibleSingleTypeFilter(FilterType filter, Type requiredType)
     {
         if (!string.IsNullOrWhiteSpace(filter.EnumTypeName))
             return FilterManager.ResolveTypeInternal(filter.EnumTypeName) == requiredType;
@@ -2388,7 +2618,7 @@ public unsafe class InspectorWindow : EditorWindow
         if (type == typeof(Sprite)) { DrawSpriteField(name, (Sprite?)value ?? default, onUpdate); return; }
         if (type == typeof(StyleAsset)) { DrawStyleField(name, (StyleAsset?)value ?? default, onUpdate); return; }
         if (type == typeof(ShaderAsset)) { DrawShaderField(name, (ShaderAsset?)value ?? default, onUpdate); return; }
-        if (type == typeof(Filter)) { DrawFilterField(name, value as Filter, onUpdate); return; }
+        if (type == typeof(FilterType)) { DrawFilterField(name, value as FilterType, onUpdate); return; }
         if (typeof(Component).IsAssignableFrom(type)) { DrawComponentReferenceField(name, value as Component, type, onUpdate); return; }
         if (TryGetDictionaryTypes(type, out var keyType, out var valueType)) { DrawDictionary(name, value, type, keyType, valueType, onUpdate); return; }
         if (TryGetCollectionElementType(type, out var elementType)) { DrawCollection(name, value, type, elementType, onUpdate); return; }
@@ -2506,7 +2736,7 @@ public unsafe class InspectorWindow : EditorWindow
             return false;
         if (type == typeof(Vector2) || type == typeof(Vector3) || type == typeof(Vector4) || type == typeof(Color))
             return false;
-        if (type == typeof(Sprite) || type == typeof(StyleAsset) || type == typeof(ShaderAsset) || type == typeof(AudioClip) || type == typeof(Filter))
+        if (type == typeof(Sprite) || type == typeof(StyleAsset) || type == typeof(ShaderAsset) || type == typeof(AudioClip) || type == typeof(FilterType))
             return false;
         if (typeof(Component).IsAssignableFrom(type))
             return false;
@@ -2534,6 +2764,8 @@ public unsafe class InspectorWindow : EditorWindow
         {
             int index = i;
             object? currentValue = items[i] ?? CreateDefaultValue(elementType);
+            bool removed = false;
+            ImGui.BeginGroup();
             DrawValueEditor($"[{i}]", elementType, currentValue, newValue => { items[index] = newValue; changed = true; });
 
             float controlsX = ImGui.GetCursorPosX() + MathF.Max(0f, ImGui.GetContentRegionAvail().X - 44f);
@@ -2549,10 +2781,18 @@ public unsafe class InspectorWindow : EditorWindow
             {
                 items.RemoveAt(i);
                 changed = true;
+                removed = true;
                 i--;
             }
             ImGui.PopStyleColor(3);
             ImGui.NewLine();
+            ImGui.EndGroup();
+
+            if (removed)
+                continue;
+
+            if (DrawCollectionItemContextMenu(index, items, $"{label}_{collectionId}", () => changed = true, value => CloneCollectionItem(value, elementType)))
+                break;
 
             if (i < items.Count - 1)
                 ImGui.Separator();
@@ -2574,9 +2814,13 @@ public unsafe class InspectorWindow : EditorWindow
     private bool DrawCollectionReorderHandle(uint collectionId, int index, List<object?> items)
     {
         bool changed = false;
-        if (ImGui.SmallButton($"::##drag_{index}"))
+        ImGui.PushStyleColor(ImGuiCol.Button, new Vector4(0.3f, 0.3f, 0.3f, 0.5f));
+        ImGui.PushStyleColor(ImGuiCol.ButtonHovered, new Vector4(0.5f, 0.5f, 0.5f, 0.7f));
+        ImGui.PushStyleColor(ImGuiCol.ButtonActive, new Vector4(0.7f, 0.7f, 0.7f, 0.9f));
+        if (ImGui.SmallButton($"≡##reorder_{index}"))
         {
         }
+        ImGui.PopStyleColor(3);
 
         if (ImGui.BeginDragDropSource())
         {
@@ -2608,6 +2852,67 @@ public unsafe class InspectorWindow : EditorWindow
         }
 
         return changed;
+    }
+
+    private static bool DrawCollectionItemContextMenu<T>(int index, List<T> items, string id, Action onUpdate, Func<T, T> cloneItem, bool allowReorder = true)
+    {
+        if (!ImGui.BeginPopupContextItem($"##ctx_{id}_{index}"))
+            return false;
+
+        bool handled = false;
+        if (ImGui.MenuItem(L10n.Tr("ctx_remove")))
+        {
+            items.RemoveAt(index);
+            onUpdate();
+            handled = true;
+        }
+        else if (ImGui.MenuItem(L10n.Tr("ctx_duplicate")))
+        {
+            items.Insert(index + 1, cloneItem(items[index]));
+            onUpdate();
+            handled = true;
+        }
+
+        if (!handled)
+        {
+            ImGui.Separator();
+            if (ImGui.MenuItem(L10n.Tr("ctx_move_up"), string.Empty, false, allowReorder && index > 0))
+            {
+                (items[index - 1], items[index]) = (items[index], items[index - 1]);
+                onUpdate();
+                handled = true;
+            }
+            else if (ImGui.MenuItem(L10n.Tr("ctx_move_down"), string.Empty, false, allowReorder && index < items.Count - 1))
+            {
+                (items[index], items[index + 1]) = (items[index + 1], items[index]);
+                onUpdate();
+                handled = true;
+            }
+        }
+
+        ImGui.EndPopup();
+        return handled;
+    }
+
+    private static T CloneCollectionItem<T>(T item)
+    {
+        object? source = item;
+        if (source == null)
+            return item;
+
+        Type cloneType = source.GetType();
+        string json = JsonSerializer.Serialize(source, cloneType);
+        return JsonSerializer.Deserialize(json, cloneType) is T clone ? clone : item;
+    }
+
+    private static object? CloneCollectionItem(object? item, Type elementType)
+    {
+        if (item == null)
+            return CreateDefaultValue(elementType);
+
+        Type cloneType = item.GetType();
+        string json = JsonSerializer.Serialize(item, cloneType);
+        return JsonSerializer.Deserialize(json, cloneType);
     }
 
     private void DrawDictionary(string label, object? dictionary, Type dictionaryType, Type keyType, Type valueType, Action<object?> onUpdate)

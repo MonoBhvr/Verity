@@ -198,9 +198,20 @@ public static class UiSerializer
     private static void SanitizeScreen(UIScreenAsset asset)
     {
         asset.Id = string.IsNullOrWhiteSpace(asset.Id) ? Guid.NewGuid().ToString("N") : asset.Id;
-        asset.Name ??= "NewScreen";
+        asset.Name ??= UiDefaultDisplayStrings.NewScreen;
         asset.UiScriptType ??= string.Empty;
         asset.Variables ??= [];
+        foreach (var variable in asset.Variables)
+        {
+            if (variable == null)
+                continue;
+
+            variable.Name ??= string.Empty;
+            variable.TypeName = string.IsNullOrWhiteSpace(variable.TypeName) ? "object" : variable.TypeName;
+            variable.DefaultValue ??= string.Empty;
+            variable.Expression ??= string.Empty;
+        }
+
         asset.Root ??= new Panel
         {
             Name = "Root",
@@ -212,14 +223,14 @@ public static class UiSerializer
 
     private static void SanitizePrefab(UiPrefabAsset asset)
     {
-        asset.Name ??= "NewUiPrefab";
+        asset.Name ??= UiDefaultDisplayStrings.NewUiPrefab;
         asset.Root ??= new Panel { Name = "PrefabRoot" };
         SanitizeNode(asset.Root);
     }
 
     private static void SanitizeStyle(UiStyleAsset asset)
     {
-        asset.Name ??= "NewUiStyle";
+        asset.Name ??= UiDefaultDisplayStrings.NewUiStyle;
         asset.Colors ??= new Dictionary<string, Color>();
         asset.Numbers ??= new Dictionary<string, float>();
         asset.Strings ??= new Dictionary<string, string>();
@@ -277,6 +288,8 @@ public static class UiSerializer
         {
             case TextNode text:
                 text.Text ??= string.Empty;
+                text.FontPath ??= string.Empty;
+                text.FontFamily ??= string.Empty;
                 text.LocalizationKey ??= string.Empty;
                 break;
             case Button button:

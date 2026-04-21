@@ -7,6 +7,7 @@ public static class RuntimeProfiler
     private const int HistorySize = 180;
     private const int ScriptDetailSampleStride = 8;
     private const float SpikeThresholdMs = 20f;
+    private const int MaxTrackedNames = 128;
     private static readonly object Sync = new();
     private static readonly MetricSeries LogicTickSeries = new(HistorySize);
     private static readonly MetricSeries PhysicsTickSeries = new(HistorySize);
@@ -18,6 +19,8 @@ public static class RuntimeProfiler
     private static IReadOnlyList<RuntimeScriptMetricSnapshot> _lastScriptMetrics = [];
     private static int _logicTickCounter;
     private static bool _captureScriptDetailsNextTick;
+    private static readonly List<RuntimePhaseMetricSnapshot> _phaseSnapshotBuffer = [];
+    private static readonly List<RuntimeScriptMetricSnapshot> _scriptSnapshotBuffer = [];
 
     public static bool Enabled { get; set; }
     public static bool CaptureScriptDetails { get; private set; }
@@ -93,36 +96,8 @@ public static class RuntimeProfiler
                 series.Value.Push(metric?.TotalMs ?? 0f);
             }
 
-            _lastPhaseMetrics = CurrentPhaseMetrics.Values
-                .OrderByDescending(static metric => PhaseSeries[metric.Name].Average)
-                .ThenByDescending(static metric => PhaseSeries[metric.Name].Max)
-                .ThenByDescending(static metric => metric.TotalMs)
-                .ThenBy(static metric => metric.Name, StringComparer.Ordinal)
-                .Select(static metric => new RuntimePhaseMetricSnapshot(
-                    metric.Name,
-                    metric.TotalMs,
-                    metric.CallCount,
-                    PhaseSeries[metric.Name].Average,
-                    PhaseSeries[metric.Name].CopyHistory()))
-                .ToArray();
-
-            _lastScriptMetrics = ScriptSeries
-                .Select(static pair =>
-                {
-                    CurrentScriptMetrics.TryGetValue(pair.Key, out var metric);
-                    float totalMs = metric?.TotalMs ?? 0f;
-                    int callCount = metric?.CallCount ?? 0;
-                    return new RuntimeScriptMetricSnapshot(
-                        pair.Key,
-                        totalMs,
-                        callCount,
-                        pair.Value.Average,
-                        callCount == 0 ? 0f : totalMs / callCount);
-                })
-                .OrderByDescending(static metric => metric.AverageTotalMs)
-                .ThenByDescending(static metric => metric.TotalMs)
-                .ThenBy(static metric => metric.Name, StringComparer.Ordinal)
-                .ToArray();
+            _lastPhaseMetrics = BuildPhaseSnapshot();
+            _lastScriptMetrics = BuildScriptSnapshot();
         }
     }
 
@@ -172,11 +147,78 @@ public static class RuntimeProfiler
     {
         if (!map.TryGetValue(name, out var series))
         {
+            if (map.Count >= MaxTrackedNames)
+            {
+                string? worst = null;
+                float worstAvg = float.MaxValue;
+                foreach (var kvp in map)
+                {
+                    if (kvp.Value.Average < worstAvg)
+                    {
+                        worstAvg = kvp.Value.Average;
+                        worst = kvp.Key;
+                    }
+                }
+                if (worst != null)
+                    map.Remove(worst);
+            }
             series = new MetricSeries(HistorySize);
             map[name] = series;
         }
 
         return series;
+    }
+
+    private static RuntimePhaseMetricSnapshot[] BuildPhaseSnapshot()
+    {
+        _phaseSnapshotBuffer.Clear();
+        foreach (var metric in CurrentPhaseMetrics.Values)
+        {
+            if (PhaseSeries.TryGetValue(metric.Name, out var series))
+            {
+                _phaseSnapshotBuffer.Add(new RuntimePhaseMetricSnapshot(
+                    metric.Name,
+                    metric.TotalMs,
+                    metric.CallCount,
+                    series.Average,
+                    series.CopyHistory()));
+            }
+        }
+        _phaseSnapshotBuffer.Sort(static (a, b) =>
+        {
+            int c = b.AverageMs.CompareTo(a.AverageMs);
+            if (c != 0) return c;
+            c = b.TotalMs.CompareTo(a.TotalMs);
+            if (c != 0) return c;
+            return string.CompareOrdinal(a.Name, b.Name);
+        });
+        return _phaseSnapshotBuffer.ToArray();
+    }
+
+    private static RuntimeScriptMetricSnapshot[] BuildScriptSnapshot()
+    {
+        _scriptSnapshotBuffer.Clear();
+        foreach (var pair in ScriptSeries)
+        {
+            CurrentScriptMetrics.TryGetValue(pair.Key, out var metric);
+            float totalMs = metric?.TotalMs ?? 0f;
+            int callCount = metric?.CallCount ?? 0;
+            _scriptSnapshotBuffer.Add(new RuntimeScriptMetricSnapshot(
+                pair.Key,
+                totalMs,
+                callCount,
+                pair.Value.Average,
+                callCount == 0 ? 0f : totalMs / callCount));
+        }
+        _scriptSnapshotBuffer.Sort(static (a, b) =>
+        {
+            int c = b.AverageTotalMs.CompareTo(a.AverageTotalMs);
+            if (c != 0) return c;
+            c = b.TotalMs.CompareTo(a.TotalMs);
+            if (c != 0) return c;
+            return string.CompareOrdinal(a.Name, b.Name);
+        });
+        return _scriptSnapshotBuffer.ToArray();
     }
 
     private sealed class MetricSeries

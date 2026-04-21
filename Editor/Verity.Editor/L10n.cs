@@ -10,21 +10,85 @@ public static class L10n
     private static Dictionary<string, string> _strings = new(KeyComparer);
     private static IReadOnlyDictionary<string, string> _fallbackStrings = new Dictionary<string, string>(KeyComparer);
 
+    private static readonly List<string> _availableLanguages = ["en", "ko"];
+    public static IReadOnlyList<string> AvailableLanguages => _availableLanguages;
+
     public static string CurrentLanguage { get; private set; } = "ko";
-    public static IReadOnlyList<string> AvailableLanguages { get; } = ["en", "ko"];
 
     public static void Initialize(string initialLanguage = "ko")
     {
+        DiscoverAvailableLanguages();
         LoadLanguage(initialLanguage);
+    }
+
+    public static void DiscoverAvailableLanguages()
+    {
+        var found = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "en" };
+
+        foreach (string searchDir in GetLocalesSearchDirectories())
+        {
+            try
+            {
+                if (!Directory.Exists(searchDir))
+                    continue;
+
+                foreach (string filePath in Directory.GetFiles(searchDir, "*.json"))
+                {
+                    string code = Path.GetFileNameWithoutExtension(filePath);
+                    if (!string.IsNullOrEmpty(code) && code.Length is >= 2 and <= 8 && code.All(char.IsLetter))
+                        found.Add(code.ToLowerInvariant());
+                }
+            }
+            catch { }
+        }
+
+        _availableLanguages.Clear();
+        _availableLanguages.AddRange(found.OrderBy(c => c, StringComparer.OrdinalIgnoreCase));
+    }
+
+    private static IEnumerable<string> GetLocalesSearchDirectories()
+    {
+        string baseDir = AppContext.BaseDirectory;
+        yield return Path.Combine(baseDir, "Locales");
+        yield return Path.Combine(baseDir, "Editor", "Verity.Editor", "Locales");
+        yield return Path.Combine(Directory.GetCurrentDirectory(), "Editor", "Verity.Editor", "Locales");
+    }
+
+    public static string GetWritableLocalesDirectory()
+    {
+        string[] candidates =
+        [
+            Path.Combine(Directory.GetCurrentDirectory(), "Editor", "Verity.Editor", "Locales"),
+            Path.Combine(AppContext.BaseDirectory, "Locales"),
+        ];
+
+        foreach (string dir in candidates)
+        {
+            try
+            {
+                Directory.CreateDirectory(dir);
+                string testFile = Path.Combine(dir, ".write_test");
+                File.WriteAllText(testFile, "");
+                File.Delete(testFile);
+                return dir;
+            }
+            catch
+            {
+                continue;
+            }
+        }
+
+        string fallback = Path.Combine(AppContext.BaseDirectory, "Locales");
+        Directory.CreateDirectory(fallback);
+        return fallback;
     }
 
     public static void LoadLanguage(string? langCode)
     {
         string normalized = NormalizeLanguageCode(langCode);
-        var fallback = TryLoadLanguageDictionary("en") ?? new Dictionary<string, string>(KeyComparer);
-        _fallbackStrings = fallback;
-
+        var fallback = BuildFallbackDictionary(normalized);
         Dictionary<string, string> merged = new(fallback, KeyComparer);
+
         if (!string.Equals(normalized, "en", StringComparison.OrdinalIgnoreCase))
         {
             var localized = TryLoadLanguageDictionary(normalized);
@@ -39,9 +103,51 @@ public static class L10n
             }
         }
 
+        _fallbackStrings = fallback;
+
         _strings = merged;
         CurrentLanguage = normalized;
         MissingKeysLogged.Clear();
+    }
+
+    private static Dictionary<string, string> BuildFallbackDictionary(string selectedLanguage)
+    {
+        Dictionary<string, string> merged = new(KeyComparer);
+
+        foreach (string fallbackLanguage in EnumerateFallbackLanguages(selectedLanguage))
+        {
+            var dict = TryLoadLanguageDictionary(fallbackLanguage);
+            if (dict == null)
+                continue;
+
+            foreach (var pair in dict)
+            {
+                if (!merged.ContainsKey(pair.Key))
+                    merged[pair.Key] = pair.Value;
+            }
+        }
+
+        return merged;
+    }
+
+    private static IEnumerable<string> EnumerateFallbackLanguages(string selectedLanguage)
+    {
+        yield return "en";
+
+        if (!string.Equals(selectedLanguage, "ko", StringComparison.OrdinalIgnoreCase))
+            yield return "ko";
+
+        foreach (string lang in _availableLanguages)
+        {
+            if (string.Equals(lang, selectedLanguage, StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(lang, "en", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(lang, "ko", StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            yield return lang;
+        }
     }
 
     public static string NormalizeLanguageCode(string? langCode)
@@ -63,7 +169,64 @@ public static class L10n
         if (separator >= 0)
             normalized = normalized[..separator];
 
-        return AvailableLanguages.Contains(normalized) ? normalized : "en";
+        return _availableLanguages.Contains(normalized) ? normalized : "en";
+    }
+
+    public static bool AddLanguage(string langCode, string displayName, string baseLangCode = "en")
+    {
+        if (string.IsNullOrWhiteSpace(langCode))
+            return false;
+
+        string normalizedCode = langCode.Trim().ToLowerInvariant();
+        if (normalizedCode.Length is < 2 or > 8)
+            return false;
+        if (!normalizedCode.All(char.IsLetter))
+            return false;
+        if (_availableLanguages.Contains(normalizedCode))
+            return false;
+
+        var baseDict = TryLoadLanguageDictionary(baseLangCode) ?? TryLoadLanguageDictionary("en");
+        if (baseDict == null)
+            return false;
+
+        var newDict = new Dictionary<string, string>(baseDict, KeyComparer);
+        string langKey = $"lang_{normalizedCode}";
+        newDict[langKey] = displayName;
+
+        try
+        {
+            string localesDir = GetWritableLocalesDirectory();
+            string filePath = Path.Combine(localesDir, $"{normalizedCode}.json");
+
+            var options = new JsonSerializerOptions { WriteIndented = true };
+            string json = JsonSerializer.Serialize(newDict, options);
+            File.WriteAllText(filePath, json);
+        }
+        catch
+        {
+            return false;
+        }
+
+        _availableLanguages.Add(normalizedCode);
+        _availableLanguages.Sort(StringComparer.OrdinalIgnoreCase);
+
+        return true;
+    }
+
+    public static string GetLanguageDisplayName(string langCode)
+    {
+        string key = $"lang_{langCode}";
+        if (_strings.TryGetValue(key, out string? value))
+            return value;
+
+        if (_fallbackStrings.TryGetValue(key, out value))
+            return value;
+
+        var dict = TryLoadLanguageDictionary(langCode);
+        if (dict != null && dict.TryGetValue(key, out value))
+            return value;
+
+        return langCode.ToUpperInvariant();
     }
 
     private static Dictionary<string, string>? TryLoadLanguageDictionary(string langCode)
@@ -94,7 +257,7 @@ public static class L10n
         return null;
     }
 
-    private static IEnumerable<string> EnumerateCandidatePaths(string langCode)
+    public static IEnumerable<string> EnumerateCandidatePaths(string langCode)
     {
         string baseDir = AppContext.BaseDirectory;
         yield return Path.Combine(baseDir, "Locales", $"{langCode}.json");

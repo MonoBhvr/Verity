@@ -1,6 +1,7 @@
 using Irodori.Texture;
 using StbImageSharp;
 using System.Linq;
+using Verity.Core.Collections;
 using Verity.Core.World;
 
 namespace Verity.Graphics;
@@ -8,11 +9,12 @@ namespace Verity.Graphics;
 public class TextureManager : IDisposable
 {
     private readonly GraphicsDevice _device;
-    private readonly Dictionary<string, TextureObjectUploaded> _cache = new();
+    private readonly LruCache<string, TextureObjectUploaded> _cache;
 
     public TextureManager(GraphicsDevice device)
     {
         _device = device;
+        _cache = new LruCache<string, TextureObjectUploaded>(256);
     }
 
     public TextureObjectUploaded Load(string path, SpriteTextureFilter filter = SpriteTextureFilter.Point, bool flipY = true)
@@ -26,7 +28,7 @@ public class TextureManager : IDisposable
         var imageResult = ImageResult.FromStream(stream, ColorComponents.RedGreenBlueAlpha);
         var pixels = flipY ? FlipImageY(imageResult.Data, imageResult.Width, imageResult.Height) : imageResult.Data;
         var uploaded = UploadPixels(pixels, imageResult.Width, imageResult.Height, filter);
-        _cache[cacheKey] = uploaded;
+        _cache.Set(cacheKey, uploaded);
         return uploaded;
     }
 
@@ -39,7 +41,7 @@ public class TextureManager : IDisposable
         var imageResult = ImageResult.FromMemory(imageBytes, ColorComponents.RedGreenBlueAlpha);
         var pixels = flipY ? FlipImageY(imageResult.Data, imageResult.Width, imageResult.Height) : imageResult.Data;
         var uploaded = UploadPixels(pixels, imageResult.Width, imageResult.Height, filter);
-        _cache[actualCacheKey] = uploaded;
+        _cache.Set(actualCacheKey, uploaded);
         return uploaded;
     }
 
@@ -52,7 +54,7 @@ public class TextureManager : IDisposable
         var uploaded = UploadPixels(pixels, width, height, filter);
 
         if (actualCacheKey != null)
-            _cache[actualCacheKey] = uploaded;
+            _cache.Set(actualCacheKey, uploaded);
 
         return uploaded;
     }
@@ -102,16 +104,14 @@ public class TextureManager : IDisposable
         var keys = _cache.Keys.Where(key => key.StartsWith(fullPath + "|", StringComparison.OrdinalIgnoreCase)).ToList();
         foreach (var key in keys)
         {
-            if (_cache.Remove(key, out var tex))
+            if (_cache.TryGetValue(key, out var tex) && _cache.Remove(key))
                 tex.Dispose();
         }
     }
 
     public void Dispose()
     {
-        foreach (var tex in _cache.Values)
-            tex.Dispose();
-        _cache.Clear();
+        _cache.Dispose();
     }
 
     private static string BuildCacheKey(string baseKey, SpriteTextureFilter filter, bool flipY) => $"{baseKey}|{filter}|flip:{flipY}";

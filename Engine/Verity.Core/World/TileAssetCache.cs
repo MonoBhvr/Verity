@@ -1,4 +1,5 @@
 using System.Text.Json;
+using Verity.Core.Collections;
 using Verity.Core.Serialization;
 
 namespace Verity.Core.World;
@@ -6,7 +7,7 @@ namespace Verity.Core.World;
 public static class TileAssetCache
 {
     private static readonly object Sync = new();
-    private static readonly Dictionary<string, TileBase> Cache = new(StringComparer.OrdinalIgnoreCase);
+    private static readonly LruCache<string, TileBase> Cache = new(512);
     private static readonly JsonSerializerOptions TileOptions = new()
     {
         WriteIndented = true,
@@ -35,7 +36,8 @@ public static class TileAssetCache
 
         lock (Sync)
         {
-            if (Cache.TryGetValue(resolvedPath, out TileBase? cached))
+            string cacheKey = NormalizeCacheKey(resolvedPath);
+            if (Cache.TryGetValue(cacheKey, out TileBase? cached))
                 return cached;
 
             string json = File.ReadAllText(resolvedPath);
@@ -45,7 +47,7 @@ public static class TileAssetCache
 
             loaded.AssetPath = AssetPathUtility.Normalize(resolvedPath);
             loaded.AssetGuid = string.IsNullOrWhiteSpace(guid) ? AssetPathUtility.TryGetGuid(resolvedPath) : guid;
-            Cache[resolvedPath] = loaded;
+            Cache.Set(cacheKey, loaded);
             return loaded;
         }
     }
@@ -64,7 +66,7 @@ public static class TileAssetCache
 
         lock (Sync)
         {
-            Cache.Remove(resolvedPath);
+            Cache.Remove(NormalizeCacheKey(resolvedPath));
         }
     }
 
@@ -75,4 +77,6 @@ public static class TileAssetCache
             Cache.Clear();
         }
     }
+
+    private static string NormalizeCacheKey(string path) => Path.GetFullPath(path).ToUpperInvariant();
 }

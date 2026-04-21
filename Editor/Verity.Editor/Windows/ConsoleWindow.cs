@@ -6,6 +6,8 @@ namespace Verity.Editor.Windows;
 
 public class ConsoleWindow : EditorWindow
 {
+    private const int MaxLogEntries = 1000;
+
     private readonly EditorApp _app;
 
     private struct LogEntry
@@ -30,6 +32,8 @@ public class ConsoleWindow : EditorWindow
             Message = $"[{DateTime.Now:HH:mm:ss}] {message}",
             Level = level
         });
+
+        TrimEntriesIfNeeded();
     }
 
     public static void Clear()
@@ -170,5 +174,26 @@ public class ConsoleWindow : EditorWindow
     private void NotifyCopyCompleted()
     {
         _app.ShowOverlayMessage(L10n.Tr("msg_console_copied"));
+    }
+
+    private static void TrimEntriesIfNeeded()
+    {
+        int removeCount = _entries.Count - MaxLogEntries;
+        if (removeCount <= 0)
+            return;
+
+        _entries.RemoveRange(0, removeCount);
+
+        var adjustedSelections = _selectedIndices
+            .Where(index => index >= removeCount)
+            .Select(index => index - removeCount)
+            .ToList();
+
+        _selectedIndices.Clear();
+        foreach (int index in adjustedSelections)
+            _selectedIndices.Add(index);
+
+        if (_dragStartIndex >= 0)
+            _dragStartIndex = _dragStartIndex >= removeCount ? _dragStartIndex - removeCount : -1;
     }
 }

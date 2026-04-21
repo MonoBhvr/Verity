@@ -21,7 +21,7 @@ public abstract class PhysicalShape : Component
     [SerializeField]
     public ShadowSelfMode ShadowSelfMode { get; set; } = ShadowSelfMode.ExcludeSelf;
 
-    public ulong GroupMask => Verity.Input.Filter.Get(GroupName)?.Mask ?? Verity.Input.FilterRegistry.GetGroupMask(GroupName);
+    public ulong GroupMask => Verity.Filter.Filter.Get(GroupName)?.Mask ?? Verity.Filter.FilterRegistry.GetGroupMask(GroupName);
 
     public Vector2 GetBaseScale()
     {

@@ -13,6 +13,8 @@ public static class SceneSerializer
 {
     public static string? AssetRootPath { get; set; }
 
+    private static bool AllowsMultipleComponents(Type type) => type == typeof(LuaScriptComponent);
+
     private enum SerializationMode
     {
         World,
@@ -811,7 +813,7 @@ public static class SceneSerializer
                 Type? type = ResolveType(typeName, userAssembly);
                 if (type == null) continue;
 
-                var component = entity.GetComponent(type);
+                var component = AllowsMultipleComponents(type) ? null : entity.GetComponent(type);
                 if (component == null)
                 {
                     if (!entity.CanAddComponent(type, out var reason))
@@ -961,7 +963,9 @@ public static class SceneSerializer
                     continue;
 
                 Type? type = ResolveType(typeName, userAssembly);
-                if (type == null || clone.GetComponent(type) != null)
+                if (type == null)
+                    continue;
+                if (!AllowsMultipleComponents(type) && clone.GetComponent(type) != null)
                     continue;
                 if (!clone.CanAddComponent(type, out _))
                     continue;
@@ -1041,7 +1045,7 @@ public static class SceneSerializer
                     continue;
                 }
 
-                Component? component = entity.GetComponent(type);
+                Component? component = AllowsMultipleComponents(type) ? null : entity.GetComponent(type);
                 if ((bool?)componentNode?["Added"] == true && component == null)
                 {
                     if (!entity.CanAddComponent(type, out _))

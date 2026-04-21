@@ -197,6 +197,9 @@ public unsafe class ImGuiController : IDisposable
 
     public void Dispose()
     {
+        if (_device != null)
+            _device.Window.OnSdlEvent -= OnSdlEvent;
+
         ImGuiImplOpenGL3.Shutdown();
         ImGuiImplSDL2.Shutdown();
         if ((nint)_context.Handle != 0)

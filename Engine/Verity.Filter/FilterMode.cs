@@ -1,4 +1,4 @@
-namespace Verity.Input;
+namespace Verity.Filter;
 
 public enum FilterMode
 {

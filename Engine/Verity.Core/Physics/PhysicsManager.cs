@@ -22,6 +22,7 @@ public static class PhysicsManager
     private static readonly Dictionary<(Guid, Guid), List<Contact>> _previousContacts = [];
     private static readonly Dictionary<(Guid, Guid), List<Contact>> _contactsByPair = [];
     private static readonly Stack<List<Contact>> _contactListPool = [];
+    private static readonly List<Entity> _overlapQueryResult = [];
     private static ulong[] _collisionMatrix = Enumerable.Repeat(ulong.MaxValue, 64).ToArray();
     private static World.World? _cachedWorld;
     private static int _cachedWorldVersion = -1;
@@ -47,10 +48,13 @@ public static class PhysicsManager
 
     public static bool CanCollide(ulong maskA, ulong maskB)
     {
-        for (int i = 0; i < 64; i++)
+        ulong bits = maskA;
+        while (bits != 0)
         {
-            if ((maskA & (1UL << i)) != 0 && (_collisionMatrix[i] & maskB) != 0)
+            int i = System.Numerics.BitOperations.TrailingZeroCount(bits);
+            if ((_collisionMatrix[i] & maskB) != 0)
                 return true;
+            bits &= bits - 1;
         }
 
         return false;
@@ -630,8 +634,8 @@ public static class PhysicsManager
         ulong mask = 0;
         foreach (var name in layerOrGroupNames)
         {
-            var filter = Verity.Input.Filter.Get(name);
-            mask |= filter != null ? filter.Mask : Verity.Input.FilterRegistry.GetGroupMask(name);
+            var filter = Verity.Filter.Filter.Get(name);
+            mask |= filter != null ? filter.Mask : Verity.Filter.FilterRegistry.GetGroupMask(name);
         }
 
         if (layerOrGroupNames.Length == 0)
@@ -646,18 +650,18 @@ public static class PhysicsManager
     public static IEnumerable<Entity> OverlapCircle(Vector2 center, float radius, ulong mask = ulong.MaxValue)
     {
         EnsureQueryCache();
-        var result = new List<Entity>();
+        _overlapQueryResult.Clear();
         var circleAabb = new AABB(center - new Vector2(radius), center + new Vector2(radius));
-        CollectOverlaps(_activePhysicals, circleAabb, mask, result);
-        CollectOverlaps(_staticShapes, circleAabb, mask, result);
-        return result;
+        CollectOverlaps(_activePhysicals, circleAabb, mask, _overlapQueryResult);
+        CollectOverlaps(_staticShapes, circleAabb, mask, _overlapQueryResult);
+        return _overlapQueryResult.ToArray();
     }
 
     public static IEnumerable<Entity> OverlapCircle(Vector2 center, float radius, params string[] layerNames)
     {
         ulong mask = 0;
         foreach (var name in layerNames)
-            mask |= Verity.Input.Filter.Get(name)?.Mask ?? 0;
+            mask |= Verity.Filter.Filter.Get(name)?.Mask ?? 0;
 
         if (layerNames.Length == 0)
             mask = ulong.MaxValue;
@@ -668,24 +672,43 @@ public static class PhysicsManager
     public static IEnumerable<Entity> OverlapBox(Vector2 center, Vector2 size, ulong mask = ulong.MaxValue)
     {
         EnsureQueryCache();
-        var result = new List<Entity>();
+        _overlapQueryResult.Clear();
         Vector2 halfSize = size / 2.0f;
         var boxAabb = new AABB(center - halfSize, center + halfSize);
-        CollectOverlaps(_activePhysicals, boxAabb, mask, result);
-        CollectOverlaps(_staticShapes, boxAabb, mask, result);
-        return result;
+        CollectOverlaps(_activePhysicals, boxAabb, mask, _overlapQueryResult);
+        CollectOverlaps(_staticShapes, boxAabb, mask, _overlapQueryResult);
+        return _overlapQueryResult.ToArray();
     }
 
     public static IEnumerable<Entity> OverlapBox(Vector2 center, Vector2 size, params string[] layerNames)
     {
         ulong mask = 0;
         foreach (var name in layerNames)
-            mask |= Verity.Input.Filter.Get(name)?.Mask ?? 0;
+            mask |= Verity.Filter.Filter.Get(name)?.Mask ?? 0;
 
         if (layerNames.Length == 0)
             mask = ulong.MaxValue;
 
         return OverlapBox(center, size, mask);
+    }
+
+    public static void OverlapCircle(List<Entity> results, Vector2 center, float radius, ulong mask = ulong.MaxValue)
+    {
+        EnsureQueryCache();
+        results.Clear();
+        var circleAabb = new AABB(center - new Vector2(radius), center + new Vector2(radius));
+        CollectOverlaps(_activePhysicals, circleAabb, mask, results);
+        CollectOverlaps(_staticShapes, circleAabb, mask, results);
+    }
+
+    public static void OverlapBox(List<Entity> results, Vector2 center, Vector2 size, ulong mask = ulong.MaxValue)
+    {
+        EnsureQueryCache();
+        results.Clear();
+        Vector2 halfSize = size / 2.0f;
+        var boxAabb = new AABB(center - halfSize, center + halfSize);
+        CollectOverlaps(_activePhysicals, boxAabb, mask, results);
+        CollectOverlaps(_staticShapes, boxAabb, mask, results);
     }
 
     private static void CollectOverlaps(List<Physical> physicals, AABB queryAabb, ulong mask, List<Entity> result)
@@ -799,7 +822,7 @@ public static class PhysicsManager
 
     public static bool IsTouching(Physical physical, string groupName)
     {
-        ulong groupMask = Verity.Input.Filter.Get(groupName)?.Mask ?? Verity.Input.FilterRegistry.GetGroupMask(groupName);
+        ulong groupMask = Verity.Filter.Filter.Get(groupName)?.Mask ?? Verity.Filter.FilterRegistry.GetGroupMask(groupName);
         foreach (var entity in GetTouchingEntities(physical))
         {
             var otherPhysical = entity.GetComponent<Physical>();
@@ -841,7 +864,7 @@ public static class PhysicsManager
         Vector2 cardinalDirection = SnapToCardinal(direction);
         Guid id = physical.Owner.Id;
         ulong groupMask = groupName != null
-            ? (Verity.Input.Filter.Get(groupName)?.Mask ?? Verity.Input.FilterRegistry.GetGroupMask(groupName))
+            ? (Verity.Filter.Filter.Get(groupName)?.Mask ?? Verity.Filter.FilterRegistry.GetGroupMask(groupName))
             : ulong.MaxValue;
 
         foreach (var pair in _currentContacts)
@@ -881,7 +904,7 @@ public static class PhysicsManager
 
         Guid id = physical.Owner.Id;
         ulong groupMask = groupName != null
-            ? (Verity.Input.Filter.Get(groupName)?.Mask ?? Verity.Input.FilterRegistry.GetGroupMask(groupName))
+            ? (Verity.Filter.Filter.Get(groupName)?.Mask ?? Verity.Filter.FilterRegistry.GetGroupMask(groupName))
             : ulong.MaxValue;
         Vector2 normalizedDirection = Vector2.Normalize(worldDirection);
 
@@ -941,7 +964,7 @@ public static class PhysicsManager
 
     public static bool IsGrounded(Physical physical, string groupName)
     {
-        ulong groupMask = Verity.Input.Filter.Get(groupName)?.Mask ?? Verity.Input.FilterRegistry.GetGroupMask(groupName);
+        ulong groupMask = Verity.Filter.Filter.Get(groupName)?.Mask ?? Verity.Filter.FilterRegistry.GetGroupMask(groupName);
         Guid id = physical.Owner.Id;
 
         foreach (var pair in _currentContacts)

@@ -1,8 +1,7 @@
 using System;
 using System.Collections.Generic;
-using System.Linq;
 
-namespace Verity.Input;
+namespace Verity.Filter;
 
 /// <summary>
 /// 모든 Enum 값에 대해 엔진 전체에서 고유한 비트 인덱스(0-63)를 관리합니다.

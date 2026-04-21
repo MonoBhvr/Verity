@@ -4,6 +4,7 @@ Dist/
 /packages/
 riderModule.iml
 /_ReSharper.Caches/
+/Tools/
 
 # User-specific files
 *.user
@@ -26,3 +27,6 @@ tmp/
 .codex-temp/
 **/obj_codex/
 **/bin_codex/
+
+# Sisyphus
+.sisyphus/

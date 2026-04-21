@@ -30,6 +30,7 @@ public static class WorldLoader
     public static void LoadWorldFromJson(string json, string name, Assembly? userAssembly = null)
     {
         try {
+            EventBus.Clear();
             var world = WorldManager.CreateOrReplaceWorld(name);
             UiSystem.Clear();
             SceneSerializer.Deserialize(world, json, userAssembly);

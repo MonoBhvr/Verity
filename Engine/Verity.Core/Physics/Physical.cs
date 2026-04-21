@@ -1,7 +1,7 @@
 using System.Numerics;
 using Verity.Core.ECS;
 using Verity.Core;
-using Verity.Input;
+using Verity.Filter;
 
 namespace Verity.Core.Physics;
 
@@ -40,7 +40,7 @@ public class Physical : Component
 
     [SerializeField, PhysicsGroupSelector]
     public string GroupName { get; set; } = "Default";
-    public ulong GroupMask => Filter.Get(GroupName)?.Mask ?? FilterRegistry.GetGroupMask(GroupName);
+    public ulong GroupMask => Verity.Filter.Filter.Get(GroupName)?.Mask ?? FilterRegistry.GetGroupMask(GroupName);
 
     public float GravityScale { get; set; } = 1.0f;
     public float SleepThreshold { get; set; } = 0.01f;

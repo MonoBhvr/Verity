@@ -288,6 +288,9 @@ public static class UiRenderer
 
     private static string ResolveFontPath(UiNode node)
     {
+        if (node is TextNode textNode && !string.IsNullOrWhiteSpace(textNode.FontPath))
+            return textNode.FontPath;
+
         return !string.IsNullOrWhiteSpace(node.Visual.FontPath)
             ? node.Visual.FontPath
             : DefaultFontPath;
@@ -295,6 +298,9 @@ public static class UiRenderer
 
     private static string ResolveFontFamily(UiNode node)
     {
+        if (node is TextNode textNode && !string.IsNullOrWhiteSpace(textNode.FontFamily))
+            return textNode.FontFamily;
+
         return !string.IsNullOrWhiteSpace(node.Visual.FontFamily)
             ? node.Visual.FontFamily
             : DefaultFontFamily;

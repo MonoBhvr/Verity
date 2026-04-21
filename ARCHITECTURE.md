@@ -2,10 +2,7 @@
 
 이 문서는 Verity 엔진 전체 구조를 설명하는 상위 문서입니다.
 
-이 문서의 목적은 두 가지입니다.
-
-1. 엔진이 실제로 어떤 실행 모델과 데이터 구조 위에서 동작하는지 설명하는 아키텍처 문서
-2. 세부 스크립팅 API 문서로 진입하기 위한 문서 맵 제공
+이 문서는 엔진이 실제로 어떤 실행 모델과 데이터 구조 위에서 동작하는지 설명하는 아키텍처 문서입니다.
 
 상세 클래스, 함수, 메서드, 프로퍼티 레퍼런스는 시스템별 문서로 분리되어 있습니다. 이렇게 분리한 이유는 다음과 같습니다.
 
@@ -17,6 +14,28 @@
 
 ## 1. 엔진 실행 모델
 
+### 1.1 `VerityCore` 진입점과 초기화 단계
+
+현재 `VerityCore` 자체는 거대한 bootstrap class라기보다, 엔진 전역 상태에 접근하는 매우 얇은 진입 표면입니다.
+
+- `VerityCore.Version`: 런타임/에디터가 공통으로 표시하는 엔진 버전 문자열입니다.
+- `VerityCore.ResetRuntime()`: `WorldManager.Reset()`과 `Time.Reset()`을 함께 호출해 월드 상태와 시간 상태를 초기화합니다.
+
+즉, 실제 엔진 기동 순서는 `VerityCore` 한 곳에 몰려 있지 않고, 호스트가 `VerityCore`와 각 서브시스템을 조합하는 방식입니다. 현재 런타임 기준 초기화 흐름은 `Verity.Game.Program.Main(...)`에서 다음 순서로 진행됩니다.
+
+1. 실행 경로와 content root를 준비하고 필요하면 runtime logging을 연결합니다.
+2. `GraphicsDevice`, `Shader2D`, `TextureManager`, `RenderPipeline`을 만들고 `RenderPipeline.BaseAssetsPath`, `SceneSerializer.AssetRootPath`, `UiSystem.AssetsRoot` 같은 전역 경로를 맞춥니다.
+3. `DefaultSprites.Initialize(...)`로 기본 렌더 자산을 준비합니다.
+4. `UserScripts.dll`을 로드해 사용자 스크립트 assembly를 확보합니다.
+5. `BuildSettings`, `Filters.json`, `ProjectSettings.json`을 읽고 `FilterManager`, `SortingLayer.SyncWithSettings(...)`, `UiSystem.ProjectSettings` 같은 설정성 서브시스템을 맞춥니다.
+6. 시작 월드를 `WorldLoader.LoadWorld(...)` 또는 `WorldLoader.LoadWorldFromJson(...)`으로 로드하고, 실패 시 fallback world 또는 `Empty World`를 활성화합니다.
+7. 월드가 준비되면 에셋 바인딩을 수행한 뒤 `Time.Reset()`과 `new GameLoop { ProjectSettings = projectSettings }`로 런타임 tick 상태를 시작합니다.
+8. `device.Window.OnSdlEvent += Verity.Input.Input.ProcessEvent`와 `AudioSystem.Initialize()`를 연결한 뒤 메인 루프에 들어갑니다.
+
+에디터 플레이 모드도 큰 구조는 같습니다. `EditorApp.EnterPlayMode()`는 현재 월드 snapshot을 저장하고 `Time.Reset()` 후 `GameLoop`를 새로 만든 다음 `IsPlaying = true`로 전환합니다. 즉, Verity의 “엔진 진입”은 단일 `Main` 함수 하나보다, 호스트가 월드/시간/루프를 재초기화해 실행 상태로 바꾸는 절차로 이해하는 편이 맞습니다.
+
+### 1.2 `GameLoop`의 3개 흐름 진입 방식
+
 Verity는 기본적으로 세 개의 흐름을 분리해서 운용합니다.
 
 | 흐름 | 기준 값 | 역할 |
@@ -24,6 +43,20 @@ Verity는 기본적으로 세 개의 흐름을 분리해서 운용합니다.
 | Logic Tick | `Time.TargetTPS` | 스크립트 lifecycle, coroutine, 애니메이션, 일반 게임 로직 처리 |
 | Physics Tick | `Time.TargetPTPS` | 강체 적분, 충돌 판정, 접촉 해석, 물리 이벤트 처리 |
 | Render Frame | 별도 프레임 루프 | 카메라 기준 렌더러 수집, 정렬, 드로우, 후처리 수행 |
+
+세 흐름이 실제로 들어가는 입구는 다음과 같습니다.
+
+- Logic/Physics는 호스트가 프레임마다 `GameLoop.TickLogic(deltaTime)`를 호출하면서 함께 진입합니다.
+- Render는 `GameLoop.TickRender()`가 `OnRender`만 호출하는 최소 훅으로 존재하지만, 현재 런타임 기본 경로는 `RenderPipeline.RenderWorld(...)`와 `UiRenderer.Render(...)`를 호스트 메인 루프에서 직접 호출합니다.
+- 그래서 현재 구조는 “로직/물리는 `GameLoop` 중심, 렌더는 호스트 프레임 루프 중심”이라고 보는 것이 정확합니다.
+
+`TickLogic(deltaTime)`의 내부 진입 규칙도 중요합니다.
+
+1. `WorldLoader.PendingWorldName != null`이면 즉시 반환해 월드 전환 중에는 tick을 멈춥니다.
+2. `WorldManager.ActiveWorld`가 없으면 아무 것도 실행하지 않습니다.
+3. 활성 월드의 custom setting 또는 `ProjectSettings`에서 `TargetTPS`, `TargetPTPS`를 결정합니다.
+4. `deltaTime * Time.TimeScale`을 logic/physics accumulator에 누적하고, 각각의 고정 간격을 넘을 때만 tick을 실행합니다.
+5. 마지막에 `world.ProcessPendingDestroys()`를 호출해 로직/물리 중 예약된 파괴를 한 곳에서 정리합니다.
 
 Logic Tick 내부의 기본 실행 순서는 다음과 같습니다.
 
@@ -40,6 +73,52 @@ Logic Tick 내부의 기본 실행 순서는 다음과 같습니다.
 - 물리는 별도 tick으로 분리해야 충돌과 적분의 일관성을 유지할 수 있습니다.
 - coroutine이 logic tick 기준으로 전진해야 스크립트 대기 규칙이 예측 가능해집니다.
 
+### 1.3 Logic / Physics / Render 세부 흐름
+
+#### Logic Flow: `PerformLogicTick(...)`
+
+Logic Flow는 한 번 진입할 때마다 다음 순서로 진행됩니다.
+
+1. `RuntimeProfiler.BeginLogicTick()`으로 profiling 구간을 시작합니다.
+2. `Verity.Input.Input.NewLogicTick()`으로 입력 상태를 logic tick 경계에 맞춰 갱신합니다.
+3. `Time.DeltaTime`, `Time.TotalTime`, `Time.LogicTickCount`를 갱신합니다.
+4. `AnimationSystem.Update(fixedDelta)`를 먼저 실행합니다.
+5. 활성 스크립트 목록을 가져와 아직 실행되지 않은 스크립트에 `Awake`, `Start`를 1회만 호출합니다.
+6. 모든 활성 스크립트에 `FixedUpdate`, `Update`, coroutine 전진, `LateUpdate`를 순서대로 호출합니다.
+7. 각 단계 뒤에 `OnFixedUpdate`, `OnUpdate`, `OnLateUpdate` 같은 엔진 측 콜백 훅도 호출합니다.
+
+중요한 점은 Verity에서 `FixedUpdate`가 physics tick 안이 아니라 logic flow 안에 있다는 점입니다. 즉, 사용자 스크립트의 `FixedUpdate`는 “logic 고정 tick 단계”이고, 실제 물리 적분은 별도의 Physics Flow에서 수행됩니다.
+
+#### Physics Flow: `PerformPhysicsTick(...)`
+
+Physics Flow는 physics accumulator가 `physicsFixedDelta` 이상일 때만 진입합니다.
+
+1. `Time.PhysicsTickCount`를 증가시킵니다.
+2. `PhysicsManager.Step(fixedDelta, world, ProjectSettings)`로 실제 물리 시뮬레이션을 수행합니다.
+3. 완료 후 `OnPhysicsTick` 콜백을 호출합니다.
+
+이 흐름은 로직과 동일한 프레임 안에서 여러 번 돌 수도 있고, 프레임 상황에 따라 한 번도 돌지 않을 수도 있습니다. 핵심은 render frame과 1:1로 묶이지 않는다는 점입니다.
+
+#### Render Flow
+
+Render Flow는 현재 `GameLoop`에 완전히 흡수되어 있지 않습니다.
+
+- `GameLoop.TickRender()`는 `OnRender?.Invoke()`만 수행하는 얇은 확장 지점입니다.
+- 실제 런타임 기본 구현은 호스트 루프에서 카메라를 찾고 `RenderPipeline.RenderWorld(world, mainCam)`를 호출한 뒤, `UiRenderer.Render(...)`로 UI canvas를 그립니다.
+- 따라서 Render Flow는 현재 구조상 “엔진 루프의 세 번째 축”이지만, 구현 위치는 `GameLoop`보다 런타임/에디터 호스트에 더 가깝습니다.
+
+### 1.4 엔진 종료 흐름
+
+런타임 종료는 메인 루프 `while (!device.ShouldClose)`가 끝난 뒤 정리 단계로 이어집니다.
+
+1. `AudioSystem.Shutdown()`으로 오디오 시스템을 먼저 종료합니다.
+2. `renderPipeline.Dispose()`, `shader.Dispose()`, `textureManager.Dispose()`로 그래픽 리소스를 해제합니다.
+3. 마지막으로 `device.Dispose()`와 log writer 정리를 수행합니다.
+
+에디터 플레이 모드 종료는 별도 경로입니다. `EditorApp.ExitPlayMode()`는 저장해 둔 snapshot을 `Restore(...)`해 월드 상태를 되돌리고, 에셋을 다시 바인딩한 뒤 `_gameLoop = null`, `IsPlaying = false`, `Verity.Input.Input.Enabled = true` 순서로 플레이 상태를 해제합니다.
+
+즉, Verity의 shutdown도 단일 `VerityCore.Shutdown()` API보다, “호스트가 각 서브시스템의 수명주기를 역순으로 정리하는 구조”로 이해해야 합니다.
+
 ---
 
 ## 2. ECS와 월드 구조
@@ -52,7 +131,7 @@ Verity의 런타임 코어는 `World`, `Entity`, `Component`, `Transform`, `Scri
 | `Entity` | 컴포넌트를 묶는 최소 런타임 단위가 필요해서 | 컴포넌트 리스트 기반, 타입별 조회 캐시 보유 |
 | `Component` | 공통 수명주기와 소유 관계를 묶기 위해 | `Owner`, `Transform`, `Enabled` 제공 |
 | `Transform` | 계층과 좌표계를 모든 엔티티에 일관되게 부여하기 위해 | local/world matrix, world rotation, world scale dirty-cache 사용 |
-| `Script` | 게임 로직을 컴포넌트로 붙일 수 있게 하기 위해 | reflection 초기 바인딩 후 delegate 호출, coroutine 관리 |
+| `Script` / `LuaScriptComponent` | 게임 로직을 ECS 컴포넌트로 붙일 수 있게 하기 위해 | C#은 `Script`, Lua는 `LuaScriptComponent`로 연결되고 둘 다 월드/엔티티 수명주기를 따름 |
 
 ### 2.1 최근 구조 변경의 의미
 
@@ -67,27 +146,29 @@ Verity의 런타임 코어는 `World`, `Entity`, `Component`, `Transform`, `Scri
 
 ---
 
-## 3. 스크립팅 런타임 구조
+## 3. 스크립팅 통합 구조
 
-Verity 스크립팅은 Unity 스타일 사용감에 가깝지만, 내부적으로는 더 단순한 구조를 취합니다.
+이 문서는 스크립팅 사용법 자체보다, 스크립트 시스템이 엔진 구조 안에 어떻게 연결되는지를 설명합니다.
 
-### 3.1 왜 reflection을 초기 바인딩에만 쓰는가
+### 3.1 ECS에 스크립트가 붙는 방식
 
-스크립트는 `Awake`, `Start`, `Update` 같은 이름 기반 메서드를 지원해야 합니다. 이를 위해 생성 시점에는 reflection이 필요합니다. 하지만 매 tick마다 reflection으로 메서드를 찾으면 비용이 큽니다. 그래서 현재 구조는 다음과 같습니다.
+Verity는 스크립트를 ECS 컴포넌트로 다룹니다.
 
-1. 스크립트 생성 시 lifecycle/physics 메서드를 한 번 찾음
-2. 찾은 결과를 delegate로 캐시
-3. 실제 루프에서는 delegate만 직접 호출
+- C# 스크립트는 `Script`를 통해 엔티티에 부착됩니다.
+- Lua 스크립트는 `LuaScriptComponent`를 통해 엔티티에 부착됩니다.
+- 두 방식 모두 `Entity`와 `Component`의 소유 관계, 활성화 상태, 월드 전환 규칙을 그대로 따릅니다.
 
-즉, “유연성은 reflection으로 얻고, 반복 실행 비용은 delegate 캐시로 줄이는” 구조입니다.
+즉, 스크립팅은 ECS 바깥의 별도 런타임이 아니라, 월드 안에 배치된 컴포넌트 계층 위에서 동작하는 로직 계층입니다.
 
-### 3.2 coroutine이 logic tick 기준인 이유
+### 3.2 GameLoop와 스크립트의 연결
 
-coroutine은 render frame 기준이 아니라 logic tick 기준으로 전진합니다. 이 설계를 택한 이유는 다음과 같습니다.
+스크립트 실행은 `GameLoop`의 logic flow에 연결됩니다.
 
-- `WaitForTicks`, `WaitForPhysicalTicks`의 의미를 분명히 하기 위해
-- 프레임 드랍이 있어도 스크립트 시뮬레이션 규칙이 크게 흔들리지 않게 하기 위해
-- 스크립트 로직과 렌더 타이밍을 분리하기 위해
+- `Awake`, `Start`, `FixedUpdate`, `Update`, coroutine 전진, `LateUpdate`는 logic tick 순서 안에서 처리됩니다.
+- Physics 시뮬레이션은 별도 physics flow에서 수행되므로, 스크립트는 물리와 같은 프레임에 실행되더라도 동일한 단계로 취급되지 않습니다.
+- coroutine 역시 render frame이 아니라 logic tick 기준으로 전진하므로, 스크립트 대기 규칙은 렌더 속도와 분리됩니다.
+
+세부 lifecycle API, coroutine 사용법, shortcut API는 [Scripting 문서](./Docs/Scripting.md)로 분리합니다.
 
 ---
 
@@ -134,9 +215,39 @@ coroutine은 render frame 기준이 아니라 logic tick 기준으로 전진합�
 
 이건 단순 최적화가 아니라 렌더 상태, 텍스처 묶음, 머티리얼 경계, uniform 업로드 방식까지 다시 잡아야 하는 아키텍처 레벨 작업입니다. 따라서 현재 문서에서는 “이미 해결된 문제”와 “남아 있는 구조적 한계”를 분리해서 기록합니다.
 
+### 5.3 UI 렌더링의 위치
+
+UI는 렌더링 파이프라인과 완전히 분리된 독립 앱이 아니라, 월드 렌더 뒤에 이어지는 별도 레이어로 동작합니다.
+
+- 런타임 기본 경로에서는 `RenderPipeline.RenderWorld(...)` 뒤에 `UiRenderer.Render(...)`가 호출됩니다.
+- `UiSystem`은 에셋 루트와 프로젝트 설정을 공유하며, 월드 렌더와 같은 호스트 프레임 루프에 매달려 있습니다.
+- 따라서 UI는 엔진 구조상 별도 사용자 경험 계층이지만, 실행 시점은 render flow에 인접한 후단 패스로 이해하는 것이 맞습니다.
+
 ---
 
-## 6. 현재 남아 있는 공통 병목 후보
+## 6. 에디터 구조
+
+에디터는 엔진 바깥의 별도 제품이 아니라, 동일한 월드/ECS/렌더링 시스템을 호스팅하는 상위 애플리케이션입니다.
+
+### 6.1 플레이 모드와 런타임 재사용
+
+- `EditorApp.EnterPlayMode()`는 현재 월드 snapshot을 저장한 뒤 `Time.Reset()`과 새 `GameLoop`를 통해 런타임 상태를 다시 구성합니다.
+- `EditorApp.ExitPlayMode()`는 snapshot 복원, 에셋 재바인딩, 입력/플레이 상태 해제를 통해 편집 상태로 되돌립니다.
+- 즉, 에디터의 플레이 모드는 별도 엔진을 하나 더 실행하는 방식이 아니라, 같은 엔진 시스템을 재초기화해 재사용하는 구조입니다.
+
+### 6.2 에디터의 역할
+
+에디터는 다음 역할을 담당합니다.
+
+- 월드/에셋/프로젝트 설정을 편집하는 호스트 UI 제공
+- 플레이 모드 전환과 런타임 수명주기 제어
+- 엔진 서브시스템이 사용할 경로, 설정, 에셋 바인딩 상태 관리
+
+따라서 에디터는 Core, ECS, GameLoop, Rendering, UI 위에 올라가는 orchestration 계층으로 보는 편이 정확합니다.
+
+---
+
+## 7. 현재 남아 있는 공통 병목 후보
 
 이번 코드와 문서를 기준으로, 여전히 성능에 민감한 지점은 다음과 같습니다.
 
@@ -149,20 +260,21 @@ coroutine은 render frame 기준이 아니라 logic tick 기준으로 전진합�
 
 ---
 
-## 7. 문서 구성
+## 8. 문서 구성
 
 아래 문서들이 실제 상세 레퍼런스입니다.
 
 | 문서 | 범위 |
 | :--- | :--- |
-| [Core 문서](D:/Verity/Docs/Core.md) | ECS, 월드, 공용 수학 타입, 디버그, 타일맵, 에셋 경로 유틸리티 |
-| [Scripting 문서](D:/Verity/Docs/Scripting.md) | `Script`, lifecycle, coroutine, 스크립트 shortcut API |
-| [Physics 문서](D:/Verity/Docs/Physics.md) | `Physical`, `PhysicalShape`, 쿼리, contact, solver 구조 |
-| [Graphics 문서](D:/Verity/Docs/Graphics.md) | 카메라, 렌더러, 조명, sorting layer, 후처리, UI 텍스트 렌더링 |
-| [Animation 문서](D:/Verity/Docs/Animation.md) | `Animator`, clip, track, controller graph |
-| [Audio 문서](D:/Verity/Docs/Audio.md) | `AudioClip`, `AudioSource`, `AudioManager`, audio system |
-| [Input 문서](D:/Verity/Docs/Input.md) | 입력 폴링, `KeyCode`, `MouseButton` |
-| [Filter 문서](D:/Verity/Docs/Filter.md) | `Filter`, `MixedFilter`, `FilterRegistry`, bitmask 체계 |
-| [UI 문서](D:/Verity/Docs/UI.md) | UI 노드, 캔버스, 바인딩, 레이아웃, 현재 스크린 UI 구조 |
+| [Core 문서](./Docs/Core.md) | ECS, 월드, 공용 수학 타입, 디버그, 타일맵, 에셋 경로 유틸리티, `ObjectPool<T>`, `SceneTransition`, `SaveManager` |
+| [Scripting 문서](./Docs/Scripting.md) | `Script`, lifecycle, coroutine, 스크립트 shortcut API, `EventBus` |
+| [Physics 문서](./Docs/Physics.md) | `Physical`, `PhysicalShape`, 쿼리, contact, solver 구조 |
+| [Graphics 문서](./Docs/Graphics.md) | 카메라, 렌더러, 조명, sorting layer, 후처리, UI 텍스트 렌더링, `ParticleEmitter`, `ParticleSystem`, `ProfilerOverlay` |
+| [Animation 문서](./Docs/Animation.md) | `Animator`, clip, track, controller graph |
+| [Audio 문서](./Docs/Audio.md) | `AudioClip`, `AudioSource`, `AudioManager`, audio system |
+| [Input 문서](./Docs/Input.md) | 입력 폴링, `KeyCode`, `MouseButton` |
+| [Filter 문서](./Docs/Filter.md) | `Filter`, `MixedFilter`, `FilterRegistry`, bitmask 체계 |
+| [UI 문서](./Docs/UI.md) | UI 노드, 캔버스, 바인딩, 레이아웃, 현재 스크린 UI 구조, `DynamicArea` 부분 갱신 |
+| [Editor 문서](./Docs/Editor.md) | 에디터 앱 구조, 플레이 모드, 인스펙터/계층/프로젝트 도구 |
 
 ---

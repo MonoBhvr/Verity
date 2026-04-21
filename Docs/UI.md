@@ -443,9 +443,31 @@ Verity UI는 retained tree 기반입니다. 즉, 즉시 그릴 명령만 나열�
 실제 값은 `UIScreenAsset`이 아니라 `Canvas`에 저장됩니다.
 따라서 같은 화면 에셋을 여러 번 띄워도 각 인스턴스가 별도 상태를 가질 수 있습니다.
 
+추가로 화면 변수는 템플릿 공공 파라미터처럼 사용할 수 있습니다.
+
+- `DefaultValue`: 화면이 열릴 때 초기값으로 사용됩니다.
+- `Expression`: 비어 있지 않으면 매 프레임 다시 계산됩니다.
+- 참조 별칭: `Screen.Name`, `Param.Name`, `Params.Name`, `Name`
+- 바인딩 수식: `=Param.Speed * 0.5`, `='HP: ' + Screen.Health`
+
+즉 하나의 파라미터를 여러 element의 `Text`, `FontSize`, `Transform.Position.X`, `Transform.Size.Y` 등에 동시에 연결할 수 있습니다.
+
 ### 8.2 DynamicArea
 
 `DynamicArea`는 `ItemsSource`와 `ItemTemplate`를 사용하여 자식 Element를 동적으로 생성합니다.
+
+### 목적
+
+- 인벤토리, 퀘스트 목록, 반복 카드처럼 길이가 바뀌는 데이터를 retained UI 트리에 투영하기 위해
+- 항목별 템플릿을 재사용하면서 각 child에 `BindingItem`을 연결하기 위해
+- 전체 재생성 비용을 줄이기 위해 가능한 경우 기존 child 인스턴스를 유지하기 위해
+
+### 주요 API
+
+| 이름 | 형식 | 설명 |
+| :--- | :--- | :--- |
+| `ItemsSource` | `string` | 바인딩 경로입니다. 해석 결과가 `IEnumerable`이면 항목 목록으로 사용됩니다. |
+| `ItemTemplate` | `UiNode?` | 각 항목마다 복제할 템플릿 노드입니다. |
 
 현재 동작은 다음과 같습니다.
 
@@ -454,7 +476,50 @@ Verity UI는 retained tree 기반입니다. 즉, 즉시 그릴 명령만 나열�
 3. `ItemTemplate`를 항목 수만큼 복제
 4. 각 복제 노드에 `BindingItem` 연결
 
-현재는 변경 diff 기반이 아니라 매 갱신 시 재구성에 가까운 방식입니다.
+### 부분 갱신 동작
+
+현재 구현은 예전의 전체 재구성 방식에서 개선되어, 가능한 경우 common prefix/suffix를 유지하는 부분 갱신을 수행합니다.
+
+1. `UiSystem`이 현재 항목 목록과 `DynamicArea.CachedItems`를 비교합니다.
+2. `ItemTemplate`이 바뀌었거나 child 수가 맞지 않으면 전체 새로고침을 수행합니다.
+3. 그렇지 않으면 앞쪽과 뒤쪽에서 동일한 항목 구간을 찾습니다.
+4. 유지 가능한 child는 `SetBindingItemRecursive(...)`로 다시 바인딩만 합니다.
+5. 중간 변경 구간만 `RemoveChild(...)` / 템플릿 clone 삽입으로 갱신합니다.
+
+항목 비교 규칙도 중요합니다.
+
+- `string`과 값 타입은 `Equals(...)` 비교를 사용합니다.
+- 참조 타입은 같은 인스턴스인지 `ReferenceEquals(...)`로 비교합니다.
+
+즉, 리스트 끝에 항목을 추가하거나 중간 일부만 교체하는 경우에는 기존 child 인스턴스가 최대한 유지됩니다.
+
+### 사용 예시
+
+```csharp
+new DynamicArea
+{
+    Name = "Inventory",
+    ItemsSource = "Items",
+    ItemTemplate = new Label
+    {
+        Name = "Entry",
+        Bindings =
+        [
+            new UiBinding
+            {
+                Path = "Item.Name",
+                TargetProperty = "Text"
+            }
+        ]
+    }
+}
+```
+
+### 다른 시스템과의 통합
+
+- `Canvas.Set(...)` 또는 screen 변수 갱신을 통해 `ItemsSource`가 가리키는 컬렉션이 바뀌면 다음 `Canvas.Update(...)`에서 반영됩니다.
+- 부분 갱신 덕분에 retained UI의 노드 identity가 유지되어 선택 상태, 임시 runtime state, 외부 참조가 덜 흔들립니다.
+- 바인딩 해석은 여전히 `UiBindingRuntime`의 reflection 경로를 사용하므로, 매우 큰 리스트에서는 path 해석 비용을 함께 고려해야 합니다.
 
 ### 8.3 UiScript
 
@@ -484,5 +549,5 @@ Verity UI는 retained tree 기반입니다. 즉, 즉시 그릴 명령만 나열�
 
 - UI binding과 action 호출은 reflection 기반이므로 빈번한 대규모 갱신에서 비용이 있습니다.
 - retained UI이므로 상태 변경과 레이아웃 변경이 누적되면 트리 순회 비용이 커질 수 있습니다.
-- `DynamicArea`는 아직 부분 갱신이 아니라 전체 재구성 성격이 강합니다.
+- `DynamicArea`는 이제 common prefix/suffix를 보존하는 부분 갱신을 수행하지만, 항목 비교가 참조 타입 identity 기반인 경우 새 객체를 매 프레임 만들면 여전히 중간 구간 재생성이 자주 발생할 수 있습니다.
 - `WorldToCanvas` 계열 helper는 아직 정식 API로 정리되지 않았습니다.

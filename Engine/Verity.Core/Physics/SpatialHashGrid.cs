@@ -7,6 +7,8 @@ public class SpatialHashGrid
 {
     private readonly float _cellSize;
     private readonly Dictionary<long, List<Physical>> _grid = new();
+    // Tracks cells already visited by each body during a grid build to avoid O(n) bucket scans.
+    private readonly Dictionary<Physical, HashSet<long>> _physicalCells = new();
 
     public SpatialHashGrid(float cellSize = 2.0f)
     {
@@ -45,6 +47,12 @@ public class SpatialHashGrid
     {
         if (aabb.IsDefault()) return;
 
+        if (!_physicalCells.TryGetValue(physical, out var occupiedCells))
+        {
+            occupiedCells = new HashSet<long>();
+            _physicalCells[physical] = occupiedCells;
+        }
+
         int minX = (int)Math.Floor(aabb.Min.X / _cellSize);
         int minY = (int)Math.Floor(aabb.Min.Y / _cellSize);
         int maxX = (int)Math.Floor(aabb.Max.X / _cellSize);
@@ -55,14 +63,16 @@ public class SpatialHashGrid
             for (int y = minY; y <= maxY; y++)
             {
                 long key = GetKey(x, y);
+                if (!occupiedCells.Add(key))
+                    continue;
+
                 if (!_grid.TryGetValue(key, out var list))
                 {
                     list = new List<Physical>();
                     _grid[key] = list;
                 }
-                
-                // For small lists, IndexOf is usually faster than HashSet overhead
-                if (list.IndexOf(physical) == -1) list.Add(physical);
+
+                list.Add(physical);
             }
         }
     }
@@ -137,5 +147,9 @@ public class SpatialHashGrid
         return any ? new AABB(min, max) : new AABB(Vector2.Zero, Vector2.Zero);
     }
 
-    public void Clear() => _grid.Clear();
+    public void Clear()
+    {
+        _grid.Clear();
+        _physicalCells.Clear();
+    }
 }

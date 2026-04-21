@@ -1,8 +1,9 @@
 using System.Numerics;
 using Verity.Core.ECS;
 using Verity.Core.Engine;
+using Verity.Graphics;
 
-namespace Verity.Graphics.Physics;
+namespace Verity.Core.Physics;
 
 public class Fragment : Script
 {

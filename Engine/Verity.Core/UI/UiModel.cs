@@ -1,4 +1,5 @@
 using System.Collections;
+using System.Globalization;
 using System.Reflection;
 using System.Text.Json.Serialization;
 using Verity.Core.Serialization;
@@ -111,6 +112,44 @@ public enum UiEventType
     Submit,
     Cancel,
     FocusChanged
+}
+
+public static class UiDefaultDisplayStrings
+{
+    public const string Element = "Element";
+    public const string Container = "Container";
+    public const string Panel = "Panel";
+    public const string Label = "Label";
+    public const string RichText = "RichText";
+    public const string RichTextMarkup = "<b>Rich Text</b>";
+    public const string Image = "Image";
+    public const string Button = "Button";
+    public const string IconButton = "IconButton";
+    public const string Toggle = "Toggle";
+    public const string ToggleGroup = "ToggleGroup";
+    public const string Dropdown = "Dropdown";
+    public const string InputField = "InputField";
+    public const string TextArea = "TextArea";
+    public const string Slider = "Slider";
+    public const string ProgressBar = "ProgressBar";
+    public const string Scrollbar = "Scrollbar";
+    public const string ScrollView = "ScrollView";
+    public const string ListView = "ListView";
+    public const string GridView = "GridView";
+    public const string Window = "Window";
+    public const string Modal = "Modal";
+    public const string Tabs = "Tabs";
+    public const string Tooltip = "Tooltip";
+    public const string Spacer = "Spacer";
+    public const string DynamicArea = "DynamicArea";
+    public const string Text = "Text";
+    public const string Placeholder = "Type here...";
+    public const string NewUiStyle = "NewUiStyle";
+    public const string NewUiPrefab = "NewUiPrefab";
+    public const string NewScreen = "NewScreen";
+
+    public static readonly string[] DropdownOptions = ["Option A", "Option B", "Option C"];
+    public static readonly string[] TabTitles = ["Tab 1", "Tab 2"];
 }
 
 public readonly record struct UiRect(float X, float Y, float Width, float Height)
@@ -257,6 +296,8 @@ public sealed class UiScreenVariableDefinition
 {
     public string Name { get; set; } = string.Empty;
     public string TypeName { get; set; } = "object";
+    public string DefaultValue { get; set; } = string.Empty;
+    public string Expression { get; set; } = string.Empty;
 }
 
 [JsonPolymorphic(TypeDiscriminatorPropertyName = "$type")]
@@ -287,7 +328,7 @@ public sealed class UiScreenVariableDefinition
 public abstract class UiNode
 {
     public string Id { get; set; } = Guid.NewGuid().ToString("N");
-    public string Name { get; set; } = "Element";
+    public string Name { get; set; } = UiDefaultDisplayStrings.Element;
     public string Tag { get; set; } = string.Empty;
     public bool Active { get; set; } = true;
     public UiNodeKind Kind { get; protected init; }
@@ -422,20 +463,104 @@ public sealed class Panel : UiContainer
 
 public sealed class DynamicArea : UiContainer
 {
+    private readonly List<object?> _cachedItems = [];
+    private string _itemsSource = string.Empty;
+    private UiNode? _itemTemplate;
+    private bool _isDirty = true;
+    private bool _requiresFullRefresh = true;
+
     public DynamicArea()
     {
         Kind = UiNodeKind.DynamicArea;
-        Name = "DynamicArea";
+        Name = UiDefaultDisplayStrings.DynamicArea;
     }
 
-    public string ItemsSource { get; set; } = string.Empty;
-    public UiNode? ItemTemplate { get; set; }
+    public string ItemsSource
+    {
+        get => _itemsSource;
+        set
+        {
+            string next = value ?? string.Empty;
+            if (string.Equals(_itemsSource, next, StringComparison.Ordinal))
+                return;
+
+            _itemsSource = next;
+            _isDirty = true;
+        }
+    }
+
+    public UiNode? ItemTemplate
+    {
+        get => _itemTemplate;
+        set
+        {
+            if (ReferenceEquals(_itemTemplate, value))
+                return;
+
+            _itemTemplate = value;
+            _isDirty = true;
+            _requiresFullRefresh = true;
+        }
+    }
+
+    internal IReadOnlyList<object?> CachedItems => _cachedItems;
+    internal bool RequiresRefresh => _isDirty;
+    internal bool RequiresFullRefresh => _requiresFullRefresh;
+
+    internal bool HasSameItems(IReadOnlyList<object?> items)
+    {
+        if (_cachedItems.Count != items.Count)
+            return false;
+
+        for (int i = 0; i < items.Count; i++)
+        {
+            if (!ItemsMatch(_cachedItems[i], items[i]))
+                return false;
+        }
+
+        return true;
+    }
+
+    internal void CommitRefresh(IReadOnlyList<object?> items)
+    {
+        _cachedItems.Clear();
+        foreach (var item in items)
+            _cachedItems.Add(item);
+
+        _isDirty = false;
+        _requiresFullRefresh = false;
+    }
+
+    internal void ClearRefreshState()
+    {
+        _cachedItems.Clear();
+        _isDirty = false;
+        _requiresFullRefresh = false;
+    }
+
+    internal static bool ItemsMatch(object? left, object? right)
+    {
+        if (left == null || right == null)
+            return left == right;
+
+        Type leftType = left.GetType();
+        Type rightType = right.GetType();
+        if (leftType != rightType)
+            return false;
+
+        if (leftType == typeof(string) || leftType.IsValueType)
+            return Equals(left, right);
+
+        return ReferenceEquals(left, right);
+    }
 }
 
 public class TextNode : UiNode
 {
-    public string Text { get; set; } = "Text";
+    public string Text { get; set; } = UiDefaultDisplayStrings.Text;
     public float FontSize { get; set; } = 18f;
+    public string FontPath { get; set; } = string.Empty;
+    public string FontFamily { get; set; } = string.Empty;
     public bool AutoSize { get; set; }
     public bool WordWrap { get; set; } = true;
     public string LocalizationKey { get; set; } = string.Empty;
@@ -486,11 +611,11 @@ public sealed class Button : ClickableNode
     public Button()
     {
         Kind = UiNodeKind.Button;
-        Name = "Button";
-        Text = "Button";
+        Name = UiDefaultDisplayStrings.Button;
+        Text = UiDefaultDisplayStrings.Button;
     }
 
-    public string Text { get; set; } = "Button";
+    public string Text { get; set; } = UiDefaultDisplayStrings.Button;
 }
 
 public sealed class IconButton : ClickableNode
@@ -498,7 +623,7 @@ public sealed class IconButton : ClickableNode
     public IconButton()
     {
         Kind = UiNodeKind.IconButton;
-        Name = "IconButton";
+        Name = UiDefaultDisplayStrings.IconButton;
     }
 
     [JsonConverter(typeof(SpriteConverter))]
@@ -510,13 +635,13 @@ public sealed class Toggle : ClickableNode
     public Toggle()
     {
         Kind = UiNodeKind.Toggle;
-        Name = "Toggle";
-        Text = "Toggle";
+        Name = UiDefaultDisplayStrings.Toggle;
+        Text = UiDefaultDisplayStrings.Toggle;
     }
 
     public bool IsChecked { get; set; }
     public string Group { get; set; } = string.Empty;
-    public string Text { get; set; } = "Toggle";
+    public string Text { get; set; } = UiDefaultDisplayStrings.Toggle;
 }
 
 public sealed class ToggleGroup : UiContainer
@@ -524,7 +649,7 @@ public sealed class ToggleGroup : UiContainer
     public ToggleGroup()
     {
         Kind = UiNodeKind.ToggleGroup;
-        Name = "ToggleGroup";
+        Name = UiDefaultDisplayStrings.ToggleGroup;
     }
 
     public bool AllowSwitchOff { get; set; } = true;
@@ -535,8 +660,8 @@ public sealed class Dropdown : ClickableNode
     public Dropdown()
     {
         Kind = UiNodeKind.Dropdown;
-        Name = "Dropdown";
-        Options = ["Option A", "Option B", "Option C"];
+        Name = UiDefaultDisplayStrings.Dropdown;
+        Options = [.. UiDefaultDisplayStrings.DropdownOptions];
     }
 
     public List<string> Options { get; set; } = [];
@@ -549,11 +674,11 @@ public sealed class InputField : ClickableNode
     public InputField()
     {
         Kind = UiNodeKind.InputField;
-        Name = "InputField";
+        Name = UiDefaultDisplayStrings.InputField;
     }
 
     public string Value { get; set; } = string.Empty;
-    public string Placeholder { get; set; } = "Type here...";
+    public string Placeholder { get; set; } = UiDefaultDisplayStrings.Placeholder;
 }
 
 public sealed class TextArea : ClickableNode
@@ -561,11 +686,11 @@ public sealed class TextArea : ClickableNode
     public TextArea()
     {
         Kind = UiNodeKind.TextArea;
-        Name = "TextArea";
+        Name = UiDefaultDisplayStrings.TextArea;
     }
 
     public string Value { get; set; } = string.Empty;
-    public string Placeholder { get; set; } = "Type here...";
+    public string Placeholder { get; set; } = UiDefaultDisplayStrings.Placeholder;
 }
 
 public sealed class Slider : ClickableNode
@@ -573,7 +698,7 @@ public sealed class Slider : ClickableNode
     public Slider()
     {
         Kind = UiNodeKind.Slider;
-        Name = "Slider";
+        Name = UiDefaultDisplayStrings.Slider;
     }
 
     public float Min { get; set; }
@@ -586,7 +711,7 @@ public sealed class ProgressBar : UiNode
     public ProgressBar()
     {
         Kind = UiNodeKind.ProgressBar;
-        Name = "ProgressBar";
+        Name = UiDefaultDisplayStrings.ProgressBar;
     }
 
     public float Min { get; set; }
@@ -599,7 +724,7 @@ public sealed class Scrollbar : ClickableNode
     public Scrollbar()
     {
         Kind = UiNodeKind.Scrollbar;
-        Name = "Scrollbar";
+        Name = UiDefaultDisplayStrings.Scrollbar;
     }
 
     public float Value { get; set; }
@@ -610,7 +735,7 @@ public sealed class ScrollView : UiContainer
     public ScrollView()
     {
         Kind = UiNodeKind.ScrollView;
-        Name = "ScrollView";
+        Name = UiDefaultDisplayStrings.ScrollView;
     }
 
     [JsonConverter(typeof(Vector2Converter))]
@@ -625,7 +750,7 @@ public sealed class ListView : UiContainer
     public ListView()
     {
         Kind = UiNodeKind.ListView;
-        Name = "ListView";
+        Name = UiDefaultDisplayStrings.ListView;
     }
 
     public bool Virtualized { get; set; } = true;
@@ -637,7 +762,7 @@ public sealed class GridView : UiContainer
     public GridView()
     {
         Kind = UiNodeKind.GridView;
-        Name = "GridView";
+        Name = UiDefaultDisplayStrings.GridView;
     }
 
     public bool Virtualized { get; set; } = true;
@@ -650,11 +775,11 @@ public sealed class Window : UiContainer
     public Window()
     {
         Kind = UiNodeKind.Window;
-        Name = "Window";
-        Title = "Window";
+        Name = UiDefaultDisplayStrings.Window;
+        Title = UiDefaultDisplayStrings.Window;
     }
 
-    public string Title { get; set; } = "Window";
+    public string Title { get; set; } = UiDefaultDisplayStrings.Window;
 }
 
 public sealed class Modal : UiContainer
@@ -662,7 +787,7 @@ public sealed class Modal : UiContainer
     public Modal()
     {
         Kind = UiNodeKind.Modal;
-        Name = "Modal";
+        Name = UiDefaultDisplayStrings.Modal;
     }
 
     public bool DismissOnBackgroundClick { get; set; } = true;
@@ -673,11 +798,11 @@ public sealed class Tabs : UiContainer
     public Tabs()
     {
         Kind = UiNodeKind.Tabs;
-        Name = "Tabs";
+        Name = UiDefaultDisplayStrings.Tabs;
     }
 
     public int SelectedIndex { get; set; }
-    public List<string> Titles { get; set; } = ["Tab 1", "Tab 2"];
+    public List<string> Titles { get; set; } = [.. UiDefaultDisplayStrings.TabTitles];
 }
 
 public sealed class Tooltip : UiNode
@@ -685,11 +810,11 @@ public sealed class Tooltip : UiNode
     public Tooltip()
     {
         Kind = UiNodeKind.Tooltip;
-        Name = "Tooltip";
-        Text = "Tooltip";
+        Name = UiDefaultDisplayStrings.Tooltip;
+        Text = UiDefaultDisplayStrings.Tooltip;
     }
 
-    public string Text { get; set; } = "Tooltip";
+    public string Text { get; set; } = UiDefaultDisplayStrings.Tooltip;
 }
 
 public sealed class Spacer : UiNode
@@ -697,7 +822,7 @@ public sealed class Spacer : UiNode
     public Spacer()
     {
         Kind = UiNodeKind.Spacer;
-        Name = "Spacer";
+        Name = UiDefaultDisplayStrings.Spacer;
     }
 }
 
@@ -709,7 +834,7 @@ public sealed class UiStateStyleOverride
 
 public sealed class UiStyleAsset
 {
-    public string Name { get; set; } = "NewUiStyle";
+    public string Name { get; set; } = UiDefaultDisplayStrings.NewUiStyle;
     public Dictionary<string, Color> Colors { get; set; } = new();
     public Dictionary<string, float> Numbers { get; set; } = new();
     public Dictionary<string, string> Strings { get; set; } = new();
@@ -718,14 +843,14 @@ public sealed class UiStyleAsset
 
 public sealed class UiPrefabAsset
 {
-    public string Name { get; set; } = "NewUiPrefab";
+    public string Name { get; set; } = UiDefaultDisplayStrings.NewUiPrefab;
     public UiNode Root { get; set; } = new Panel { Name = "PrefabRoot" };
 }
 
 public sealed class UIScreenAsset
 {
     public string Id { get; set; } = Guid.NewGuid().ToString("N");
-    public string Name { get; set; } = "NewScreen";
+    public string Name { get; set; } = UiDefaultDisplayStrings.NewScreen;
     public UiRenderMode RenderMode { get; set; } = UiRenderMode.ScreenSpaceOverlay;
 
     [JsonConverter(typeof(Vector2Converter))]
@@ -751,11 +876,11 @@ public static class UiNodeFactory
 {
     public static UiNode Create(UiNodeKind kind) => kind switch
     {
-        UiNodeKind.Container => new UiContainer { Name = "Container" },
-        UiNodeKind.Panel => new Panel { Name = "Panel" },
-        UiNodeKind.Label => new Label { Name = "Label", Text = "Label" },
-        UiNodeKind.RichText => new RichText { Name = "RichText", Text = "<b>Rich Text</b>" },
-        UiNodeKind.Image => new Image { Name = "Image" },
+        UiNodeKind.Container => new UiContainer { Name = UiDefaultDisplayStrings.Container },
+        UiNodeKind.Panel => new Panel { Name = UiDefaultDisplayStrings.Panel },
+        UiNodeKind.Label => new Label { Name = UiDefaultDisplayStrings.Label, Text = UiDefaultDisplayStrings.Label },
+        UiNodeKind.RichText => new RichText { Name = UiDefaultDisplayStrings.RichText, Text = UiDefaultDisplayStrings.RichTextMarkup },
+        UiNodeKind.Image => new Image { Name = UiDefaultDisplayStrings.Image },
         UiNodeKind.Button => new Button(),
         UiNodeKind.IconButton => new IconButton(),
         UiNodeKind.Toggle => new Toggle(),
@@ -802,14 +927,14 @@ public static class UiBindingRuntime
             }
 
             var type = current.GetType();
-            var property = type.GetProperty(segment, BindingFlags.Instance | BindingFlags.Public | BindingFlags.IgnoreCase);
+            var property = GetProperty(type, segment, requireSetter: false);
             if (property != null)
             {
                 current = property.GetValue(current);
                 continue;
             }
 
-            var field = type.GetField(segment, BindingFlags.Instance | BindingFlags.Public | BindingFlags.IgnoreCase);
+            var field = GetField(type, segment);
             if (field != null)
             {
                 current = field.GetValue(current);
@@ -825,14 +950,14 @@ public static class UiBindingRuntime
     public static bool TrySetValue(object target, string propertyName, object? value)
     {
         var type = target.GetType();
-        var property = type.GetProperty(propertyName, BindingFlags.Instance | BindingFlags.Public | BindingFlags.IgnoreCase);
+        var property = GetProperty(type, propertyName, requireSetter: true);
         if (property != null && property.CanWrite)
         {
             property.SetValue(target, ConvertValue(property.PropertyType, value));
             return true;
         }
 
-        var field = type.GetField(propertyName, BindingFlags.Instance | BindingFlags.Public | BindingFlags.IgnoreCase);
+        var field = GetField(type, propertyName);
         if (field != null)
         {
             field.SetValue(target, ConvertValue(field.FieldType, value));
@@ -851,25 +976,36 @@ public static class UiBindingRuntime
         if (segments.Length == 0)
             return false;
 
-        object? current = source;
-        for (int i = 0; i < segments.Length - 1; i++)
-        {
-            if (current == null)
-                return false;
+        return TrySetPathRecursive(source, segments, 0, value);
+    }
 
-            current = ResolveSingleMember(current, segments[i]);
+    private static bool TrySetPathRecursive(object current, string[] segments, int index, object? value)
+    {
+        if (index == segments.Length - 1)
+        {
+            if (current is IDictionary dictionary)
+            {
+                dictionary[segments[index]] = value;
+                return true;
+            }
+
+            return TrySetValue(current, segments[index], value);
         }
 
-        if (current == null)
+        object? child = ResolveSingleMember(current, segments[index]);
+        if (child == null)
             return false;
 
-        if (current is IDictionary dictionary)
+        if (!TrySetPathRecursive(child, segments, index + 1, value))
+            return false;
+
+        if (current is IDictionary dictionaryParent)
         {
-            dictionary[segments[^1]] = value;
+            dictionaryParent[segments[index]] = child;
             return true;
         }
 
-        return TrySetValue(current, segments[^1], value);
+        return TrySetValue(current, segments[index], child);
     }
 
     private static object? ResolveSingleMember(object current, string segment)
@@ -878,11 +1014,11 @@ public static class UiBindingRuntime
             return dictionary[segment];
 
         var type = current.GetType();
-        var property = type.GetProperty(segment, BindingFlags.Instance | BindingFlags.Public | BindingFlags.IgnoreCase);
+        var property = GetProperty(type, segment, requireSetter: false);
         if (property != null)
             return property.GetValue(current);
 
-        var field = type.GetField(segment, BindingFlags.Instance | BindingFlags.Public | BindingFlags.IgnoreCase);
+        var field = GetField(type, segment);
         if (field != null)
             return field.GetValue(current);
 
@@ -910,5 +1046,418 @@ public static class UiBindingRuntime
             return Convert.ToString(value);
 
         return Convert.ChangeType(value, nonNullable);
+    }
+
+    private static PropertyInfo? GetProperty(Type type, string name, bool requireSetter)
+    {
+        const BindingFlags flags = BindingFlags.Instance | BindingFlags.Public;
+        PropertyInfo[] properties = type.GetProperties(flags);
+
+        PropertyInfo? exact = properties.FirstOrDefault(property =>
+            string.Equals(property.Name, name, StringComparison.Ordinal) && (!requireSetter || property.CanWrite));
+        if (exact != null)
+            return exact;
+
+        return properties.FirstOrDefault(property =>
+            string.Equals(property.Name, name, StringComparison.OrdinalIgnoreCase) && (!requireSetter || property.CanWrite));
+    }
+
+    private static FieldInfo? GetField(Type type, string name)
+    {
+        const BindingFlags flags = BindingFlags.Instance | BindingFlags.Public;
+        FieldInfo[] fields = type.GetFields(flags);
+
+        FieldInfo? exact = fields.FirstOrDefault(field => string.Equals(field.Name, name, StringComparison.Ordinal));
+        if (exact != null)
+            return exact;
+
+        return fields.FirstOrDefault(field => string.Equals(field.Name, name, StringComparison.OrdinalIgnoreCase));
+    }
+
+    public static object? ParseTypedValue(string? typeName, string? rawValue)
+    {
+        if (string.IsNullOrWhiteSpace(rawValue))
+            return null;
+
+        string normalizedType = string.IsNullOrWhiteSpace(typeName)
+            ? "object"
+            : typeName.Trim().ToLowerInvariant();
+
+        string text = rawValue.Trim();
+
+        try
+        {
+            return normalizedType switch
+            {
+                "string" => text,
+                "bool" or "boolean" => bool.Parse(text),
+                "byte" => byte.Parse(text, CultureInfo.InvariantCulture),
+                "int" or "int32" => int.Parse(text, CultureInfo.InvariantCulture),
+                "long" or "int64" => long.Parse(text, CultureInfo.InvariantCulture),
+                "float" or "single" => float.Parse(text, CultureInfo.InvariantCulture),
+                "double" => double.Parse(text, CultureInfo.InvariantCulture),
+                "decimal" => decimal.Parse(text, CultureInfo.InvariantCulture),
+                "vector2" => ParseVector2(text),
+                _ => TryParseLooseLiteral(text, out object? parsed) ? parsed : text
+            };
+        }
+        catch
+        {
+            return text;
+        }
+    }
+
+    private static bool TryParseLooseLiteral(string text, out object? value)
+    {
+        if (bool.TryParse(text, out bool boolValue))
+        {
+            value = boolValue;
+            return true;
+        }
+
+        if (int.TryParse(text, NumberStyles.Integer, CultureInfo.InvariantCulture, out int intValue))
+        {
+            value = intValue;
+            return true;
+        }
+
+        if (double.TryParse(text, NumberStyles.Float | NumberStyles.AllowThousands, CultureInfo.InvariantCulture, out double doubleValue))
+        {
+            value = doubleValue;
+            return true;
+        }
+
+        value = null;
+        return false;
+    }
+
+    private static Vector2 ParseVector2(string text)
+    {
+        string[] parts = text.Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
+        if (parts.Length != 2)
+            return Vector2.Zero;
+
+        float x = float.Parse(parts[0], CultureInfo.InvariantCulture);
+        float y = float.Parse(parts[1], CultureInfo.InvariantCulture);
+        return new Vector2(x, y);
+    }
+}
+
+public static class UiExpressionRuntime
+{
+    public static bool TryEvaluate(string expression, Func<string, object?> resolver, out object? value)
+    {
+        value = null;
+        if (string.IsNullOrWhiteSpace(expression))
+            return false;
+
+        string body = expression.Trim();
+        if (body.StartsWith("="))
+            body = body[1..].Trim();
+
+        if (body.Length == 0)
+            return false;
+
+        try
+        {
+            var parser = new Parser(body, resolver);
+            value = parser.Parse();
+            return true;
+        }
+        catch
+        {
+            value = null;
+            return false;
+        }
+    }
+
+    private sealed class Parser
+    {
+        private readonly string _text;
+        private readonly Func<string, object?> _resolver;
+        private int _index;
+
+        public Parser(string text, Func<string, object?> resolver)
+        {
+            _text = text;
+            _resolver = resolver;
+        }
+
+        public object? Parse()
+        {
+            object? result = ParseExpression();
+            SkipWhitespace();
+            if (_index < _text.Length)
+                throw new FormatException("Unexpected token.");
+
+            return result;
+        }
+
+        private object? ParseExpression()
+        {
+            object? left = ParseTerm();
+            while (true)
+            {
+                SkipWhitespace();
+                if (Match('+'))
+                {
+                    left = Add(left, ParseTerm());
+                    continue;
+                }
+
+                if (Match('-'))
+                {
+                    left = ToNumber(left) - ToNumber(ParseTerm());
+                    continue;
+                }
+
+                return left;
+            }
+        }
+
+        private object? ParseTerm()
+        {
+            object? left = ParseFactor();
+            while (true)
+            {
+                SkipWhitespace();
+                if (Match('*'))
+                {
+                    left = ToNumber(left) * ToNumber(ParseFactor());
+                    continue;
+                }
+
+                if (Match('/'))
+                {
+                    left = ToNumber(left) / ToNumber(ParseFactor());
+                    continue;
+                }
+
+                if (Match('%'))
+                {
+                    left = ToNumber(left) % ToNumber(ParseFactor());
+                    continue;
+                }
+
+                return left;
+            }
+        }
+
+        private object? ParseFactor()
+        {
+            SkipWhitespace();
+
+            if (Match('+'))
+                return ParseFactor();
+
+            if (Match('-'))
+                return -ToNumber(ParseFactor());
+
+            if (Match('('))
+            {
+                object? inner = ParseExpression();
+                Expect(')');
+                return inner;
+            }
+
+            if (Peek() is '\'' or '"')
+                return ParseString();
+
+            if (char.IsDigit(Peek()) || Peek() == '.')
+                return ParseNumber();
+
+            string identifier = ParseIdentifier();
+            SkipWhitespace();
+            if (Match('('))
+            {
+                var args = new List<object?>();
+                SkipWhitespace();
+                if (!Match(')'))
+                {
+                    do
+                    {
+                        args.Add(ParseExpression());
+                        SkipWhitespace();
+                    }
+                    while (Match(','));
+
+                    Expect(')');
+                }
+
+                return EvaluateFunction(identifier, args);
+            }
+
+            return _resolver(identifier);
+        }
+
+        private string ParseIdentifier()
+        {
+            SkipWhitespace();
+            int start = _index;
+            while (_index < _text.Length)
+            {
+                char ch = _text[_index];
+                if (char.IsLetterOrDigit(ch) || ch == '_' || ch == '.')
+                {
+                    _index++;
+                    continue;
+                }
+
+                break;
+            }
+
+            if (start == _index)
+                throw new FormatException("Identifier expected.");
+
+            return _text[start.._index];
+        }
+
+        private object ParseNumber()
+        {
+            int start = _index;
+            bool seenExponent = false;
+            bool seenDot = false;
+
+            while (_index < _text.Length)
+            {
+                char ch = _text[_index];
+                if (char.IsDigit(ch))
+                {
+                    _index++;
+                    continue;
+                }
+
+                if (ch == '.' && !seenDot)
+                {
+                    seenDot = true;
+                    _index++;
+                    continue;
+                }
+
+                if ((ch == 'e' || ch == 'E') && !seenExponent)
+                {
+                    seenExponent = true;
+                    _index++;
+                    if (_index < _text.Length && (_text[_index] == '+' || _text[_index] == '-'))
+                        _index++;
+                    continue;
+                }
+
+                break;
+            }
+
+            string slice = _text[start.._index];
+            return double.Parse(slice, CultureInfo.InvariantCulture);
+        }
+
+        private string ParseString()
+        {
+            char quote = _text[_index++];
+            var builder = new System.Text.StringBuilder();
+            while (_index < _text.Length)
+            {
+                char ch = _text[_index++];
+                if (ch == quote)
+                    return builder.ToString();
+
+                if (ch == '\\' && _index < _text.Length)
+                {
+                    char escaped = _text[_index++];
+                    builder.Append(escaped switch
+                    {
+                        'n' => '\n',
+                        'r' => '\r',
+                        't' => '\t',
+                        '\\' => '\\',
+                        '\'' => '\'',
+                        '"' => '"',
+                        _ => escaped
+                    });
+                    continue;
+                }
+
+                builder.Append(ch);
+            }
+
+            throw new FormatException("Unterminated string literal.");
+        }
+
+        private object? EvaluateFunction(string name, IReadOnlyList<object?> args)
+        {
+            return name.ToLowerInvariant() switch
+            {
+                "min" => args.Count >= 2 ? Math.Min(ToNumber(args[0]), ToNumber(args[1])) : 0d,
+                "max" => args.Count >= 2 ? Math.Max(ToNumber(args[0]), ToNumber(args[1])) : 0d,
+                "clamp" => args.Count >= 3 ? Math.Clamp(ToNumber(args[0]), ToNumber(args[1]), ToNumber(args[2])) : 0d,
+                "abs" => args.Count >= 1 ? Math.Abs(ToNumber(args[0])) : 0d,
+                "round" => args.Count >= 1 ? Math.Round(ToNumber(args[0])) : 0d,
+                "floor" => args.Count >= 1 ? Math.Floor(ToNumber(args[0])) : 0d,
+                "ceil" or "ceiling" => args.Count >= 1 ? Math.Ceiling(ToNumber(args[0])) : 0d,
+                "lerp" => args.Count >= 3 ? Lerp(args[0], args[1], args[2]) : 0d,
+                _ => throw new FormatException($"Unknown function: {name}")
+            };
+        }
+
+        private static double Lerp(object? a, object? b, object? t)
+        {
+            double tValue = ToNumber(t);
+            return ToNumber(a) + ((ToNumber(b) - ToNumber(a)) * tValue);
+        }
+
+        private static object Add(object? left, object? right)
+        {
+            if (left is string || right is string)
+                return $"{left}{right}";
+
+            return ToNumber(left) + ToNumber(right);
+        }
+
+        private static double ToNumber(object? value)
+        {
+            if (value == null)
+                return 0d;
+
+            return value switch
+            {
+                double d => d,
+                float f => f,
+                decimal dec => (double)dec,
+                byte b => b,
+                sbyte sb => sb,
+                short s => s,
+                ushort us => us,
+                int i => i,
+                uint ui => ui,
+                long l => l,
+                ulong ul => ul,
+                bool boolValue => boolValue ? 1d : 0d,
+                string text when double.TryParse(text, NumberStyles.Float | NumberStyles.AllowThousands, CultureInfo.InvariantCulture, out double parsed) => parsed,
+                _ => Convert.ToDouble(value, CultureInfo.InvariantCulture)
+            };
+        }
+
+        private char Peek() => _index < _text.Length ? _text[_index] : '\0';
+
+        private bool Match(char expected)
+        {
+            SkipWhitespace();
+            if (Peek() != expected)
+                return false;
+
+            _index++;
+            return true;
+        }
+
+        private void Expect(char expected)
+        {
+            if (!Match(expected))
+                throw new FormatException($"Expected '{expected}'.");
+        }
+
+        private void SkipWhitespace()
+        {
+            while (_index < _text.Length && char.IsWhiteSpace(_text[_index]))
+                _index++;
+        }
     }
 }

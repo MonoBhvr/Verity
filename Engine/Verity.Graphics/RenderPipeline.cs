@@ -7,11 +7,12 @@ using Silk.NET.OpenGL;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Verity.Core;
+using Verity.Core.Collections;
 using Verity.Core.Engine;
 using Verity.Core.ECS;
 using Verity.Core.Physics;
 using Verity.Core.World;
-using Verity.Input;
+using Verity.Filter;
 
 namespace Verity.Graphics;
 
@@ -82,15 +83,16 @@ public class RenderPipeline : IDisposable
     private readonly Irodori.Buffer.VertexBuffer.Unuploaded _dynamicBuffer;
     private TextureObjectUploaded? _whitePixel;
 
-    private readonly Dictionary<string, Shader2D> _shaderCache = new();
-    private readonly Dictionary<string, StyleRuntime> _styleCache = new();
-    private readonly Dictionary<string, Vector2[][]> _spriteShadowShapeCache = new(StringComparer.OrdinalIgnoreCase);
-    private readonly Dictionary<string, ResolvedAssetInfo> _resolvedAssetCache = new(StringComparer.OrdinalIgnoreCase);
-    private readonly Dictionary<string, SpriteSlice> _spriteSliceCache = new(StringComparer.OrdinalIgnoreCase);
+    private readonly LruCache<string, Shader2D> _shaderCache = new(64);
+    private readonly LruCache<string, StyleRuntime> _styleCache = new(128);
+    private readonly LruCache<string, Vector2[][]> _spriteShadowShapeCache = new(256);
+    private readonly LruCache<string, ResolvedAssetInfo> _resolvedAssetCache = new(512);
+    private readonly LruCache<string, SpriteSlice> _spriteSliceCache = new(256);
     private readonly List<Component> _sortedRenderers = new();
     private readonly List<RendererSortItem> _rendererSortItems = new();
     private readonly List<OccluderCandidate> _occluderCandidates = new();
     private readonly List<Vector2[]> _shadowPolygonScratch = new();
+    private readonly List<(int Order, string Key)> _postProcessPasses = new();
 
     private FramebufferObject.Uploaded? _worldFbo, _screenFbo;
     private TextureObjectUploaded? _worldColorTex, _screenColorTex;
@@ -458,21 +460,21 @@ public class RenderPipeline : IDisposable
             return;
         }
 
-        var passes = new List<(int Order, string Key)>();
-        if (bloom?.Enabled == true) passes.Add((bloom.Order, "Bloom"));
-        if (distortion?.Enabled == true) passes.Add((distortion.Order, "Distortion"));
-        if (pixelate?.Enabled == true) passes.Add((pixelate.Order, "Pixelate"));
-        if (chromaticAberration?.Enabled == true) passes.Add((chromaticAberration.Order, "ChromaticAberration"));
-        if (motionBlur?.Enabled == true) passes.Add((motionBlur.Order, "MotionBlur"));
-        if (colorAdjustments?.Enabled == true) passes.Add((colorAdjustments.Order, "ColorAdjustments"));
-        if (vignette?.Enabled == true) passes.Add((vignette.Order, "Vignette"));
+        _postProcessPasses.Clear();
+        if (bloom?.Enabled == true) _postProcessPasses.Add((bloom.Order, "Bloom"));
+        if (distortion?.Enabled == true) _postProcessPasses.Add((distortion.Order, "Distortion"));
+        if (pixelate?.Enabled == true) _postProcessPasses.Add((pixelate.Order, "Pixelate"));
+        if (chromaticAberration?.Enabled == true) _postProcessPasses.Add((chromaticAberration.Order, "ChromaticAberration"));
+        if (motionBlur?.Enabled == true) _postProcessPasses.Add((motionBlur.Order, "MotionBlur"));
+        if (colorAdjustments?.Enabled == true) _postProcessPasses.Add((colorAdjustments.Order, "ColorAdjustments"));
+        if (vignette?.Enabled == true) _postProcessPasses.Add((vignette.Order, "Vignette"));
         for (int i = 0; i < customs.Count; i++)
         {
             if (customs[i].Enabled)
-                passes.Add((customs[i].Order, $"Custom:{i}"));
+                _postProcessPasses.Add((customs[i].Order, $"Custom:{i}"));
         }
 
-        passes.Sort((a, b) =>
+        _postProcessPasses.Sort((a, b) =>
         {
             int orderCompare = a.Order.CompareTo(b.Order);
             return orderCompare != 0 ? orderCompare : string.CompareOrdinal(a.Key, b.Key);
@@ -481,7 +483,7 @@ public class RenderPipeline : IDisposable
         TextureObjectUploaded sourceTexture = _ppSceneTex;
         bool useFirstTarget = true;
 
-        foreach (var pass in passes)
+        foreach (var pass in _postProcessPasses)
         {
             var destFbo = useFirstTarget ? _ppTempFbo1 : _ppTempFbo2;
             var destTex = useFirstTarget ? _ppTempTex1 : _ppTempTex2;
@@ -1052,12 +1054,12 @@ public class RenderPipeline : IDisposable
                 : SpriteImportUtility.CreateDefaultSlice(raw.Width, raw.Height, new Vector2(0.5f, 0.5f));
             Vector2 resolvedPivot = renderer.UseSpritePivot ? slice.Pivot : renderer.Pivot;
             int alphaThresholdByte = Math.Clamp((int)MathF.Round(Math.Clamp(renderer.ShadowAlphaThreshold, 0.0f, 1.0f) * 255.0f), 0, 255);
-            string cacheKey = $"{resolvedPath}|{renderer.Sprite.SpriteId}|{slice.X}|{slice.Y}|{slice.Width}|{slice.Height}|{alphaThresholdByte}";
+            string cacheKey = NormalizeInsensitiveCacheKey($"{resolvedPath}|{renderer.Sprite.SpriteId}|{slice.X}|{slice.Y}|{slice.Width}|{slice.Height}|{alphaThresholdByte}");
 
             if (!_spriteShadowShapeCache.TryGetValue(cacheKey, out Vector2[][]? localPolygons))
             {
                 localPolygons = BuildSpriteShadowShapes(raw.Pixels, raw.Width, raw.Height, slice, (byte)alphaThresholdByte);
-                _spriteShadowShapeCache[cacheKey] = localPolygons;
+                _spriteShadowShapeCache.Set(cacheKey, localPolygons);
             }
 
             return TransformShadowPolygons(localPolygons, BuildModelMatrix(transform, renderer, resolvedPivot));
@@ -1445,7 +1447,7 @@ public class RenderPipeline : IDisposable
     private StyleRuntime? ResolveStyle(StyleAsset asset, string? defaultVertexSource = null, string cacheScope = "style")
     {
         if (string.IsNullOrWhiteSpace(asset.Path)) return null;
-        string key = $"{cacheScope}:{GetCacheKey(asset.Path)}";
+            string key = $"{cacheScope}:{GetCacheKey(asset.Path)}";
         if (_styleCache.TryGetValue(key, out var cached)) return cached;
         
         if (!TryResolveAssetPath(asset.Path, asset.Guid, out string fullPath)) return null;
@@ -1463,7 +1465,7 @@ public class RenderPipeline : IDisposable
             foreach (var (k, v) in data.Textures) {
                 if (TryResolveAssetPath(v, null, out string texPath)) runtime.Textures[k] = _textureManager.Load(texPath);
             }
-            _styleCache[key] = runtime;
+            _styleCache.Set(key, runtime);
             return runtime;
         } catch { return null; }
     }
@@ -1500,7 +1502,7 @@ public class RenderPipeline : IDisposable
             }
 
             var shader = Shader2D.Create(_device, vert ?? defaultVertexSource, frag);
-            _shaderCache[key] = shader;
+            _shaderCache.Set(key, shader);
             return shader;
         } catch (Exception e) { 
             Verity.Core.Debug.LogError($"[RenderPipeline] Failed to compile shader {key}: {e.Message}");
@@ -1516,12 +1518,12 @@ public class RenderPipeline : IDisposable
         if (string.IsNullOrWhiteSpace(p))
             return false;
 
-        string key = string.IsNullOrWhiteSpace(guid) ? GetCacheKey(p) : $"{guid}:{GetCacheKey(p)}";
+        string key = NormalizeInsensitiveCacheKey(string.IsNullOrWhiteSpace(guid) ? GetCacheKey(p) : $"{guid}:{GetCacheKey(p)}");
         if (!_resolvedAssetCache.TryGetValue(key, out var cached))
         {
             string resolved = ResolveAssetPath(p, guid);
             cached = new ResolvedAssetInfo(resolved, File.Exists(resolved));
-            _resolvedAssetCache[key] = cached;
+            _resolvedAssetCache.Set(key, cached);
         }
 
         fullPath = cached.Path;
@@ -1540,7 +1542,7 @@ public class RenderPipeline : IDisposable
             if (!TryResolveAssetPath(sprite.Path, sprite.Guid, out resolvedPath))
                 return false;
 
-            string cacheKey = $"{resolvedPath}|{sprite.SpriteId}|{textureWidth}|{textureHeight}";
+            string cacheKey = NormalizeInsensitiveCacheKey($"{resolvedPath}|{sprite.SpriteId}|{textureWidth}|{textureHeight}");
             if (_spriteSliceCache.TryGetValue(cacheKey, out var cachedSlice))
             {
                 spriteSlice = cachedSlice;
@@ -1548,7 +1550,7 @@ public class RenderPipeline : IDisposable
             else
             {
                 spriteSlice = AssetPathUtility.ResolveSpriteSlice(resolvedPath, sprite, textureWidth, textureHeight);
-                _spriteSliceCache[cacheKey] = spriteSlice;
+                _spriteSliceCache.Set(cacheKey, spriteSlice);
             }
 
             return true;
@@ -1850,16 +1852,21 @@ public class RenderPipeline : IDisposable
     public void ClearCache() { _shaderCache.Clear(); _styleCache.Clear(); _spriteShadowShapeCache.Clear(); _resolvedAssetCache.Clear(); _spriteSliceCache.Clear(); }
     public void ClearStyleCache(string path)
     {
-        string key = GetCacheKey(path);
+        string key = NormalizeInsensitiveCacheKey(GetCacheKey(path));
         foreach (var cacheKey in _styleCache.Keys.Where(k => k.EndsWith(key, StringComparison.OrdinalIgnoreCase)).ToList())
             _styleCache.Remove(cacheKey);
     }
     public void ClearShaderCache(string path) { 
-        string key = GetCacheKey(path);
+        string key = NormalizeInsensitiveCacheKey(GetCacheKey(path));
         foreach (var cacheKey in _shaderCache.Keys.Where(k => k.EndsWith(key, StringComparison.OrdinalIgnoreCase)).ToList())
-            _shaderCache.Remove(cacheKey);
+        {
+            if (_shaderCache.TryGetValue(cacheKey, out var shader) && _shaderCache.Remove(cacheKey))
+                shader.Dispose();
+        }
         _styleCache.Clear(); // Shaders affect styles, so clear both
     }
+
+    private static string NormalizeInsensitiveCacheKey(string key) => key.ToUpperInvariant();
 
     public void Dispose() 
     { 
@@ -1885,7 +1892,11 @@ public class RenderPipeline : IDisposable
         _chromaticAberrationShader?.Dispose();
         _textRenderer.Dispose();
 
-        foreach(var s in _shaderCache.Values) s.Dispose(); 
+        _shaderCache.Dispose();
+        _styleCache.Dispose();
+        _spriteShadowShapeCache.Dispose();
+        _resolvedAssetCache.Dispose();
+        _spriteSliceCache.Dispose();
         _quadBuffer.Dispose(); 
     }
 }

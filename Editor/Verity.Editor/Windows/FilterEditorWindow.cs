@@ -1,6 +1,7 @@
 using System.Numerics;
 using Hexa.NET.ImGui;
-using Verity.Input;
+using Verity.Filter;
+using FilterType = Verity.Filter.Filter;
 using Verity.Core.Engine;
 
 namespace Verity.Editor.Windows;
@@ -13,7 +14,7 @@ public unsafe class FilterEditorWindow : EditorWindow
     private FilterMode _newFilterMode = FilterMode.Whitelist;
     private bool _createAsMixed = true;
     
-    private Filter? _selectedFilter;
+    private FilterType? _selectedFilter;
     private string _editValueBuffer = "";
     private string _editValueTypeBuffer = ""; 
     private string _enumSearchFilter = "";
@@ -149,7 +150,7 @@ public unsafe class FilterEditorWindow : EditorWindow
         else DrawCreateFilter();
     }
 
-    private void DrawFilterDetails(Filter selectedFilter, Action onBack)
+    private void DrawFilterDetails(FilterType selectedFilter, Action onBack)
     {
         ImGui.Text($"{L10n.Tr("menu_edit")}: {selectedFilter.Name}");
         ImGui.SameLine(ImGui.GetWindowWidth() - 120);
@@ -310,13 +311,13 @@ public unsafe class FilterEditorWindow : EditorWindow
         {
             if (!string.IsNullOrWhiteSpace(_newFilterName))
             {
-                Filter filter;
+                FilterType filter;
                 if (_createAsMixed) filter = new MixedFilter(_newFilterName, _newFilterMode);
                 else
                 {
                     var type = FilterManager.ResolveTypeInternal(_newEnumTypeName);
-                    filter = type != null ? new Filter(_newFilterName, type, Array.CreateInstance(type, 0), _newFilterMode) 
-                                         : new Filter { Name = _newFilterName, EnumTypeName = _newEnumTypeName, Mode = _newFilterMode };
+                    filter = type != null ? new FilterType(_newFilterName, type, Array.CreateInstance(type, 0), _newFilterMode) 
+                                         : new FilterType { Name = _newFilterName, EnumTypeName = _newEnumTypeName, Mode = _newFilterMode };
                 }
                 FilterManager.Register(filter);
                 _selectedFilter = filter;
@@ -324,7 +325,7 @@ public unsafe class FilterEditorWindow : EditorWindow
         }
     }
 
-    public void SelectFilter(Filter? filter) 
+    public void SelectFilter(FilterType? filter) 
     { 
         _selectedFilter = filter;
         if (filter != null)

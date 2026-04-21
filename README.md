@@ -73,11 +73,12 @@ dotnet run --project Editor/Verity.Editor.App/Verity.Editor.App.csproj
 
 엔진의 상세 아키텍처와 스크립팅 API에 대한 정보는 아래 문서에서 확인하실 수 있습니다.
 
--   [아키텍처 문서](D:\Verity\ARCHITECTURE.md)
--   [UI 문서](D:\Verity\Docs\UI.md)
--   [Graphics 문서](D:\Verity\Docs\Graphics.md)
--   [Scripting 문서](D:\Verity\Docs\Scripting.md)
--   [Editor 문서](D:\Verity\Docs\Editor.md)
+-   [아키텍처 문서](./ARCHITECTURE.md)
+-   [UI 문서](./Docs/UI.md)
+-   [Graphics 문서](./Docs/Graphics.md)
+-   [C# 스크립팅 문서](./Docs/Scripting_CSharp.md)
+-   [Lua 스크립팅 문서](./Docs/Scripting_Lua.md)
+-   [Editor 문서](./Docs/Editor.md)
 
 ---
 
@@ -91,7 +92,18 @@ dotnet run --project Editor/Verity.Editor.App/Verity.Editor.App.csproj
 
 Verity Engine은 현재 활발히 개발 중인 Alpha 단계 프로젝트입니다. 핵심 기능들이 지속적으로 추가 및 개선되고 있습니다.
 ### 진행 중
-- **UI** : 현재 개발 중이며, 잔존 기능이 있으나 아직 완전히 정리되지는 않았습니다.
-- **Sprite Setting** : 슬라이싱을 제외한 구현이 완료되었습니다.
-- **Animation** : 테스트가 완료되지 않았습니다.
+- **UI** : 현재 개발 중이며, 편집기 UI와 런타임 UI 사용성이 지속적으로 개선되고 있습니다.
 - **Networking** : 구현되지 않았습니다.
+
+### 완료
+- **Sprite Setting** : 9-slice를 포함한 스프라이트 설정 기능이 구현되었습니다.
+- **Animation** : Discovery 테스트와 후속 수정이 완료되어 현재 동작이 검증되었습니다.
+- **Filter 시스템 독립 프로젝트** : 완료
+- **파티클 시스템** : 완료
+- **이벤트 버스** : 완료
+- **오브젝트 풀링** : 완료
+- **씬 전환 시스템** : 완료
+- **세이브/로드 시스템** : 완료
+- **9-slice 스프라이트** : 완료
+- **프로파일링 인게임 오버레이** : 완료
+- **DynamicArea 부분 갱신 최적화** : 완료

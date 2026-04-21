@@ -1,7 +1,8 @@
 using System.Numerics;
 using Verity.Core;
 using Verity.Core.ECS;
-using Verity.Input;
+using Verity.Filter;
+using FilterType = Verity.Filter.Filter;
 
 namespace Verity.Graphics;
 
@@ -64,7 +65,7 @@ public class Light2D : Component
     public ulong AffectedSortingLayerMask { get; set; } = ulong.MaxValue;
 
     [SerializeField]
-    public Filter? AffectedSortingLayerFilter { get; set; }
+    public FilterType? AffectedSortingLayerFilter { get; set; }
 
     [SerializeField]
     public bool CastShadows { get; set; } = true;
@@ -82,7 +83,7 @@ public class Light2D : Component
     public ulong ShadowReceiverMask { get; set; } = ulong.MaxValue;
 
     [SerializeField]
-    public Filter? ShadowReceiverFilter { get; set; }
+    public FilterType? ShadowReceiverFilter { get; set; }
 
     internal ulong ResolvedAffectedSortingLayerMask => AffectedSortingLayerMask == 0 ? ulong.MaxValue : AffectedSortingLayerMask;
     internal ulong ResolvedShadowReceiverMask => ShadowReceiverMask == 0 ? ulong.MaxValue : ShadowReceiverMask;
@@ -126,7 +127,7 @@ public class Light2D : Component
             : (ResolvedShadowReceiverMask & FilterRegistry.GetMask("SortingLayer", string.IsNullOrWhiteSpace(sortingLayerName) ? "Default" : sortingLayerName)) != 0;
     }
 
-    private static bool MatchesFilter(Filter? filter, Type expectedType, ulong valueMask)
+    private static bool MatchesFilter(FilterType? filter, Type expectedType, ulong valueMask)
     {
         if (!TryGetCompatibleFilter(filter, expectedType, out ulong filterMask, out FilterMode mode))
             return false;
@@ -135,7 +136,7 @@ public class Light2D : Component
         return mode == FilterMode.Whitelist ? hasBit : !hasBit;
     }
 
-    private static bool TryGetCompatibleFilter(Filter? filter, Type expectedType, out ulong mask, out FilterMode mode)
+    private static bool TryGetCompatibleFilter(FilterType? filter, Type expectedType, out ulong mask, out FilterMode mode)
     {
         mask = 0;
         mode = FilterMode.Whitelist;
@@ -152,7 +153,7 @@ public class Light2D : Component
         return true;
     }
 
-    private static bool IsCompatibleSingleTypeFilter(Filter filter, Type expectedType)
+    private static bool IsCompatibleSingleTypeFilter(FilterType filter, Type expectedType)
     {
         if (!string.IsNullOrWhiteSpace(filter.EnumTypeName))
         {

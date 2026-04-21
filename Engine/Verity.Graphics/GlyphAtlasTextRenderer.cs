@@ -70,6 +70,15 @@ void main()
     private readonly Dictionary<BitmapFontKey, BitmapFontFace> _bitmapFontCache = new();
     private readonly Dictionary<string, CachedSdfFontFace> _sdfFontCache = new(StringComparer.OrdinalIgnoreCase);
     private readonly List<DynamicAtlasPage> _dynamicAtlasPages = [];
+    // Reuse hot-path text layout buffers instead of allocating fresh lists per call.
+    private readonly List<PositionedGlyph> _layoutGlyphBuffer = [];
+    private readonly List<LayoutLine> _layoutLineBuffer = [];
+    private LayoutBounds[] _layoutLineBoundsBuffer = Array.Empty<LayoutBounds>();
+    private int[] _drawIndexScratchBuffer = Array.Empty<int>();
+    private int[] _drawIndexUploadBuffer = Array.Empty<int>();
+    private IReadOnlyList<TextureObjectUploaded> _cachedDynamicAtlasTextures = Array.Empty<TextureObjectUploaded>();
+    private int _cachedDynamicAtlasTextureVersion = -1;
+    private int _dynamicAtlasTextureVersion;
     private string? _cachedDefaultBitmapFontSource;
 
     public GlyphAtlasTextRenderer(GraphicsDevice device, TextureManager textureManager, Shader2D shader, Func<string, string?, string> resolveAssetPath)
@@ -130,28 +139,32 @@ void main()
         if (layout.TotalGlyphCount == 0)
             return;
 
-        foreach (var atlasGroup in layout.Glyphs.GroupBy(static glyph => glyph.AtlasIndex))
+        IReadOnlyList<TextureObjectUploaded> atlasTextures = font.AtlasTextures;
+        for (int atlasIndex = 0; atlasIndex < atlasTextures.Count; atlasIndex++)
         {
-            if (atlasGroup.Key < 0 || atlasGroup.Key >= font.AtlasTextures.Count)
-                continue;
-
             var data = Irodori.Buffer.IVertexData.Create<System.Numerics.Vector2, System.Numerics.Vector2>();
-            var indices = new List<int>();
             int vertexBase = 0;
+            int indexCount = 0;
 
-            foreach (var glyph in atlasGroup)
+            for (int glyphIndex = 0; glyphIndex < layout.TotalGlyphCount; glyphIndex++)
             {
+                var glyph = layout.Glyphs[glyphIndex];
+                if (glyph.AtlasIndex != atlasIndex)
+                    continue;
+
                 data.AddVertex(new System.Numerics.Vector2(glyph.Position.X, glyph.Position.Y), glyph.UvMin);
                 data.AddVertex(new System.Numerics.Vector2(glyph.Position.X + glyph.Size.X, glyph.Position.Y), new System.Numerics.Vector2(glyph.UvMax.X, glyph.UvMin.Y));
                 data.AddVertex(new System.Numerics.Vector2(glyph.Position.X, glyph.Position.Y + glyph.Size.Y), new System.Numerics.Vector2(glyph.UvMin.X, glyph.UvMax.Y));
                 data.AddVertex(new System.Numerics.Vector2(glyph.Position.X + glyph.Size.X, glyph.Position.Y + glyph.Size.Y), glyph.UvMax);
 
-                indices.Add(vertexBase + 0);
-                indices.Add(vertexBase + 2);
-                indices.Add(vertexBase + 1);
-                indices.Add(vertexBase + 1);
-                indices.Add(vertexBase + 2);
-                indices.Add(vertexBase + 3);
+                EnsureDrawIndexScratchCapacity(indexCount + 6);
+                _drawIndexScratchBuffer[indexCount + 0] = vertexBase + 0;
+                _drawIndexScratchBuffer[indexCount + 1] = vertexBase + 2;
+                _drawIndexScratchBuffer[indexCount + 2] = vertexBase + 1;
+                _drawIndexScratchBuffer[indexCount + 3] = vertexBase + 1;
+                _drawIndexScratchBuffer[indexCount + 4] = vertexBase + 2;
+                _drawIndexScratchBuffer[indexCount + 5] = vertexBase + 3;
+                indexCount += 6;
                 vertexBase += 4;
             }
 
@@ -162,12 +175,13 @@ void main()
             shader.SetView(view);
             shader.SetModel(Matrix4x4.Identity);
             shader.SetUvRect(System.Numerics.Vector2.Zero, System.Numerics.Vector2.One);
-            shader.SetTexture(font.AtlasTextures[atlasGroup.Key]);
+            shader.SetTexture(atlasTextures[atlasIndex]);
             shader.SetColor(options.Color);
             if (ReferenceEquals(shader, _sdfShader) && font is SdfFontFace sdfFont)
                 shader.SetFloat("uScreenPxRange", ComputeScreenPxRange(options.FontSize, sdfFont));
 
-            using var uploaded = _dynamicBuffer.Upload(data, indices.ToArray()).Unwrap();
+            int[] indices = GetUploadIndices(indexCount);
+            using var uploaded = _dynamicBuffer.Upload(data, indices).Unwrap();
             uploaded.Draw(shader.Program, targetFbo).Unwrap();
         }
     }
@@ -182,8 +196,10 @@ void main()
         float penX = 0f;
         int lineStartGlyphIndex = 0;
 
-        var glyphs = new List<PositionedGlyph>();
-        var lines = new List<LayoutLine>();
+        _layoutGlyphBuffer.Clear();
+        _layoutLineBuffer.Clear();
+        List<PositionedGlyph> glyphs = _layoutGlyphBuffer;
+        List<LayoutLine> lines = _layoutLineBuffer;
 
         foreach (var rune in options.Text.EnumerateRunes())
         {
@@ -231,7 +247,7 @@ void main()
 
         lines.Add(new LayoutLine(lineStartGlyphIndex, glyphs.Count, penX));
 
-        var lineBounds = new LayoutBounds[lines.Count];
+        LayoutBounds[] lineBounds = EnsureLayoutLineBoundsCapacity(lines.Count);
         float blockMinY = float.PositiveInfinity;
         float blockMaxY = float.NegativeInfinity;
 
@@ -545,6 +561,7 @@ void main()
 
         var atlasRect = AllocateDynamicGlyph(bounds.Width, bounds.Height, out int atlasIndex);
         _dynamicAtlasPages[atlasIndex].UploadGlyph(atlasRect, pixels);
+        InvalidateDynamicAtlasTextures();
 
         float uvMinX = atlasRect.X / (float)_dynamicAtlasPages[atlasIndex].Width;
         float uvMaxX = (atlasRect.X + atlasRect.Width) / (float)_dynamicAtlasPages[atlasIndex].Width;
@@ -586,11 +603,55 @@ void main()
 
         var page = new DynamicAtlasPage(_textureManager, _dynamicAtlasPages.Count);
         _dynamicAtlasPages.Add(page);
+        InvalidateDynamicAtlasTextures();
         if (!page.TryAllocate(width, height, out var pageRect))
             throw new InvalidOperationException("Failed to allocate glyph in a new atlas page.");
 
         atlasIndex = _dynamicAtlasPages.Count - 1;
         return pageRect;
+    }
+
+    private LayoutBounds[] EnsureLayoutLineBoundsCapacity(int count)
+    {
+        if (_layoutLineBoundsBuffer.Length < count)
+            _layoutLineBoundsBuffer = new LayoutBounds[count];
+
+        return _layoutLineBoundsBuffer;
+    }
+
+    private void EnsureDrawIndexScratchCapacity(int count)
+    {
+        if (_drawIndexScratchBuffer.Length < count)
+            Array.Resize(ref _drawIndexScratchBuffer, count);
+    }
+
+    private int[] GetUploadIndices(int count)
+    {
+        if (_drawIndexUploadBuffer.Length != count)
+            _drawIndexUploadBuffer = new int[count];
+
+        Array.Copy(_drawIndexScratchBuffer, _drawIndexUploadBuffer, count);
+        return _drawIndexUploadBuffer;
+    }
+
+    private IReadOnlyList<TextureObjectUploaded> GetDynamicAtlasTextures()
+    {
+        if (_cachedDynamicAtlasTextureVersion == _dynamicAtlasTextureVersion)
+            return _cachedDynamicAtlasTextures;
+
+        var textures = new List<TextureObjectUploaded>(_dynamicAtlasPages.Count);
+        for (int i = 0; i < _dynamicAtlasPages.Count; i++)
+            textures.Add(_dynamicAtlasPages[i].Texture);
+
+        _cachedDynamicAtlasTextures = textures;
+        _cachedDynamicAtlasTextureVersion = _dynamicAtlasTextureVersion;
+        return _cachedDynamicAtlasTextures;
+    }
+
+    private void InvalidateDynamicAtlasTextures()
+    {
+        _dynamicAtlasTextureVersion++;
+        _cachedDynamicAtlasTextureVersion = -1;
     }
 
     private static void ConfigureGraphics(System.Drawing.Graphics graphics)
@@ -707,7 +768,7 @@ void main()
         public float LineHeight { get; }
         public float SpaceAdvance { get; }
         public Dictionary<int, GlyphEntry> Glyphs { get; } = new();
-        public IReadOnlyList<TextureObjectUploaded> AtlasTextures => _owner._dynamicAtlasPages.Select(static page => page.Texture).ToList();
+        public IReadOnlyList<TextureObjectUploaded> AtlasTextures => _owner.GetDynamicAtlasTextures();
 
         public static BitmapFontFace? Create(GlyphAtlasTextRenderer owner, string source, float pixelSize)
         {

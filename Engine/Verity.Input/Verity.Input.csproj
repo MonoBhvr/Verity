@@ -5,6 +5,7 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <ProjectReference Include="..\Verity.Filter\Verity.Filter.csproj" />
   </ItemGroup>
 
   <ItemGroup>

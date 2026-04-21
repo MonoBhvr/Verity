@@ -78,7 +78,7 @@ internal static class NativeDetachedWindowStyler
         nint style = GetWindowLongPtr(hwnd, GwlStyle);
         nint exStyle = GetWindowLongPtr(hwnd, GwlExStyle);
 
-        nint requiredStyle = WsCaption | WsSysMenu | WsThickFrame | WsMinimizeBox | WsMaximizeBox;
+        nint requiredStyle = WsCaption | WsSysMenu | WsThickFrame | WsMinimizeBox;
         nint newStyle = style | requiredStyle;
         nint newExStyle = (exStyle | WsExAppWindow) & ~WsExToolWindow;
 

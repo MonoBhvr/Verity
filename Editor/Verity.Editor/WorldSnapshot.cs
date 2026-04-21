@@ -183,7 +183,12 @@ internal sealed class WorldSnapshot
         foreach (var entity in created)
         {
             foreach (var script in entity.GetScripts())
+            {
                 script.HasStarted = false;
+
+                if (script is LuaScriptComponent)
+                    script.InitializeAfterDeserialization();
+            }
         }
     }
 

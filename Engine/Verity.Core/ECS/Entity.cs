@@ -3,6 +3,8 @@ namespace Verity.Core.ECS;
 public class Entity
 {
     private static readonly object MissingComponentSentinel = new();
+    private static readonly List<Entity> _findEntityBuffer = [];
+    private static readonly List<object> _findObjectBuffer = [];
 
     public Guid Id { get; internal set; } = Guid.NewGuid();
     public string Name { get; set; }
@@ -84,14 +86,14 @@ public class Entity
         var world = Verity.Core.World.WorldManager.ActiveWorld;
         if (world == null) return Array.Empty<Entity>();
 
-        var matches = new List<Entity>();
+        _findEntityBuffer.Clear();
         foreach (var entity in world.GetAllEntities())
         {
             if (entity.Tag == tag)
-                matches.Add(entity);
+                _findEntityBuffer.Add(entity);
         }
 
-        return matches.ToArray();
+        return _findEntityBuffer.ToArray();
     }
 
     public static T? FindObjectOfType<T>(bool includeInactive = false) where T : class
@@ -112,17 +114,20 @@ public class Entity
     {
         var world = Verity.Core.World.WorldManager.ActiveWorld;
         if (world == null) return Array.Empty<T>();
-        var results = new List<T>();
+        _findObjectBuffer.Clear();
         foreach (var entity in world.GetAllEntities())
         {
             if (!includeInactive && !entity.Active) continue;
             foreach (var component in entity.GetComponents<T>())
             {
                 if (!includeInactive && component is Component typedComponent && !typedComponent.Enabled) continue;
-                results.Add(component);
+                _findObjectBuffer.Add(component!);
             }
         }
-        return results.ToArray();
+        var results = new T[_findObjectBuffer.Count];
+        for (int i = 0; i < _findObjectBuffer.Count; i++)
+            results[i] = (T)_findObjectBuffer[i];
+        return results;
     }
 
     public static void Destroy(Entity entity)
@@ -168,9 +173,11 @@ public class Entity
         if (typeof(T) == typeof(Transform))
             throw new InvalidOperationException("Cannot add a second Transform component.");
 
-        // Prevent duplicate components (except for specific cases if ever needed, but standard is one per entity)
-        var existing = GetComponent<T>();
-        if (existing != null) return (T)(object)existing;
+        if (!AllowsMultipleComponents(typeof(T)))
+        {
+            var existing = GetComponent<T>();
+            if (existing != null) return (T)(object)existing;
+        }
 
         if (!CanAddComponent(typeof(T), out var reason))
             throw new InvalidOperationException(reason);
@@ -202,8 +209,11 @@ public class Entity
         if (!typeof(Component).IsAssignableFrom(componentType))
             throw new ArgumentException($"Type {componentType.Name} is not a Component.");
 
-        var existing = GetComponent(componentType);
-        if (existing != null) return existing;
+        if (!AllowsMultipleComponents(componentType))
+        {
+            var existing = GetComponent(componentType);
+            if (existing != null) return existing;
+        }
 
         if (!CanAddComponent(componentType, out var reason))
             throw new InvalidOperationException(reason);
@@ -244,7 +254,7 @@ public class Entity
             return false;
         }
 
-        if (GetComponent(componentType) != null)
+        if (!AllowsMultipleComponents(componentType) && GetComponent(componentType) != null)
         {
             reason = $"{componentType.Name} already exists on this entity.";
             return false;
@@ -441,6 +451,9 @@ public class Entity
     internal IReadOnlyList<Component> Components => _components;
 
     internal IEnumerable<Script> GetScripts() => GetComponents<Script>();
+
+    private static bool AllowsMultipleComponents(Type componentType)
+        => componentType == typeof(LuaScriptComponent);
 
     private void InvalidateComponentCaches()
     {

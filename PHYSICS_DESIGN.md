@@ -1,3 +1,8 @@
+> [!NOTE]
+> 이 문서는 초기 설계 기준 문서입니다.
+> 현재 실제 구현 내용은 `Docs/Physics.md`를 참조하세요.
+> 일부 내용은 현재 구현과 다를 수 있습니다.
+
 # Verity Physics Engine Design Specification
 
 Verity 엔진의 강력한 2D 물리 엔진 설계 문서입니다.

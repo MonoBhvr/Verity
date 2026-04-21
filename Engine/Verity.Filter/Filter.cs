@@ -2,7 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Text.Json.Serialization;
 
-namespace Verity.Input;
+namespace Verity.Filter;
 
 public class FilterValue
 {

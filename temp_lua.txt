@@ -1,0 +1,432 @@
+[LuaObject]
+public partial class LuaScriptContext
+{
+    private readonly LuaScriptComponent _component;
+    private readonly LuaEntityHandle _owner;
+
+    public LuaScriptContext(LuaScriptComponent component, LuaEntityHandle owner)
+    {
+        _component = component;
+        _owner = owner;
+    }
+
+    [LuaMember("Owner")]
+    public LuaEntityHandle Owner => _owner;
+
+    [LuaMember("StartCoroutine")]
+    public bool StartCoroutine(LuaValue function)
+    {
+        return _component.StartLuaCoroutine(function) != null;
+    }
+
+    [LuaMember("StartCoroutineByName")]
+    public bool StartCoroutineByName(string functionName)
+    {
+        return _component.StartLuaCoroutine(functionName) != null;
+    }
+
+    [LuaMember("StopAllCoroutines")]
+    public void StopAllCoroutines()
+    {
+        _component.StopAllCoroutines();
+    }
+}
+
+[LuaObject]
+public partial class LuaVector2Value
+{
+    public LuaVector2Value()
+    {
+    }
+
+    public LuaVector2Value(float x, float y)
+    {
+        X = x;
+        Y = y;
+    }
+
+    [LuaMember("X")]
+    public float X { get; set; }
+
+    [LuaMember("Y")]
+    public float Y { get; set; }
+
+    [LuaMember("create")]
+    public static LuaVector2Value Create(float x, float y) => new(x, y);
+
+    public Vector2 ToVector2() => new(X, Y);
+    public static LuaVector2Value FromVector2(Vector2 value) => new(value.X, value.Y);
+    public override string ToString() => $"Vector2({X}, {Y})";
+}
+
+[LuaObject]
+public partial class LuaVector3Value
+{
+    public LuaVector3Value()
+    {
+    }
+
+    public LuaVector3Value(float x, float y, float z)
+    {
+        X = x;
+        Y = y;
+        Z = z;
+    }
+
+    [LuaMember("X")]
+    public float X { get; set; }
+
+    [LuaMember("Y")]
+    public float Y { get; set; }
+
+    [LuaMember("Z")]
+    public float Z { get; set; }
+
+    [LuaMember("create")]
+    public static LuaVector3Value Create(float x, float y, float z) => new(x, y, z);
+
+    public Vector3 ToVector3() => new(X, Y, Z);
+    public static LuaVector3Value FromVector3(Vector3 value) => new(value.X, value.Y, value.Z);
+    public override string ToString() => $"Vector3({X}, {Y}, {Z})";
+}
+
+[LuaObject]
+public partial class LuaTransformHandle
+{
+    private readonly Transform _transform;
+
+    public LuaTransformHandle(Transform transform)
+    {
+        _transform = transform;
+    }
+
+    [LuaMember("Position")]
+    public LuaVector2Value Position
+    {
+        get => LuaVector2Value.FromVector2(_transform.Position);
+        set => _transform.Position = value?.ToVector2() ?? Vector2.Zero;
+    }
+
+    [LuaMember("Rotation")]
+    public float Rotation
+    {
+        get => _transform.Rotation;
+        set => _transform.Rotation = value;
+    }
+
+    [LuaMember("Scale")]
+    public LuaVector2Value Scale
+    {
+        get => LuaVector2Value.FromVector2(_transform.Scale);
+        set => _transform.Scale = value?.ToVector2() ?? Vector2.One;
+    }
+}
+
+[LuaObject]
+public partial class LuaEntityHandle
+{
+    private readonly Entity _entity;
+
+    public LuaEntityHandle(Entity entity)
+    {
+        _entity = entity;
+    }
+
+    [LuaMember("Name")]
+    public string Name
+    {
+        get => _entity.Name;
+        set => _entity.Name = value;
+    }
+
+    [LuaMember("Tag")]
+    public string Tag
+    {
+        get => _entity.Tag;
+        set => _entity.Tag = value;
+    }
+
+    [LuaMember("Active")]
+    public bool Active
+    {
+        get => _entity.Active;
+        set => _entity.Active = value;
+    }
+
+    [LuaMember("Transform")]
+    public LuaTransformHandle Transform => new(_entity.Transform);
+
+    [LuaMember("HasComponent")]
+    public bool HasComponent(string componentTypeName) => FindComponent(componentTypeName) != null;
+
+    [LuaMember("GetComponent")]
+    public LuaValue GetComponent(string componentTypeName)
+    {
+        return ConvertToLuaValue(FindComponent(componentTypeName));
+    }
+
+    [LuaMember("GetField")]
+    public LuaValue GetField(string componentTypeName, string memberName)
+    {
+        Component? component = FindComponent(componentTypeName);
+        if (component == null)
+            return LuaValue.Nil;
+
+        MemberInfo? member = GetReadableMember(component.GetType(), memberName);
+        if (member == null)
+            return LuaValue.Nil;
+
+        object? value = member switch
+        {
+            PropertyInfo property => property.GetValue(component),
+            FieldInfo field => field.GetValue(component),
+            _ => null
+        };
+
+        return ConvertToLuaValue(value);
+    }
+
+    [LuaMember("SetField")]
+    public bool SetField(string componentTypeName, string memberName, LuaValue value)
+    {
+        Component? component = FindComponent(componentTypeName);
+        if (component == null)
+            return false;
+
+        MemberInfo? member = GetWritableMember(component.GetType(), memberName);
+        if (member == null)
+            return false;
+
+        Type targetType = member is PropertyInfo property ? property.PropertyType : ((FieldInfo)member).FieldType;
+        object? converted = ConvertFromLuaValue(value, targetType);
+        if (converted == null && targetType.IsValueType)
+            return false;
+
+        if (member is PropertyInfo writableProperty)
+            writableProperty.SetValue(component, converted);
+        else
+            ((FieldInfo)member).SetValue(component, converted);
+
+        return true;
+    }
+
+    [LuaMember("Invoke")]
+    public LuaValue Invoke(string componentTypeName, string methodName)
+    {
+        Component? component = FindComponent(componentTypeName);
+        if (component == null)
+            return LuaValue.Nil;
+
+        MethodInfo? method = component.GetType().GetMethod(methodName, BindingFlags.Public | BindingFlags.Instance, null, Type.EmptyTypes, null);
+        if (method == null)
+            return LuaValue.Nil;
+
+        object? result = method.Invoke(component, null);
+        return ConvertToLuaValue(result);
+    }
+
+    private Component? FindComponent(string componentTypeName)
+    {
+        Type? resolvedType = ResolveComponentType(componentTypeName);
+        if (resolvedType != null)
+            return _entity.GetComponent(resolvedType);
+
+        return _entity.GetAllComponents().FirstOrDefault(component =>
+            string.Equals(component.GetType().Name, componentTypeName, StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(component.GetType().FullName, componentTypeName, StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static MemberInfo? GetReadableMember(Type type, string memberName)
+    {
+        return type.GetProperty(memberName, BindingFlags.Public | BindingFlags.Instance)
+            ?? type.GetField(memberName, BindingFlags.Public | BindingFlags.Instance);
+    }
+
+    private static MemberInfo? GetWritableMember(Type type, string memberName)
+    {
+        var property = type.GetProperty(memberName, BindingFlags.Public | BindingFlags.Instance);
+        if (property?.CanWrite == true)
+            return property;
+
+        var field = type.GetField(memberName, BindingFlags.Public | BindingFlags.Instance);
+        return field is { IsInitOnly: false } ? field : null;
+    }
+
+    private static LuaValue ConvertToLuaValue(object? value)
+    {
+        return value switch
+        {
+            null => LuaValue.Nil,
+            LuaValue luaValue => luaValue,
+            string text => text,
+            bool boolean => boolean,
+            int number => number,
+            float single => single,
+            double dbl => dbl,
+            KeyCode keyCode => (int)keyCode,
+            Vector2 vector2 => LuaVector2Value.FromVector2(vector2),
+            Vector3 vector3 => LuaVector3Value.FromVector3(vector3),
+            Transform transform => LuaValue.FromObject(new LuaTransformHandle(transform)),
+            Entity entity => LuaValue.FromObject(new LuaEntityHandle(entity)),
+            _ => LuaValue.FromObject(value)
+        };
+    }
+
+    private static object? ConvertFromLuaValue(LuaValue value, Type targetType)
+    {
+        if (value.Type == LuaValueType.Nil)
+            return null;
+
+        if (targetType == typeof(string)) return value.Read<string>();
+        if (targetType == typeof(bool)) return value.Read<bool>();
+        if (targetType == typeof(int)) return (int)value.Read<double>();
+        if (targetType == typeof(float)) return (float)value.Read<double>();
+        if (targetType == typeof(double)) return value.Read<double>();
+        if (targetType == typeof(KeyCode)) return (KeyCode)(int)value.Read<double>();
+        if (targetType == typeof(Vector2) && value.TryRead<LuaVector2Value>(out var wrappedVector2))
+            return wrappedVector2.ToVector2();
+        if (targetType == typeof(Vector3) && value.TryRead<LuaVector3Value>(out var wrappedVector3))
+            return wrappedVector3.ToVector3();
+
+        return value.TryRead<object>(out var obj) ? obj : null;
+    }
+}
+
+[LuaObject]
+public partial class LuaEntityApi
+{
+    [LuaMember("Find")]
+    public LuaEntityHandle? Find(string name)
+    {
+        return Entity.Find(name) is { } entity ? new LuaEntityHandle(entity) : null;
+    }
+
+    [LuaMember("FindWithTag")]
+    public LuaEntityHandle? FindWithTag(string tag)
+    {
+        return Entity.FindWithTag(tag) is { } entity ? new LuaEntityHandle(entity) : null;
+    }
+}
+
+[LuaObject]
+public partial class LuaTimeApi
+{
+    [LuaMember("DeltaTime")]
+    public float DeltaTime => Time.DeltaTime;
+
+    [LuaMember("TotalTime")]
+    public float TotalTime => Time.TotalTime;
+
+    [LuaMember("LogicTickCount")]
+    public int LogicTickCount => Time.LogicTickCount;
+
+    [LuaMember("PhysicsTickCount")]
+    public int PhysicsTickCount => Time.PhysicsTickCount;
+}
+
+[LuaObject]
+public partial class LuaInputApi
+{
+    [LuaMember("IsKeyDown")]
+    public bool IsKeyDown(LuaValue key) => TryConvertKeyCode(key, out var keyCode) && global::Verity.Input.Input.Down(keyCode);
+
+    [LuaMember("IsKeyPressed")]
+    public bool IsKeyPressed(LuaValue key) => TryConvertKeyCode(key, out var keyCode) && global::Verity.Input.Input.Pressed(keyCode);
+
+    [LuaMember("IsKeyReleased")]
+    public bool IsKeyReleased(LuaValue key) => TryConvertKeyCode(key, out var keyCode) && global::Verity.Input.Input.Released(keyCode);
+
+    private static bool TryConvertKeyCode(LuaValue value, out KeyCode keyCode)
+    {
+        if (value.TryRead<KeyCode>(out keyCode))
+            return true;
+
+        if (value.TryRead<double>(out var numeric))
+        {
+            keyCode = (KeyCode)(int)numeric;
+            return true;
+        }
+
+        if (value.TryRead<string>(out var name) && Enum.TryParse(name, true, out keyCode))
+            return true;
+
+        keyCode = default;
+        return false;
+    }
+}
+
+[LuaObject]
+public partial class LuaKeysApi
+{
+    [LuaMember("Unknown")] public int Unknown => (int)KeyCode.Unknown;
+    [LuaMember("A")] public int A => (int)KeyCode.A;
+    [LuaMember("B")] public int B => (int)KeyCode.B;
+    [LuaMember("C")] public int C => (int)KeyCode.C;
+    [LuaMember("D")] public int D => (int)KeyCode.D;
+    [LuaMember("E")] public int E => (int)KeyCode.E;
+    [LuaMember("F")] public int F => (int)KeyCode.F;
+    [LuaMember("G")] public int G => (int)KeyCode.G;
+    [LuaMember("H")] public int H => (int)KeyCode.H;
+    [LuaMember("I")] public int I => (int)KeyCode.I;
+    [LuaMember("J")] public int J => (int)KeyCode.J;
+    [LuaMember("K")] public int K => (int)KeyCode.K;
+    [LuaMember("L")] public int L => (int)KeyCode.L;
+    [LuaMember("M")] public int M => (int)KeyCode.M;
+    [LuaMember("N")] public int N => (int)KeyCode.N;
+    [LuaMember("O")] public int O => (int)KeyCode.O;
+    [LuaMember("P")] public int P => (int)KeyCode.P;
+    [LuaMember("Q")] public int Q => (int)KeyCode.Q;
+    [LuaMember("R")] public int R => (int)KeyCode.R;
+    [LuaMember("S")] public int S => (int)KeyCode.S;
+    [LuaMember("T")] public int T => (int)KeyCode.T;
+    [LuaMember("U")] public int U => (int)KeyCode.U;
+    [LuaMember("V")] public int V => (int)KeyCode.V;
+    [LuaMember("W")] public int W => (int)KeyCode.W;
+    [LuaMember("X")] public int X => (int)KeyCode.X;
+    [LuaMember("Y")] public int Y => (int)KeyCode.Y;
+    [LuaMember("Z")] public int Z => (int)KeyCode.Z;
+    [LuaMember("Alpha0")] public int Alpha0 => (int)KeyCode.Alpha0;
+    [LuaMember("Alpha1")] public int Alpha1 => (int)KeyCode.Alpha1;
+    [LuaMember("Alpha2")] public int Alpha2 => (int)KeyCode.Alpha2;
+    [LuaMember("Alpha3")] public int Alpha3 => (int)KeyCode.Alpha3;
+    [LuaMember("Alpha4")] public int Alpha4 => (int)KeyCode.Alpha4;
+    [LuaMember("Alpha5")] public int Alpha5 => (int)KeyCode.Alpha5;
+    [LuaMember("Alpha6")] public int Alpha6 => (int)KeyCode.Alpha6;
+    [LuaMember("Alpha7")] public int Alpha7 => (int)KeyCode.Alpha7;
+    [LuaMember("Alpha8")] public int Alpha8 => (int)KeyCode.Alpha8;
+    [LuaMember("Alpha9")] public int Alpha9 => (int)KeyCode.Alpha9;
+    [LuaMember("F1")] public int F1 => (int)KeyCode.F1;
+    [LuaMember("F2")] public int F2 => (int)KeyCode.F2;
+    [LuaMember("F3")] public int F3 => (int)KeyCode.F3;
+    [LuaMember("F4")] public int F4 => (int)KeyCode.F4;
+    [LuaMember("F5")] public int F5 => (int)KeyCode.F5;
+    [LuaMember("F6")] public int F6 => (int)KeyCode.F6;
+    [LuaMember("F7")] public int F7 => (int)KeyCode.F7;
+    [LuaMember("F8")] public int F8 => (int)KeyCode.F8;
+    [LuaMember("F9")] public int F9 => (int)KeyCode.F9;
+    [LuaMember("F10")] public int F10 => (int)KeyCode.F10;
+    [LuaMember("F11")] public int F11 => (int)KeyCode.F11;
+    [LuaMember("F12")] public int F12 => (int)KeyCode.F12;
+    [LuaMember("Space")] public int Space => (int)KeyCode.Space;
+    [LuaMember("Return")] public int Return => (int)KeyCode.Return;
+    [LuaMember("Escape")] public int Escape => (int)KeyCode.Escape;
+    [LuaMember("Backspace")] public int Backspace => (int)KeyCode.Backspace;
+    [LuaMember("Tab")] public int Tab => (int)KeyCode.Tab;
+    [LuaMember("Delete")] public int Delete => (int)KeyCode.Delete;
+    [LuaMember("UpArrow")] public int UpArrow => (int)KeyCode.UpArrow;
+    [LuaMember("DownArrow")] public int DownArrow => (int)KeyCode.DownArrow;
+    [LuaMember("LeftArrow")] public int LeftArrow => (int)KeyCode.LeftArrow;
+    [LuaMember("RightArrow")] public int RightArrow => (int)KeyCode.RightArrow;
+    [LuaMember("LeftShift")] public int LeftShift => (int)KeyCode.LeftShift;
+    [LuaMember("RightShift")] public int RightShift => (int)KeyCode.RightShift;
+    [LuaMember("LeftCtrl")] public int LeftCtrl => (int)KeyCode.LeftCtrl;
+    [LuaMember("RightCtrl")] public int RightCtrl => (int)KeyCode.RightCtrl;
+    [LuaMember("LeftAlt")] public int LeftAlt => (int)KeyCode.LeftAlt;
+    [LuaMember("RightAlt")] public int RightAlt => (int)KeyCode.RightAlt;
+    [LuaMember("MouseLeft")] public int MouseLeft => (int)KeyCode.MouseLeft;
+    [LuaMember("MouseRight")] public int MouseRight => (int)KeyCode.MouseRight;
+    [LuaMember("MouseMiddle")] public int MouseMiddle => (int)KeyCode.MouseMiddle;
+    [LuaMember("MouseX1")] public int MouseX1 => (int)KeyCode.MouseX1;
+    [LuaMember("MouseX2")] public int MouseX2 => (int)KeyCode.MouseX2;
+}
+

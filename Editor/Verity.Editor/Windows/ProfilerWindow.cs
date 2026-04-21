@@ -38,29 +38,29 @@ public class ProfilerWindow : EditorWindow
         ImGui.Separator();
 
         DrawMetricGraph(
-            Tr("profiler_graph_frame", "Editor Frame"),
+            L10n.Tr("profiler_graph_frame"),
             editorSnapshot.Frame.History,
             editorSnapshot.Frame.CurrentMs,
             16.67f,
             new Vector4(0.30f, 0.80f, 1.00f, 1.00f));
 
         DrawMetricGraph(
-            Tr("profiler_graph_logic", "Logic Tick"),
+            L10n.Tr("profiler_graph_logic"),
             runtimeSnapshot.LogicTick.History,
             runtimeSnapshot.LogicTick.CurrentMs,
             runtimeSnapshot.LogicTick.AverageMs <= 0f ? null : runtimeSnapshot.LogicTick.AverageMs,
             new Vector4(0.45f, 0.95f, 0.50f, 1.00f));
 
         DrawMetricGraph(
-            Tr("profiler_graph_physics", "Physics Tick"),
+            L10n.Tr("profiler_graph_physics"),
             runtimeSnapshot.PhysicsTick.History,
             runtimeSnapshot.PhysicsTick.CurrentMs,
             runtimeSnapshot.PhysicsTick.AverageMs <= 0f ? null : runtimeSnapshot.PhysicsTick.AverageMs,
             new Vector4(1.00f, 0.72f, 0.30f, 1.00f));
 
-        DrawMetricGroup(Tr("profiler_frame_stages", "Frame Stages"), editorSnapshot.FrameStages, 56f);
-        DrawMetricGroup(Tr("profiler_render_stages", "Render Stages"), editorSnapshot.RenderStages, 56f);
-        DrawMetricGroup(Tr("profiler_window_latency", "Editor Windows"), editorSnapshot.Windows, 56f);
+        DrawMetricGroup(L10n.Tr("profiler_frame_stages"), editorSnapshot.FrameStages, 56f);
+        DrawMetricGroup(L10n.Tr("profiler_render_stages"), editorSnapshot.RenderStages, 56f);
+        DrawMetricGroup(L10n.Tr("profiler_window_latency"), editorSnapshot.Windows, 56f);
         DrawRuntimePhases(runtimeSnapshot.Phases);
         DrawRuntimeScripts(runtimeSnapshot.Scripts);
     }
@@ -92,38 +92,38 @@ public class ProfilerWindow : EditorWindow
         foreach (EditorProfilerMetricSnapshot metric in metrics)
         {
             DrawMetricGraph(metric.Name, metric.History, metric.CurrentMs, metric.AverageMs <= 0f ? null : metric.AverageMs, GetMetricColor(metric.Name), graphHeight);
-            ImGui.Text($"{Tr("profiler_current", "Current")}: {metric.CurrentMs:F3} ms   {Tr("profiler_average", "Average")}: {metric.AverageMs:F3} ms   {Tr("profiler_max", "Max")}: {metric.MaxMs:F3} ms");
+            ImGui.Text($"{L10n.Tr("profiler_current")}: {metric.CurrentMs:F3} ms   {L10n.Tr("profiler_average")}: {metric.AverageMs:F3} ms   {L10n.Tr("profiler_max")}: {metric.MaxMs:F3} ms");
         }
     }
 
     private void DrawRuntimePhases(IReadOnlyList<RuntimePhaseMetricSnapshot> phases)
     {
-        if (phases.Count == 0 || !ImGui.CollapsingHeader(Tr("profiler_script_phases", "Script Event Phases"), ImGuiTreeNodeFlags.DefaultOpen))
+        if (phases.Count == 0 || !ImGui.CollapsingHeader(L10n.Tr("profiler_script_phases"), ImGuiTreeNodeFlags.DefaultOpen))
             return;
 
         foreach (RuntimePhaseMetricSnapshot phase in phases)
         {
             DrawMetricGraph(phase.Name, phase.History, phase.TotalMs, null, GetMetricColor(phase.Name), 48f);
-            ImGui.Text($"{Tr("profiler_total", "Total")}: {phase.TotalMs:F3} ms   {Tr("profiler_average", "Average")}: {phase.AverageMs:F3} ms   {Tr("profiler_calls", "Calls")}: {phase.CallCount}");
+            ImGui.Text($"{L10n.Tr("profiler_total")}: {phase.TotalMs:F3} ms   {L10n.Tr("profiler_average")}: {phase.AverageMs:F3} ms   {L10n.Tr("profiler_calls")}: {phase.CallCount}");
         }
     }
 
     private void DrawRuntimeScripts(IReadOnlyList<RuntimeScriptMetricSnapshot> scripts)
     {
-        if (!ImGui.CollapsingHeader(Tr("profiler_scripts", "Scripts"), ImGuiTreeNodeFlags.DefaultOpen))
+        if (!ImGui.CollapsingHeader(L10n.Tr("profiler_scripts"), ImGuiTreeNodeFlags.DefaultOpen))
             return;
 
         int displayed = 0;
         foreach (RuntimeScriptMetricSnapshot script in scripts)
         {
-            ImGui.Text($"{script.Name}  |  {Tr("profiler_total", "Total")}: {script.TotalMs:F3} ms  |  {Tr("profiler_average", "Average")}: {script.AverageTotalMs:F3} ms  |  {Tr("profiler_calls", "Calls")}: {script.CallCount}  |  {Tr("profiler_average", "Average")}/call: {script.AverageMsPerCall:F3} ms");
+            ImGui.Text($"{script.Name}  |  {L10n.Tr("profiler_total")}: {script.TotalMs:F3} ms  |  {L10n.Tr("profiler_average")}: {script.AverageTotalMs:F3} ms  |  {L10n.Tr("profiler_calls")}: {script.CallCount}  |  {L10n.Tr("profiler_average")}{L10n.Tr("profiler_per_call")}: {script.AverageMsPerCall:F3} ms");
             displayed++;
             if (displayed >= 12)
                 break;
         }
 
         if (displayed == 0)
-            ImGui.TextDisabled(Tr("profiler_no_script_samples", "No script samples collected yet."));
+            ImGui.TextDisabled(L10n.Tr("profiler_no_script_samples"));
     }
 
     private static Vector4 GetMetricColor(string name)
@@ -227,9 +227,4 @@ public class ProfilerWindow : EditorWindow
         _lastTime = currentTime;
     }
 
-    private static string Tr(string key, string fallback)
-    {
-        string value = L10n.Tr(key);
-        return value == key ? fallback : value;
-    }
 }

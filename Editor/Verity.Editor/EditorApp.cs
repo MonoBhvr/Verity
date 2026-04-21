@@ -13,12 +13,15 @@ using Verity.Core.ECS;
 using Verity.Core.Engine;
 using Verity.Core.World;
 using Verity.Editor.Windows;
+using Verity.Filter;
+using FilterType = Verity.Filter.Filter;
 using Verity.Core.Serialization;
 using Verity.Graphics;
 using Verity.Input;
 using Verity.Core.UI;
 using SortingLayer = Verity.Graphics.SortingLayer;
 using Verity.Core.Audio;
+using Verity.Core.Scripting;
 using Verity.Editor.Profiling;
 
 namespace Verity.Editor;
@@ -87,10 +90,12 @@ public class EditorApp : IDisposable
     private readonly Dictionary<string, long> _pendingTileRefreshDeadlines = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, long> _processedTextureRefreshSignatures = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, long> _processedTileRefreshSignatures = new(StringComparer.OrdinalIgnoreCase);
+    private readonly HashSet<string> _pendingLuaHotReloadPaths = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, long> _pendingLuaHotReloadDeadlines = new(StringComparer.OrdinalIgnoreCase);
 
     private readonly List<(string text, float duration)> _overlayMessages = new();
     private readonly List<LauncherProjectInfo> _launcherProjectCache = [];
-    private Filter? _filterToDelete;
+    private FilterType? _filterToDelete;
     private bool _triggerDeletePopup;
 
     public ProjectSettings ProjectSettings { get; private set; } = new();
@@ -143,6 +148,8 @@ public class EditorApp : IDisposable
     private bool _dockLayoutPersistenceReady;
     private EditorWindowMode _windowMode = EditorWindowMode.Docked;
     private EditorWindow? _pendingFocusedWindow;
+    private EditorWindow? _fullscreenWindow;
+    private float _menuBarHeight;
 
     private string ResolveEditorLogoPath()
     {
@@ -201,6 +208,10 @@ public class EditorApp : IDisposable
     }
     private bool _triggerSaveLayoutPresetPopup;
     private string _layoutPresetNameBuffer = "";
+    private bool _triggerAddLanguagePopup;
+    private string _newLangCodeBuffer = "";
+    private string _newLangDisplayNameBuffer = "";
+    private int _newLangBaseLanguageIndex;
     private readonly Dictionary<string, WindowPlacement> _dockedWindowPlacements = new(StringComparer.Ordinal);
     private WindowPlacement? _dockedHostPlacement;
 
@@ -395,7 +406,7 @@ public class EditorApp : IDisposable
     public EditorApp(string title = "Verity", int width = 900, int height = 600)
     {
         L10n.Initialize();
-        CoreDebug.OnLog += (msg, level) => ConsoleWindow.Log(msg, level);
+        CoreDebug.OnLog += OnCoreLog;
         
         // Initialize default ProjectsRoot
         string docsPath = Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments);
@@ -432,6 +443,11 @@ public class EditorApp : IDisposable
     public void ShowOverlayMessage(string text, float duration = 2.0f)
     {
         _overlayMessages.Add((text, duration));
+    }
+
+    private static void OnCoreLog(string msg, LogLevel level)
+    {
+        ConsoleWindow.Log(msg, level);
     }
 
     private void ApplyEditorIcon()
@@ -591,7 +607,7 @@ public class EditorApp : IDisposable
             return;
 
         var world = WorldManager.CreateOrReplaceWorld("Main");
-        var cam = world.CreateEntity("Main Camera");
+        var cam = world.CreateEntity(L10n.Tr("creation_default_main_camera"));
         cam.AddComponent<Camera>();
         WorldManager.SetActiveWorld(world);
 
@@ -652,12 +668,13 @@ public class EditorApp : IDisposable
         _dockLayoutPersistenceReady = false;
         LogProjectOpenPhase(projectName, "Prepare window and project files", openTimer, ref lastPhaseMs);
 
-        Verity.Input.FilterManager.SavePath = Path.Combine(AssetsPath!, "Filters.json");
-        Verity.Input.FilterManager.Load();
+        Verity.Filter.FilterManager.SavePath = Path.Combine(AssetsPath!, "Filters.json");
+        Verity.Filter.FilterManager.Load();
         LoadProjectSettings();
         if (!LoadProjectDockLayout())
             ResetEditorLayout();
         LoadBuildSettings();
+        LuaLanguageServerSupport.EnsureProjectSupport(ProjectPath, _scriptCompiler?.GetAllAddableComponentTypes());
         RenderPipeline.BaseAssetsPath = ProjectPath;
         UiSystem.AssetsRoot = ProjectPath;
         SceneSerializer.AssetRootPath = ProjectPath;
@@ -666,7 +683,16 @@ public class EditorApp : IDisposable
         InitializeAssetWatcher(AssetsPath!);
         LogProjectOpenPhase(projectName, "Initialize asset watcher", openTimer, ref lastPhaseMs);
 
-        _scriptCompiler?.Dispose();
+        LuaScriptManager.HotReloadRequested -= OnLuaScriptsHotReloadRequested;
+        LuaScriptManager.HotReloadRequested += OnLuaScriptsHotReloadRequested;
+        LuaScriptManager.RefreshBindings(_scriptCompiler?.CompiledAssembly, ProjectPath);
+
+        if (_scriptCompiler != null)
+        {
+            _scriptCompiler.OnCompilationFinished -= OnScriptsCompiled;
+            _scriptCompiler.Dispose();
+        }
+
         _scriptCompiler = new ScriptCompiler(AssetsPath!);
         _scriptCompiler.OnCompilationFinished += OnScriptsCompiled;
         _scriptCompiler.Compile();
@@ -934,7 +960,7 @@ public class EditorApp : IDisposable
             var state = CaptureCurrentDockLayoutState();
             var json = JsonSerializer.Serialize(state, _projectSettingsOptions);
             File.WriteAllText(presetPath, json);
-            ShowOverlayMessage(TrOr("msg_layout_saved", $"Layout saved: {Path.GetFileNameWithoutExtension(fileName)}"));
+            ShowOverlayMessage(L10n.Tr("msg_layout_saved", Path.GetFileNameWithoutExtension(fileName)));
             return true;
         }
         catch (Exception e)
@@ -962,7 +988,7 @@ public class EditorApp : IDisposable
 
             ProjectSettings.EditorDockLayout = state;
             SaveProjectSettings();
-            ShowOverlayMessage(TrOr("msg_layout_loaded", $"Layout loaded: {Path.GetFileNameWithoutExtension(presetPath)}"));
+            ShowOverlayMessage(L10n.Tr("msg_layout_loaded", Path.GetFileNameWithoutExtension(presetPath)));
             return true;
         }
         catch (Exception e)
@@ -980,7 +1006,7 @@ public class EditorApp : IDisposable
         SetWindowMode(EditorWindowMode.Docked);
         bool loaded = ApplyDockLayoutState(ProjectSettings.EditorDockLayout);
         if (loaded)
-            ShowOverlayMessage(TrOr("msg_layout_loaded", "Layout loaded"));
+            ShowOverlayMessage(L10n.Tr("msg_project_layout_loaded"));
         return loaded;
     }
 
@@ -1158,12 +1184,6 @@ public class EditorApp : IDisposable
         return window;
     }
 
-    private static string TrOr(string key, string fallback)
-    {
-        string value = L10n.Tr(key);
-        return value == key ? fallback : value;
-    }
-
     private void CaptureDockedHostPlacement()
     {
         var (x, y) = _device.GetWindowPosition();
@@ -1202,6 +1222,9 @@ public class EditorApp : IDisposable
     {
         if (_windowMode == mode)
             return;
+
+        if (_fullscreenWindow != null)
+            ExitFullscreen();
 
         if (_windowMode == EditorWindowMode.Docked)
         {
@@ -1324,6 +1347,10 @@ public class EditorApp : IDisposable
     private void OnScriptsCompiled() 
     { 
         var world = WorldManager.ActiveWorld; 
+
+        LuaScriptManager.RefreshBindings(_scriptCompiler?.CompiledAssembly, ProjectPath);
+        LuaLanguageServerSupport.EnsureProjectSupport(ProjectPath, _scriptCompiler?.GetAllAddableComponentTypes());
+
         if (world == null) return;
 
         if (IsPlaying)
@@ -1334,31 +1361,55 @@ public class EditorApp : IDisposable
 
         CoreDebug.Log("[Editor] Scripts compiled. Performing hot-reload of active world...");
 
-        // Preserve selection
+        if (ReloadActiveWorldPreservingState("C# script compilation", autoSaveAfterReload: true))
+        {
+            ShowOverlayMessage(L10n.Tr("msg_scripts_reloaded"));
+            CoreDebug.Log("[Editor] Hot-reload successful.");
+        }
+    }
+
+    private void OnLuaScriptsHotReloadRequested(IReadOnlyList<string> changedPaths)
+    {
+        lock (_assetInvalidationLock)
+        {
+            foreach (string path in changedPaths)
+            {
+                _pendingLuaHotReloadPaths.Add(path);
+                _pendingLuaHotReloadDeadlines[path] = Environment.TickCount64 + AssetRefreshDebounceMs;
+            }
+        }
+    }
+
+    private bool ReloadActiveWorldPreservingState(string reason, bool autoSaveAfterReload)
+    {
+        var world = WorldManager.ActiveWorld;
+        if (world == null)
+            return false;
+
         Guid? selectedId = EditorSelection.SelectedEntity?.Id;
-        
-        try {
-            // 1. Serialize current state
-            var json = Verity.Core.Serialization.SceneSerializer.Serialize(world); 
-            
-            // 2. Clear all entities (this triggers removal from engine-level lists)
-            world.ClearAllEntities(); 
-            
-            // 3. Re-deserialize using the NEWLY compiled assembly
-            Verity.Core.Serialization.SceneSerializer.Deserialize(world, json, _scriptCompiler?.CompiledAssembly); 
-            
-            // 4. Restore selection
+
+        try
+        {
+            string json = Verity.Core.Serialization.SceneSerializer.Serialize(world);
+            world.ClearAllEntities();
+            Verity.Core.Serialization.SceneSerializer.Deserialize(world, json, _scriptCompiler?.CompiledAssembly);
+            BindWorldAssets(world);
+
             if (selectedId.HasValue)
                 EditorSelection.SelectedEntity = world.GetAllEntities().FirstOrDefault(e => e.Id == selectedId.Value);
 
-            // 5. AUTO-SAVE after successful compilation to prevent "reverting to initial state" when reopening world
-            GetWindow<Windows.ProjectWindow>()?.SaveActiveWorldAsAsset();
-            ResetDirty();
-            
-        ShowOverlayMessage(L10n.Tr("msg_scripts_reloaded"));
-            CoreDebug.Log("[Editor] Hot-reload successful.");
-        } catch (Exception e) {
-            CoreDebug.LogError($"[Editor] Critical error during script hot-reload: {e.Message}");
+            if (autoSaveAfterReload)
+            {
+                GetWindow<Windows.ProjectWindow>()?.SaveActiveWorldAsAsset();
+                ResetDirty();
+            }
+
+            return true;
+        }
+        catch (Exception e)
+        {
+            CoreDebug.LogError($"[Editor] Critical error during {reason}: {e.Message}");
+            return false;
         }
     }
 
@@ -1371,6 +1422,10 @@ public class EditorApp : IDisposable
 
         _snapshot = WorldSnapshot.Capture(WorldManager.ActiveWorld); 
         Time.Reset(); 
+        LuaScriptManager.SuspendHotReloadEvents = true;
+        LuaScriptManager.Dispose();
+        LuaScriptManager.Initialize(ProjectPath, _scriptCompiler?.CompiledAssembly);
+        BindWorldAssets(WorldManager.ActiveWorld);
         _gameLoop = new GameLoop { ProjectSettings = this.ProjectSettings }; 
         IsPlaying = true; 
     }
@@ -1380,15 +1435,21 @@ public class EditorApp : IDisposable
         if (!IsPlaying || WorldManager.ActiveWorld == null) return; 
         EditorSelection.SelectedEntity = null; 
         
+        LuaScriptManager.Dispose();
         _snapshot?.Restore(WorldManager.ActiveWorld, _scriptCompiler?.CompiledAssembly); 
         BindWorldAssets(WorldManager.ActiveWorld);
         _snapshot = null; 
+        LuaScriptManager.SuspendHotReloadEvents = false;
+        LuaScriptManager.Initialize(ProjectPath, _scriptCompiler?.CompiledAssembly);
         _gameLoop = null; 
         IsPlaying = false; 
         Verity.Input.Input.Enabled = true; 
 
         // Resume compiler after play mode
         if (_scriptCompiler != null) _scriptCompiler.IsPaused = false;
+
+        if (_pendingLuaHotReloadPaths.Count > 0)
+            OnLuaScriptsHotReloadRequested(_pendingLuaHotReloadPaths.ToArray());
     }
 
     public void Run()
@@ -1450,6 +1511,9 @@ public class EditorApp : IDisposable
             }
             DrawGlobalPopups();
             DrawOverlays(deltaTime);
+
+            if (_fullscreenWindow != null)
+                RenderFullscreenOverlay(_fullscreenWindow);
             if (CurrentProjectName != null)
                 _dockLayoutPersistenceReady = true;
             _imgui.EndFrame();
@@ -1462,7 +1526,7 @@ public class EditorApp : IDisposable
         }
     }
 
-    public void RequestDeleteFilter(Filter filter)
+    public void RequestDeleteFilter(FilterType filter)
     {
         _filterToDelete = filter;
         _triggerDeletePopup = true;
@@ -1474,6 +1538,7 @@ public class EditorApp : IDisposable
         if (_showExitConfirmPopup) { ImGui.OpenPopup("ExitConfirm"); _showExitConfirmPopup = false; }
         if (_showCloseProjectConfirmPopup) { ImGui.OpenPopup("CloseProjectConfirm"); _showCloseProjectConfirmPopup = false; }
         if (_triggerSaveLayoutPresetPopup) { ImGui.OpenPopup("SaveLayoutPreset"); _triggerSaveLayoutPresetPopup = false; }
+        if (_triggerAddLanguagePopup) { ImGui.OpenPopup("AddLanguage"); _triggerAddLanguagePopup = false; }
 
         var modalFlags = ImGuiWindowFlags.AlwaysAutoResize;
         var btnSize = new Vector2(150, 30);
@@ -1529,15 +1594,45 @@ public class EditorApp : IDisposable
         }
 
         if (ImGui.BeginPopupModal("SaveLayoutPreset", (bool*)null, modalFlags)) {
-            ImGui.Text(TrOr("msg_save_layout_preset", "Save layout preset"));
+        ImGui.Text(L10n.Tr("msg_save_layout_preset"));
             ImGui.Separator(); ImGui.Dummy(new Vector2(0, 10));
             if (ImGui.IsWindowAppearing())
                 ImGui.SetKeyboardFocusHere();
-            ImGui.InputText(TrOr("label_name", "Name"), ref _layoutPresetNameBuffer, 128);
+        ImGui.InputText(L10n.Tr("label_name"), ref _layoutPresetNameBuffer, 128);
             ImGui.Separator(); ImGui.Dummy(new Vector2(0, 10));
-            if (ImGui.Button(TrOr("btn_save", "Save"), btnSize)) {
+        if (ImGui.Button(L10n.Tr("btn_save"), btnSize)) {
                 if (SaveLayoutPreset(_layoutPresetNameBuffer))
                     ImGui.CloseCurrentPopup();
+            }
+            ImGui.SameLine();
+            if (ImGui.Button(L10n.Tr("btn_cancel"), btnSize))
+                ImGui.CloseCurrentPopup();
+            ImGui.EndPopup();
+        }
+
+        if (ImGui.BeginPopupModal("AddLanguage", (bool*)null, modalFlags)) {
+        ImGui.Text(L10n.Tr("msg_add_language"));
+            ImGui.Separator(); ImGui.Dummy(new Vector2(0, 10));
+            if (ImGui.IsWindowAppearing())
+                ImGui.SetKeyboardFocusHere();
+        ImGui.InputText(L10n.Tr("label_language_code"), ref _newLangCodeBuffer, 8);
+        ImGui.InputText(L10n.Tr("label_display_name"), ref _newLangDisplayNameBuffer, 64);
+
+            string[] baseLangNames = ["English", "한국어"];
+        string baseLangLabel = L10n.Tr("label_base_language");
+            if (ImGui.Combo(baseLangLabel, ref _newLangBaseLanguageIndex, baseLangNames, baseLangNames.Length))
+            { }
+
+            ImGui.Separator(); ImGui.Dummy(new Vector2(0, 10));
+        if (ImGui.Button(L10n.Tr("btn_create"), btnSize)) {
+                string baseCode = _newLangBaseLanguageIndex == 1 ? "ko" : "en";
+                string code = _newLangCodeBuffer.Trim().ToLowerInvariant();
+                string name = _newLangDisplayNameBuffer.Trim();
+                if (L10n.AddLanguage(code, name, baseCode)) {
+                    _newLangCodeBuffer = "";
+                    _newLangDisplayNameBuffer = "";
+                    ImGui.CloseCurrentPopup();
+                }
             }
             ImGui.SameLine();
             if (ImGui.Button(L10n.Tr("btn_cancel"), btnSize))
@@ -1697,8 +1792,12 @@ public class EditorApp : IDisposable
                 if (ImGui.MenuItem(L10n.Tr("menu_reset_layout"))) resetLayout = true;
                 ImGui.Separator();
                 if (ImGui.BeginMenu(L10n.Tr("menu_language"))) {
-                    if (ImGui.MenuItem(L10n.Tr("lang_english"), "", L10n.CurrentLanguage == "en")) { L10n.LoadLanguage("en"); SaveGlobalSettings(); resetLayout = true; }
-                    if (ImGui.MenuItem(L10n.Tr("lang_korean"), "", L10n.CurrentLanguage == "ko")) { L10n.LoadLanguage("ko"); SaveGlobalSettings(); resetLayout = true; }
+                    foreach (string lang in L10n.AvailableLanguages) {
+                        string displayName = L10n.GetLanguageDisplayName(lang);
+                        if (ImGui.MenuItem(displayName, "", L10n.CurrentLanguage == lang)) { L10n.LoadLanguage(lang); SaveGlobalSettings(); resetLayout = true; }
+                    }
+                    ImGui.Separator();
+                    if (ImGui.MenuItem(L10n.Tr("menu_add_language"))) { _triggerAddLanguagePopup = true; }
                     ImGui.EndMenu();
                 }
                 ImGui.EndMenu();
@@ -1706,8 +1805,8 @@ public class EditorApp : IDisposable
             if (ImGui.BeginMenu(L10n.Tr("menu_build"))) {
                 if (ImGui.MenuItem(L10n.Tr("window_buildsettings"))) GetWindow<BuildSettingsWindow>()!.IsOpen = true;
                 ImGui.Separator();
-                if (ImGui.MenuItem("Publish Debug Build")) assetWindow?.PublishDebugBuild();
-                if (ImGui.MenuItem("Publish Release Build")) assetWindow?.PublishReleaseBuild();
+                if (ImGui.MenuItem(L10n.Tr("menu_publishDebug"))) assetWindow?.PublishDebugBuild();
+                if (ImGui.MenuItem(L10n.Tr("menu_publishRelease"))) assetWindow?.PublishReleaseBuild();
                 ImGui.EndMenu();
             }
             float mid = ImGui.GetWindowWidth() * 0.5f; ImGui.SetCursorPosX(mid - 30);
@@ -1777,22 +1876,23 @@ public class EditorApp : IDisposable
         if (!window.IsOpen && !(inDetachedMode && window is ProjectWindow))
             return;
 
+        bool isFullscreen = _fullscreenWindow != null && ReferenceEquals(window, _fullscreenWindow);
+
         bool isProjectHub = inDetachedMode && window is ProjectWindow;
         bool useCloseButton = !inDetachedMode && !isProjectHub;
         bool forceSeparateViewport = window is UIEditorWindow;
         ImGuiWindowFlags flags = (inDetachedMode || forceSeparateViewport) ? ImGuiWindowFlags.NoDocking : ImGuiWindowFlags.None;
+        flags |= ImGuiWindowFlags.NoCollapse;
         if (isProjectHub)
         {
             flags |= ImGuiWindowFlags.MenuBar |
                      ImGuiWindowFlags.NoTitleBar |
-                     ImGuiWindowFlags.NoCollapse |
                      ImGuiWindowFlags.NoMove |
                      ImGuiWindowFlags.NoResize;
         }
         else if (inDetachedMode)
         {
-            flags |= ImGuiWindowFlags.NoTitleBar |
-                     ImGuiWindowFlags.NoCollapse;
+            flags |= ImGuiWindowFlags.NoTitleBar;
         }
 
         ApplyWindowDefaults(window, inDetachedMode, applyDetachedLayout);
@@ -1807,7 +1907,7 @@ public class EditorApp : IDisposable
 
         if (began)
         {
-            if (isProjectHub)
+            if (!isFullscreen && isProjectHub)
             {
                 bool resetLayout = false;
                 DrawEditorMenuBar(ref resetLayout);
@@ -1818,18 +1918,190 @@ public class EditorApp : IDisposable
             if (window is ScreenWindow && ImGui.IsWindowFocused(ImGuiFocusedFlags.RootAndChildWindows))
                 _isScreenFocused = true;
 
-        if (!inDetachedMode && !forceSeparateViewport)
-            RememberDockedWindowPlacement(window);
+            if (isFullscreen)
+            {
+                ImGui.TextDisabled($"[{window.Title}]");
+            }
+            else
+            {
+                if (!isProjectHub && !inDetachedMode)
+                    DetectFullscreenToggle(window);
 
-            long windowStart = Stopwatch.GetTimestamp();
-            window.OnGui();
-            _profiler.RecordWindow(window.Title, Stopwatch.GetElapsedTime(windowStart).TotalMilliseconds);
+                if (!inDetachedMode && !forceSeparateViewport)
+                    RememberDockedWindowPlacement(window);
+
+                long windowStart = Stopwatch.GetTimestamp();
+                window.OnGui();
+                _profiler.RecordWindow(window.Title, Stopwatch.GetElapsedTime(windowStart).TotalMilliseconds);
+            }
         }
 
         ImGui.End();
         window.IsOpen = useCloseButton ? open : true;
         if (shouldFocus)
             _pendingFocusedWindow = null;
+    }
+
+    private void RenderFullscreenOverlay(EditorWindow window)
+    {
+        if (!window.IsOpen)
+        {
+            _fullscreenWindow = null;
+            return;
+        }
+
+        var viewport = ImGui.GetMainViewport();
+        ImGui.SetNextWindowPos(new Vector2(viewport.Pos.X, viewport.Pos.Y + _menuBarHeight));
+        ImGui.SetNextWindowSize(new Vector2(viewport.Size.X, viewport.Size.Y - _menuBarHeight));
+        ImGui.SetNextWindowViewport(viewport.ID);
+        ImGui.SetNextWindowFocus();
+        ImGui.PushStyleVar(ImGuiStyleVar.WindowRounding, 0.0f);
+        ImGui.PushStyleVar(ImGuiStyleVar.WindowBorderSize, 0.0f);
+        ImGui.PushStyleVar(ImGuiStyleVar.WindowPadding, Vector2.Zero);
+
+        ImGuiWindowFlags flags = ImGuiWindowFlags.NoDocking |
+                                 ImGuiWindowFlags.NoTitleBar |
+                                 ImGuiWindowFlags.NoCollapse |
+                                 ImGuiWindowFlags.NoResize |
+                                 ImGuiWindowFlags.NoMove |
+                                 ImGuiWindowFlags.NoBringToFrontOnFocus |
+                                 ImGuiWindowFlags.NoNavFocus;
+
+        string overlayName = string.IsNullOrWhiteSpace(window.WindowId)
+            ? $"{window.Title}###__fullscreen"
+            : $"{window.Title}###__fullscreen_{window.WindowId}";
+
+        bool began = ImGui.Begin(overlayName, flags);
+        ImGui.PopStyleVar(3);
+
+        if (began)
+        {
+            bool exitRequested = DrawFullscreenTitleBar(window);
+            ImGui.SetCursorPos(new Vector2(8f, ImGui.GetCursorPosY() + 8f));
+            long windowStart = Stopwatch.GetTimestamp();
+            window.OnGui();
+            _profiler.RecordWindow(window.Title, Stopwatch.GetElapsedTime(windowStart).TotalMilliseconds);
+            if (exitRequested || (ImGui.IsWindowFocused(ImGuiFocusedFlags.RootAndChildWindows) && ImGui.IsKeyPressed(ImGuiKey.Escape)))
+                ExitFullscreen();
+        }
+
+        ImGui.End();
+    }
+
+    private void DetectFullscreenToggle(EditorWindow window)
+    {
+        Vector2 windowPos = ImGui.GetWindowPos();
+        Vector2 mousePos = ImGui.GetMousePos();
+        float titleHeight = ImGui.GetFrameHeight();
+        float windowWidth = ImGui.GetWindowWidth();
+
+        bool inTitleArea = mousePos.X >= windowPos.X
+            && mousePos.X <= windowPos.X + windowWidth
+            && mousePos.Y >= windowPos.Y
+            && mousePos.Y <= windowPos.Y + titleHeight;
+
+        if (inTitleArea && ImGui.IsMouseDoubleClicked(ImGuiMouseButton.Left))
+        {
+            ToggleFullscreen(window);
+            return;
+        }
+
+        if (ImGui.IsWindowDocked())
+            return;
+
+        float buttonSize = MathF.Max(10f, titleHeight - 6f);
+        Vector2 buttonMin = new(
+            windowPos.X + windowWidth - buttonSize * 2f - 28f,
+            windowPos.Y + 3f);
+        Vector2 buttonMax = new(buttonMin.X + buttonSize, buttonMin.Y + buttonSize);
+        bool hovered = ImGui.IsMouseHoveringRect(buttonMin, buttonMax);
+
+        var drawList = ImGui.GetWindowDrawList();
+        if (hovered)
+            drawList.AddRectFilled(buttonMin, buttonMax, ImGui.GetColorU32(new Vector4(1f, 1f, 1f, 0.15f)), 2f);
+
+        float pad = buttonSize * 0.25f;
+        float inner = buttonSize * 0.15f;
+        uint color = ImGui.GetColorU32(hovered ? new Vector4(1f, 1f, 1f, 0.8f) : new Vector4(1f, 1f, 1f, 0.55f));
+        drawList.AddRect(
+            new Vector2(buttonMin.X + pad, buttonMin.Y + pad),
+            new Vector2(buttonMax.X - pad, buttonMax.Y - pad),
+            color,
+            1f);
+        drawList.AddRect(
+            new Vector2(buttonMin.X + pad + inner, buttonMin.Y + pad + inner),
+            new Vector2(buttonMax.X - pad + inner, buttonMax.Y - pad + inner),
+            color,
+            1f);
+
+        if (hovered)
+        {
+            if (ImGui.IsMouseClicked(ImGuiMouseButton.Left))
+                ToggleFullscreen(window);
+
+            ImGui.BeginTooltip();
+            ImGui.TextUnformatted(L10n.Tr("tooltip_fullscreen"));
+            ImGui.EndTooltip();
+        }
+    }
+
+    private void ToggleFullscreen(EditorWindow window)
+    {
+        if (_fullscreenWindow == window)
+        {
+            ExitFullscreen();
+            return;
+        }
+
+        if (_fullscreenWindow != null)
+            ExitFullscreen();
+
+        _fullscreenWindow = window;
+    }
+
+    private void ExitFullscreen()
+    {
+        _fullscreenWindow = null;
+    }
+
+
+
+    private bool DrawFullscreenTitleBar(EditorWindow window)
+    {
+        float titleBarHeight = ImGui.GetFrameHeight() + 4f;
+        Vector2 cursor = ImGui.GetCursorScreenPos();
+        Vector2 titleBarMin = cursor;
+        Vector2 titleBarMax = new(cursor.X + ImGui.GetWindowWidth(), cursor.Y + titleBarHeight);
+        var drawList = ImGui.GetWindowDrawList();
+        drawList.AddRectFilled(titleBarMin, titleBarMax, ImGui.GetColorU32(ImGuiCol.TitleBgActive));
+
+        float buttonHeight = Math.Max(20f, titleBarHeight - 6f);
+        Vector2 buttonSize = new(Math.Max(70f, ImGui.CalcTextSize(L10n.Tr("tooltip_restore")).X + 18f), buttonHeight);
+        Vector2 buttonPos = new(ImGui.GetWindowWidth() - buttonSize.X - 6f, 3f);
+
+        ImGui.SetCursorPos(new Vector2(8f, Math.Max(0f, (titleBarHeight - ImGui.GetTextLineHeight()) * 0.5f)));
+        ImGui.TextUnformatted(window.Title);
+
+        ImGui.SetCursorPos(buttonPos);
+        bool restoreClicked = ImGui.Button(L10n.Tr("tooltip_restore"), buttonSize);
+        if (ImGui.IsItemHovered())
+        {
+            ImGui.BeginTooltip();
+            ImGui.TextUnformatted(L10n.Tr("tooltip_restore"));
+            ImGui.EndTooltip();
+        }
+
+        Vector2 mousePos = ImGui.GetMousePos();
+        bool doubleClicked = mousePos.X >= titleBarMin.X
+            && mousePos.X <= titleBarMax.X
+            && mousePos.Y >= titleBarMin.Y
+            && mousePos.Y <= titleBarMax.Y
+            && ImGui.IsMouseDoubleClicked(ImGuiMouseButton.Left);
+
+        ImGui.SetCursorPos(new Vector2(0f, titleBarHeight));
+        ImGui.Separator();
+
+        return restoreClicked || doubleClicked;
     }
 
     private void ApplyWindowDefaults(EditorWindow window, bool inDetachedMode, bool applyDetachedLayout)
@@ -1947,6 +2219,8 @@ public class EditorApp : IDisposable
         bool resetLayout = false;
         DrawEditorMenuBar(ref resetLayout);
 
+        _menuBarHeight = ImGui.GetCursorPosY();
+
         uint dockId = ImGui.GetID("VerityDockSpace");
 
         if (resetLayout || _pendingLayoutReset || (!_loadedDockLayoutFromSettings && ImGuiP.DockBuilderGetNode(dockId).Handle == null))
@@ -2023,15 +2297,15 @@ public class EditorApp : IDisposable
 
         if (ImGui.BeginMenu(L10n.Tr("menu_window")))
         {
-            string windowModeLabel = TrOr("menu_window_mode", "Window Mode");
-            string dockedLabel = TrOr("window_mode_docked", "Docked");
-            string detachedLabel = TrOr("window_mode_detached", "Detached Windows");
-            string layoutsLabel = TrOr("menu_layouts", "Layouts");
-            string saveProjectLayoutLabel = TrOr("menu_save_project_layout", "Save Project Layout");
-            string saveLayoutPresetLabel = TrOr("menu_save_layout_preset", "Save Layout As...");
-            string loadProjectLayoutLabel = TrOr("menu_load_project_layout", "Load Project Layout");
-            string loadLayoutPresetLabel = TrOr("menu_load_layout_preset", "Load Preset");
-            string noLayoutPresetsLabel = TrOr("menu_no_layout_presets", "No saved presets");
+            string windowModeLabel = L10n.Tr("menu_window_mode");
+            string dockedLabel = L10n.Tr("window_mode_docked");
+            string detachedLabel = L10n.Tr("window_mode_detached");
+            string layoutsLabel = L10n.Tr("menu_layouts");
+            string saveProjectLayoutLabel = L10n.Tr("menu_save_project_layout");
+            string saveLayoutPresetLabel = L10n.Tr("menu_save_layout_preset");
+            string loadProjectLayoutLabel = L10n.Tr("menu_load_project_layout");
+            string loadLayoutPresetLabel = L10n.Tr("menu_load_layout_preset");
+            string noLayoutPresetsLabel = L10n.Tr("menu_no_layout_presets");
 
             if (ImGui.BeginMenu(windowModeLabel))
             {
@@ -2117,18 +2391,19 @@ public class EditorApp : IDisposable
             ImGui.Separator();
             if (ImGui.BeginMenu(L10n.Tr("menu_language")))
             {
-                if (ImGui.MenuItem(L10n.Tr("lang_english"), "", L10n.CurrentLanguage == "en"))
+                foreach (string lang in L10n.AvailableLanguages)
                 {
-                    L10n.LoadLanguage("en");
-                    SaveGlobalSettings();
-                    resetLayout = true;
+                    string displayName = L10n.GetLanguageDisplayName(lang);
+                    if (ImGui.MenuItem(displayName, "", L10n.CurrentLanguage == lang))
+                    {
+                        L10n.LoadLanguage(lang);
+                        SaveGlobalSettings();
+                        resetLayout = true;
+                    }
                 }
-                if (ImGui.MenuItem(L10n.Tr("lang_korean"), "", L10n.CurrentLanguage == "ko"))
-                {
-                    L10n.LoadLanguage("ko");
-                    SaveGlobalSettings();
-                    resetLayout = true;
-                }
+                ImGui.Separator();
+                if (ImGui.MenuItem(L10n.Tr("menu_add_language")))
+                    _triggerAddLanguagePopup = true;
                 ImGui.EndMenu();
             }
             ImGui.EndMenu();
@@ -2139,9 +2414,9 @@ public class EditorApp : IDisposable
             if (ImGui.MenuItem(L10n.Tr("window_buildsettings")))
                 OpenWindow<BuildSettingsWindow>();
             ImGui.Separator();
-            if (ImGui.MenuItem("Publish Debug Build"))
+            if (ImGui.MenuItem(L10n.Tr("menu_publishDebug")))
                 assetWindow?.PublishDebugBuild();
-            if (ImGui.MenuItem("Publish Release Build"))
+            if (ImGui.MenuItem(L10n.Tr("menu_publishRelease")))
                 assetWindow?.PublishReleaseBuild();
             ImGui.EndMenu();
         }
@@ -2242,6 +2517,7 @@ public class EditorApp : IDisposable
 
     public void BindWorldAssets(World world)
     {
+        LuaScriptManager.Initialize(ProjectPath, _scriptCompiler?.CompiledAssembly);
         foreach (var root in world.RootEntities)
             BindEntityAssetsRecursive(root);
     }
@@ -2345,6 +2621,7 @@ public class EditorApp : IDisposable
         var sr = entity.GetComponent<SpriteRenderer>(); if (sr != null && !string.IsNullOrWhiteSpace(sr.Sprite.Path)) { var fullPath = ResolveAssetPath(sr.Sprite.Path, sr.Sprite.Guid); if (File.Exists(fullPath)) { sr.Sprite = new Sprite(AssetPathUtility.Normalize(fullPath), string.IsNullOrWhiteSpace(sr.Sprite.Guid) ? AssetPathUtility.TryGetGuid(fullPath) : sr.Sprite.Guid, sr.Sprite.SpriteId); sr.Texture = LoadSpriteTexture(sr.Sprite); } }
         var animator = entity.GetComponent<Animator>(); if (animator != null && !string.IsNullOrWhiteSpace(animator.ControllerPath)) { string controllerFullPath = ResolveAssetPath(animator.ControllerPath, animator.ControllerGuid); if (File.Exists(controllerFullPath)) { animator.ControllerPath = AssetPathUtility.Normalize(controllerFullPath); animator.ControllerGuid = string.IsNullOrWhiteSpace(animator.ControllerGuid) ? AssetPathUtility.TryGetGuid(controllerFullPath) : animator.ControllerGuid; animator.Controller = Verity.Core.Animation.AnimatorControllerAsset.LoadFromFile(controllerFullPath); } }
         var audioSource = entity.GetComponent<AudioSource>(); if (audioSource?.Clip != null && !string.IsNullOrWhiteSpace(audioSource.Clip.Path)) { string clipFullPath = ResolveAssetPath(audioSource.Clip.Path, audioSource.Clip.Guid); if (File.Exists(clipFullPath)) { audioSource.Clip.Path = AssetPathUtility.Normalize(clipFullPath); audioSource.Clip.Guid = string.IsNullOrWhiteSpace(audioSource.Clip.Guid) ? AssetPathUtility.TryGetGuid(clipFullPath) : audioSource.Clip.Guid; audioSource.Clip.PostLoad(clipFullPath); } }
+        foreach (var luaScript in entity.GetComponents<LuaScriptComponent>()) { if (!string.IsNullOrWhiteSpace(luaScript.ScriptPath)) { string scriptFullPath = ResolveAssetPath(luaScript.ScriptPath, luaScript.ScriptGuid); if (File.Exists(scriptFullPath)) { string normalizedScriptPath = AssetPathUtility.Normalize(scriptFullPath); bool pathChanged = !string.Equals(luaScript.ScriptPath, normalizedScriptPath, StringComparison.OrdinalIgnoreCase); if (string.IsNullOrWhiteSpace(luaScript.ScriptGuid)) luaScript.ScriptGuid = AssetPathUtility.TryGetGuid(scriptFullPath) ?? string.Empty; luaScript.ScriptPath = normalizedScriptPath; if (!pathChanged) luaScript.ReloadScript(); } else { luaScript.ReloadScript(); } } }
         entity.GetComponent<AudioManager>()?.SyncGroupMap();
         foreach (var child in entity.Transform.Children) BindEntityAssetsRecursive(child.Owner);
     }
@@ -2353,11 +2630,25 @@ public class EditorApp : IDisposable
     {
         List<string> textures;
         List<string> tiles;
+        List<string> luas = [];
         long nowMs = Environment.TickCount64;
 
         lock (_assetInvalidationLock)
         {
-            if (_pendingTextureRefreshes.Count == 0 && _pendingTileRefreshes.Count == 0) return;
+            if (_pendingLuaHotReloadPaths.Count > 0)
+            {
+                foreach (string path in _pendingLuaHotReloadPaths.ToList())
+                {
+                    if (_pendingLuaHotReloadDeadlines.TryGetValue(path, out long dueMs) && dueMs > nowMs)
+                        continue;
+
+                    luas.Add(path);
+                    _pendingLuaHotReloadPaths.Remove(path);
+                    _pendingLuaHotReloadDeadlines.Remove(path);
+                }
+            }
+
+            if (_pendingTextureRefreshes.Count == 0 && _pendingTileRefreshes.Count == 0 && luas.Count == 0) return;
 
             textures = [];
             foreach (string path in _pendingTextureRefreshes.ToList())
@@ -2381,8 +2672,33 @@ public class EditorApp : IDisposable
                 _pendingTileRefreshDeadlines.Remove(path);
             }
 
-            if (textures.Count == 0 && tiles.Count == 0)
+            if (textures.Count == 0 && tiles.Count == 0 && luas.Count == 0)
                 return;
+        }
+
+        if (luas.Count > 0)
+        {
+            if (IsPlaying)
+            {
+                CoreDebug.Log("[Editor] Lua scripts changed during Play Mode. Reload is deferred until Play Mode exits.");
+                lock (_assetInvalidationLock)
+                {
+                    foreach (var path in luas)
+                    {
+                        _pendingLuaHotReloadPaths.Add(path);
+                        _pendingLuaHotReloadDeadlines[path] = long.MaxValue;
+                    }
+                }
+            }
+            else
+            {
+                string changedSummary = string.Join(", ", luas.Select(Path.GetFileName).OrderBy(static name => name));
+                if (ReloadActiveWorldPreservingState($"Lua hot reload ({changedSummary})", autoSaveAfterReload: false))
+                {
+                    CoreDebug.Log($"[Editor] Lua hot reload successful: {changedSummary}");
+                    ShowOverlayMessage(L10n.Tr("msg_scripts_reloaded"));
+                }
+            }
         }
 
         foreach (var path in textures)
@@ -2478,7 +2794,15 @@ public class EditorApp : IDisposable
 
     private void InitializeAssetWatcher(string path)
     {
-        _assetWatcher?.Dispose();
+        if (_assetWatcher != null)
+        {
+            _assetWatcher.Changed -= OnAssetWatcherChanged;
+            _assetWatcher.Created -= OnAssetWatcherChanged;
+            _assetWatcher.Deleted -= OnAssetWatcherChanged;
+            _assetWatcher.Renamed -= OnAssetWatcherRenamed;
+            _assetWatcher.Dispose();
+        }
+
         _assetWatcher = new FileSystemWatcher(path)
         {
             IncludeSubdirectories = true,
@@ -2487,42 +2811,48 @@ public class EditorApp : IDisposable
             EnableRaisingEvents = true
         };
 
-        FileSystemEventHandler onChange = (s, e) => {
-            string changedPath = e.FullPath;
-            if (AssetPathUtility.IsMetaFile(changedPath))
-                changedPath = changedPath[..^5];
+        _assetWatcher.Changed += OnAssetWatcherChanged;
+        _assetWatcher.Created += OnAssetWatcherChanged;
+        _assetWatcher.Deleted += OnAssetWatcherChanged;
+        _assetWatcher.Renamed += OnAssetWatcherRenamed;
+    }
 
-            AssetPathUtility.InvalidateAssetCache(changedPath);
+    private void OnAssetWatcherChanged(object sender, FileSystemEventArgs e)
+    {
+        string changedPath = e.FullPath;
+        if (AssetPathUtility.IsMetaFile(changedPath))
+            changedPath = changedPath[..^5];
 
-            string ext = Path.GetExtension(changedPath).ToLower();
-            if (ext == ".style") {
-                if (ProjectPath != null) {
-                    string relPath = Path.GetRelativePath(ProjectPath, changedPath).Replace("\\", "/");
-                    _renderPipeline.ClearStyleCache(relPath);
-                }
-            } else if (ext == ".shader") {
-                _renderPipeline.ClearShaderCache(changedPath);
-            } else if (ext is ".png" or ".jpg" or ".jpeg") {
-                lock (_assetInvalidationLock)
-                {
-                    string normalized = Path.GetFullPath(changedPath);
-                    _pendingTextureRefreshes.Add(normalized);
-                    _pendingTextureRefreshDeadlines[normalized] = Environment.TickCount64 + AssetRefreshDebounceMs;
-                }
-            } else if (ext is ".tile" or ".animtile" or ".ruletile") {
-                lock (_assetInvalidationLock)
-                {
-                    string normalized = Path.GetFullPath(changedPath);
-                    _pendingTileRefreshes.Add(normalized);
-                    _pendingTileRefreshDeadlines[normalized] = Environment.TickCount64 + AssetRefreshDebounceMs;
-                }
+        AssetPathUtility.InvalidateAssetCache(changedPath);
+
+        string ext = Path.GetExtension(changedPath).ToLower();
+        if (ext == ".style") {
+            if (ProjectPath != null) {
+                string relPath = Path.GetRelativePath(ProjectPath, changedPath).Replace("\\", "/");
+                _renderPipeline.ClearStyleCache(relPath);
             }
-        };
+        } else if (ext == ".shader") {
+            _renderPipeline.ClearShaderCache(changedPath);
+        } else if (ext is ".png" or ".jpg" or ".jpeg") {
+            lock (_assetInvalidationLock)
+            {
+                string normalized = Path.GetFullPath(changedPath);
+                _pendingTextureRefreshes.Add(normalized);
+                _pendingTextureRefreshDeadlines[normalized] = Environment.TickCount64 + AssetRefreshDebounceMs;
+            }
+        } else if (ext is ".tile" or ".animtile" or ".ruletile") {
+            lock (_assetInvalidationLock)
+            {
+                string normalized = Path.GetFullPath(changedPath);
+                _pendingTileRefreshes.Add(normalized);
+                _pendingTileRefreshDeadlines[normalized] = Environment.TickCount64 + AssetRefreshDebounceMs;
+            }
+        }
+    }
 
-        _assetWatcher.Changed += onChange;
-        _assetWatcher.Created += onChange;
-        _assetWatcher.Deleted += onChange;
-        _assetWatcher.Renamed += (s, e) => onChange(s, e);
+    private void OnAssetWatcherRenamed(object sender, RenamedEventArgs e)
+    {
+        OnAssetWatcherChanged(sender, e);
     }
 
     private string? SelectFolderNative(string initial)
@@ -2549,8 +2879,28 @@ public class EditorApp : IDisposable
 
     public void Dispose() { 
         AutoSaveEditorState();
-        _assetWatcher?.Dispose();
-        _scriptCompiler?.Dispose(); 
+        CoreDebug.OnLog -= OnCoreLog;
+        _device.Window.OnSdlEvent -= Verity.Input.Input.ProcessEvent;
+
+        if (_assetWatcher != null)
+        {
+            _assetWatcher.Changed -= OnAssetWatcherChanged;
+            _assetWatcher.Created -= OnAssetWatcherChanged;
+            _assetWatcher.Deleted -= OnAssetWatcherChanged;
+            _assetWatcher.Renamed -= OnAssetWatcherRenamed;
+            _assetWatcher.Dispose();
+        }
+
+        if (_scriptCompiler != null)
+        {
+            _scriptCompiler.OnCompilationFinished -= OnScriptsCompiled;
+            _scriptCompiler.Dispose();
+        }
+
+        LuaScriptManager.HotReloadRequested -= OnLuaScriptsHotReloadRequested;
+        LuaScriptManager.SuspendHotReloadEvents = false;
+        LuaScriptManager.Dispose();
+
         _renderPipeline.Dispose(); 
         _shader.Dispose(); 
         _textureManager.Dispose(); 
