@@ -61,12 +61,12 @@ void main()
     FragColor = vec4(uColor.rgb, uColor.a * alpha);
 }";
 
-    private readonly GraphicsDevice _device;
+    private readonly IRenderDevice _device;
     private readonly TextureManager _textureManager;
     private readonly Shader2D _shader;
     private readonly Shader2D _sdfShader;
     private readonly Func<string, string?, string> _resolveAssetPath;
-    private readonly Irodori.Buffer.VertexBuffer.Unuploaded _dynamicBuffer;
+    private readonly RenderMeshBuilder _dynamicBuffer;
     private readonly Dictionary<BitmapFontKey, BitmapFontFace> _bitmapFontCache = new();
     private readonly Dictionary<string, CachedSdfFontFace> _sdfFontCache = new(StringComparer.OrdinalIgnoreCase);
     private readonly List<DynamicAtlasPage> _dynamicAtlasPages = [];
@@ -76,12 +76,12 @@ void main()
     private LayoutBounds[] _layoutLineBoundsBuffer = Array.Empty<LayoutBounds>();
     private int[] _drawIndexScratchBuffer = Array.Empty<int>();
     private int[] _drawIndexUploadBuffer = Array.Empty<int>();
-    private IReadOnlyList<TextureObjectUploaded> _cachedDynamicAtlasTextures = Array.Empty<TextureObjectUploaded>();
+    private IReadOnlyList<RenderTexture> _cachedDynamicAtlasTextures = Array.Empty<RenderTexture>();
     private int _cachedDynamicAtlasTextureVersion = -1;
     private int _dynamicAtlasTextureVersion;
     private string? _cachedDefaultBitmapFontSource;
 
-    public GlyphAtlasTextRenderer(GraphicsDevice device, TextureManager textureManager, Shader2D shader, Func<string, string?, string> resolveAssetPath)
+    public GlyphAtlasTextRenderer(IRenderDevice device, TextureManager textureManager, Shader2D shader, Func<string, string?, string> resolveAssetPath)
     {
         _device = device;
         _textureManager = textureManager;
@@ -89,13 +89,10 @@ void main()
         _sdfShader = Shader2D.Create(device, fragmentSource: SdfFragmentSource);
         _resolveAssetPath = resolveAssetPath;
 
-        var format = Irodori.Buffer.VertexBufferFormat.Create()
-            .AddAttrib(Irodori.Buffer.VertexBufferFormat.Attrib.Vector2())
-            .AddAttrib(Irodori.Buffer.VertexBufferFormat.Attrib.Vector2());
-        _dynamicBuffer = _device.CreateVertexBuffer(format);
+        _dynamicBuffer = _device.CreateMeshBuilder(RenderMeshLayout.PositionTexture2D);
     }
 
-    public void DrawText(TextRenderOptions options, Matrix4x4 projection, Matrix4x4 view, FramebufferObject.Uploaded? targetFbo = null)
+    public void DrawText(TextRenderOptions options, Matrix4x4 projection, Matrix4x4 view, RenderTarget? targetFbo = null)
     {
         if (string.IsNullOrEmpty(options.Text))
             return;
@@ -130,7 +127,7 @@ void main()
         _sdfShader.Dispose();
     }
 
-    private void DrawTextInternal(TextRenderOptions options, ITextFontFace font, Shader2D shader, Matrix4x4 projection, Matrix4x4 view, FramebufferObject.Uploaded? targetFbo)
+    private void DrawTextInternal(TextRenderOptions options, ITextFontFace font, Shader2D shader, Matrix4x4 projection, Matrix4x4 view, RenderTarget? targetFbo)
     {
         if (options.AutoFit)
             options = options with { FontSize = ComputeAutoFitFontSize(options, font) };
@@ -139,10 +136,10 @@ void main()
         if (layout.TotalGlyphCount == 0)
             return;
 
-        IReadOnlyList<TextureObjectUploaded> atlasTextures = font.AtlasTextures;
+        IReadOnlyList<RenderTexture> atlasTextures = font.AtlasTextures;
         for (int atlasIndex = 0; atlasIndex < atlasTextures.Count; atlasIndex++)
         {
-            var data = Irodori.Buffer.IVertexData.Create<System.Numerics.Vector2, System.Numerics.Vector2>();
+            var data = RenderMeshData.CreatePositionTexture2D();
             int vertexBase = 0;
             int indexCount = 0;
 
@@ -181,8 +178,8 @@ void main()
                 shader.SetFloat("uScreenPxRange", ComputeScreenPxRange(options.FontSize, sdfFont));
 
             int[] indices = GetUploadIndices(indexCount);
-            using var uploaded = _dynamicBuffer.Upload(data, indices).Unwrap();
-            uploaded.Draw(shader.Program, targetFbo).Unwrap();
+            using var uploaded = _dynamicBuffer.Upload(data, indices);
+            shader.Draw(uploaded, targetFbo);
         }
     }
 
@@ -634,12 +631,12 @@ void main()
         return _drawIndexUploadBuffer;
     }
 
-    private IReadOnlyList<TextureObjectUploaded> GetDynamicAtlasTextures()
+    private IReadOnlyList<RenderTexture> GetDynamicAtlasTextures()
     {
         if (_cachedDynamicAtlasTextureVersion == _dynamicAtlasTextureVersion)
             return _cachedDynamicAtlasTextures;
 
-        var textures = new List<TextureObjectUploaded>(_dynamicAtlasPages.Count);
+        var textures = new List<RenderTexture>(_dynamicAtlasPages.Count);
         for (int i = 0; i < _dynamicAtlasPages.Count; i++)
             textures.Add(_dynamicAtlasPages[i].Texture);
 
@@ -743,7 +740,7 @@ void main()
         float ReferenceFontSize { get; }
         float LineHeight { get; }
         float SpaceAdvance { get; }
-        IReadOnlyList<TextureObjectUploaded> AtlasTextures { get; }
+        IReadOnlyList<RenderTexture> AtlasTextures { get; }
         bool TryGetGlyph(Rune rune, out GlyphEntry glyph);
     }
 
@@ -768,7 +765,7 @@ void main()
         public float LineHeight { get; }
         public float SpaceAdvance { get; }
         public Dictionary<int, GlyphEntry> Glyphs { get; } = new();
-        public IReadOnlyList<TextureObjectUploaded> AtlasTextures => _owner.GetDynamicAtlasTextures();
+        public IReadOnlyList<RenderTexture> AtlasTextures => _owner.GetDynamicAtlasTextures();
 
         public static BitmapFontFace? Create(GlyphAtlasTextRenderer owner, string source, float pixelSize)
         {
@@ -832,7 +829,7 @@ void main()
         private readonly string[] _atlasPaths;
         private readonly Dictionary<int, GlyphEntry> _glyphs;
 
-        private SdfFontFace(TextureManager textureManager, string[] atlasPaths, IReadOnlyList<TextureObjectUploaded> textures, Dictionary<int, GlyphEntry> glyphs, float referenceFontSize, float lineHeight, float spaceAdvance, int spread)
+        private SdfFontFace(TextureManager textureManager, string[] atlasPaths, IReadOnlyList<RenderTexture> textures, Dictionary<int, GlyphEntry> glyphs, float referenceFontSize, float lineHeight, float spaceAdvance, int spread)
         {
             _textureManager = textureManager;
             _atlasPaths = atlasPaths;
@@ -848,7 +845,7 @@ void main()
         public float LineHeight { get; }
         public float SpaceAdvance { get; }
         public int Spread { get; }
-        public IReadOnlyList<TextureObjectUploaded> AtlasTextures { get; }
+        public IReadOnlyList<RenderTexture> AtlasTextures { get; }
 
         public static SdfFontFace? Create(string assetPath, Func<string, string?, string> resolveAssetPath, TextureManager textureManager)
         {
@@ -857,7 +854,7 @@ void main()
                 var asset = SdfFontAsset.Load(assetPath);
                 string assetDirectory = Path.GetDirectoryName(assetPath) ?? AppContext.BaseDirectory;
                 var atlasPaths = new string[asset.AtlasPages.Count];
-                var textures = new List<TextureObjectUploaded>(asset.AtlasPages.Count);
+                var textures = new List<RenderTexture>(asset.AtlasPages.Count);
 
                 for (int i = 0; i < asset.AtlasPages.Count; i++)
                 {
@@ -966,7 +963,7 @@ void main()
             Texture = CreateUploadedTexture();
         }
 
-        public TextureObjectUploaded Texture { get; private set; }
+        public RenderTexture Texture { get; private set; }
         public int Width { get; }
         public int Height { get; }
 
@@ -1013,7 +1010,7 @@ void main()
             Texture.Dispose();
         }
 
-        private TextureObjectUploaded CreateUploadedTexture()
+        private RenderTexture CreateUploadedTexture()
         {
             byte[] flipped = FlipPixelsY(_pixels, Width, Height);
             return _textureManager.CreateFromRgba(flipped, Width, Height, filter: SpriteTextureFilter.Linear);

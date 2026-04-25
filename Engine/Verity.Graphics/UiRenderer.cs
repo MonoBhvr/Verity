@@ -11,7 +11,7 @@ public static class UiRenderer
     public static string DefaultFontPath { get; set; } = string.Empty;
     public static string DefaultFontFamily { get; set; } = string.Empty;
 
-    public static void Render(RenderPipeline pipeline, UIScreenAsset screen, int viewportWidth, int viewportHeight, FramebufferObject.Uploaded? targetFbo = null)
+    public static void Render(RenderPipeline pipeline, UIScreenAsset screen, int viewportWidth, int viewportHeight, RenderTarget? targetFbo = null)
     {
         if (viewportWidth <= 0 || viewportHeight <= 0)
             return;
@@ -28,7 +28,7 @@ public static class UiRenderer
             RenderNode(pipeline, node, projection, view, targetFbo);
     }
 
-    public static void Render(RenderPipeline pipeline, Canvas canvas, int viewportWidth, int viewportHeight, FramebufferObject.Uploaded? targetFbo = null)
+    public static void Render(RenderPipeline pipeline, Canvas canvas, int viewportWidth, int viewportHeight, RenderTarget? targetFbo = null)
     {
         if (!canvas.Visible)
             return;
@@ -36,7 +36,7 @@ public static class UiRenderer
         Render(pipeline, canvas.Screen, viewportWidth, viewportHeight, targetFbo);
     }
 
-    private static void RenderNode(RenderPipeline pipeline, UiNode node, Matrix4x4 projection, Matrix4x4 view, FramebufferObject.Uploaded? targetFbo)
+    private static void RenderNode(RenderPipeline pipeline, UiNode node, Matrix4x4 projection, Matrix4x4 view, RenderTarget? targetFbo)
     {
         var rect = node.LayoutRect;
         if (rect.Width <= 0f || rect.Height <= 0f)
@@ -58,7 +58,7 @@ public static class UiRenderer
         RenderNodeText(pipeline, node, projection, view, targetFbo);
     }
 
-    private static TextureObjectUploaded? ResolveTexture(RenderPipeline pipeline, UiNode node)
+    private static RenderTexture? ResolveTexture(RenderPipeline pipeline, UiNode node)
     {
         if (node is Image image && !string.IsNullOrWhiteSpace(image.Sprite.Path))
             return pipeline.LoadTexture(image.Sprite) ?? DefaultSprites.Square;
@@ -83,7 +83,7 @@ public static class UiRenderer
         return node.Visual.BackgroundColor;
     }
 
-    private static void RenderProgressFill(RenderPipeline pipeline, ProgressBar progress, Matrix4x4 projection, Matrix4x4 view, FramebufferObject.Uploaded? targetFbo)
+    private static void RenderProgressFill(RenderPipeline pipeline, ProgressBar progress, Matrix4x4 projection, Matrix4x4 view, RenderTarget? targetFbo)
     {
         var rect = progress.LayoutRect;
         float t = progress.Max <= progress.Min ? 0f : Math.Clamp((progress.Value - progress.Min) / (progress.Max - progress.Min), 0f, 1f);
@@ -95,7 +95,7 @@ public static class UiRenderer
         pipeline.DrawTile(DefaultSprites.Square, fillModel, progress.Visual.ForegroundColor, projection, view, targetFbo);
     }
 
-    private static void RenderSliderHandle(RenderPipeline pipeline, Slider slider, Matrix4x4 projection, Matrix4x4 view, FramebufferObject.Uploaded? targetFbo)
+    private static void RenderSliderHandle(RenderPipeline pipeline, Slider slider, Matrix4x4 projection, Matrix4x4 view, RenderTarget? targetFbo)
     {
         var rect = slider.LayoutRect;
         float t = slider.Max <= slider.Min ? 0f : Math.Clamp((slider.Value - slider.Min) / (slider.Max - slider.Min), 0f, 1f);
@@ -107,7 +107,7 @@ public static class UiRenderer
             pipeline.DrawTile(DefaultSprites.Square, model, slider.Visual.ForegroundColor, projection, view, targetFbo);
     }
 
-    private static void RenderNodeText(RenderPipeline pipeline, UiNode node, Matrix4x4 projection, Matrix4x4 view, FramebufferObject.Uploaded? targetFbo)
+    private static void RenderNodeText(RenderPipeline pipeline, UiNode node, Matrix4x4 projection, Matrix4x4 view, RenderTarget? targetFbo)
     {
         if (!TryResolveNodeText(node, out var text, out var color, out var wordWrap))
             return;

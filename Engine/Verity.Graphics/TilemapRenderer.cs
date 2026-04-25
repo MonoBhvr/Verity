@@ -1,7 +1,6 @@
 using System.Numerics;
 using SystemNumericsVector3 = System.Numerics.Vector3;
 using Irodori.Framebuffer;
-using Irodori.Texture;
 using Verity.Core.ECS;
 using Verity.Core.World;
 using Verity.Core;
@@ -12,7 +11,7 @@ namespace Verity.Graphics;
 public class TilemapRenderer : Component
 {
     private Tilemap? _tilemap;
-    private readonly Dictionary<string, TextureObjectUploaded> _textureCache = new();
+    private readonly Dictionary<string, RenderTexture> _textureCache = new();
     
     [SerializeField]
     public string SortingLayerName { get; set; } = "Default";
@@ -41,7 +40,7 @@ public class TilemapRenderer : Component
         _textureCache.Clear();
     }
 
-    public void Render(RenderPipeline pipeline, Camera camera, Matrix4x4 projection, Matrix4x4 view, FramebufferObject.Uploaded? targetFbo)
+    public void Render(RenderPipeline pipeline, Camera camera, Matrix4x4 projection, Matrix4x4 view, RenderTarget? targetFbo)
     {
         if (camera == null || Owner == null) return;
         
@@ -105,7 +104,7 @@ public class TilemapRenderer : Component
             if (!spriteOpt.HasValue) continue;
             var sprite = spriteOpt.Value;
 
-            TextureObjectUploaded? tex = null;
+            RenderTexture? tex = null;
             if (!string.IsNullOrWhiteSpace(sprite.Path))
             {
                 string cacheKey = string.IsNullOrWhiteSpace(sprite.Guid) ? sprite.Path : $"{sprite.Guid}:{sprite.Path}";

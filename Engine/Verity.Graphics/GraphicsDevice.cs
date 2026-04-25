@@ -1,26 +1,27 @@
 using System.Drawing;
 using Irodori;
 using Irodori.Backend.OpenGL;
-using Irodori.Buffer;
 using Irodori.Framebuffer;
 using Irodori.Shader;
 using Irodori.Texture;
-using Irodori.Type;
-using Irodori.Windowing;
 using Silk.NET.OpenGL;
 
 namespace Verity.Graphics;
 
-public class GraphicsDevice : IDisposable
+public class GraphicsDevice : IRenderDevice
 {
+    public static IGraphicsDeviceFactory DefaultFactory { get; set; } = new SdlOpenGlGraphicsDeviceFactory();
+
     private readonly Gfx<OpenGlBackend, VeritySdl2Window> _gfx;
     private readonly OpenGlBackend _backend;
 
     public VeritySdl2Window Window => (VeritySdl2Window)_gfx.Window;
     public Gfx Gfx => _gfx;
     public GL Gl => _backend.Gl!;
+    public uint Width => Window.GetWidth();
+    public uint Height => Window.GetHeight();
 
-    private GraphicsDevice(Gfx<OpenGlBackend, VeritySdl2Window> gfx, OpenGlBackend backend)
+    internal GraphicsDevice(Gfx<OpenGlBackend, VeritySdl2Window> gfx, OpenGlBackend backend)
     {
         _gfx = gfx;
         _backend = backend;
@@ -32,66 +33,62 @@ public class GraphicsDevice : IDisposable
         int height = 720,
         bool resizable = true)
     {
-        var backend = new OpenGlBackend();
-        var windowing = new VeritySdl2Windowing();
-
-        var windowConfig = new Window.InitConfig
-        {
-            Title = title,
-            Width = width,
-            Height = height,
-            Resizable = resizable,
-            Fullscreen = false,
-        };
-
-        var gfx = Gfx<OpenGlBackend, VeritySdl2Window>.Create()
-            .WithBackend(backend)
-            .WithWindowing(windowing)
-            .WithWindowConfig(windowConfig)
-            .Init()
-            .Unwrap();
-
-        // 2D engine: CPU-based sprite sorting, no depth test needed
-        backend.Gl!.Disable(EnableCap.DepthTest);
-        backend.Gl.Enable(EnableCap.Blend);
-        backend.Gl.BlendFunc(BlendingFactor.SrcAlpha, BlendingFactor.OneMinusSrcAlpha);
-
-        return new GraphicsDevice(gfx, backend);
+        return (GraphicsDevice)DefaultFactory.Create(title, width, height, resizable);
     }
 
-    public void Clear(System.Drawing.Color color, FramebufferObject.Uploaded? framebuffer = null)
+    public void Clear(System.Drawing.Color color, RenderTarget? framebuffer = null)
     {
-        _gfx.Clear(color, framebuffer).Unwrap();
+        _gfx.Clear(color, (framebuffer as NativeRenderTarget)?.Resource).Unwrap();
     }
     
-    public void Clear(Verity.Core.Color color, FramebufferObject.Uploaded? framebuffer = null)
+    public void Clear(Verity.Core.Color color, RenderTarget? framebuffer = null)
     {
-        _gfx.Clear(color, framebuffer).Unwrap();
+        _gfx.Clear(color, (framebuffer as NativeRenderTarget)?.Resource).Unwrap();
     }
 
-    public ShaderObject.BeforeCompile CreateShader(EShaderType type, string source)
+    public RenderProgram CreateProgram(string vertexSource, string fragmentSource)
     {
-        return _gfx.CreateShader(type, source);
+        var vertexShader = _gfx.CreateShader(EShaderType.Vertex, vertexSource)
+            .Compile()
+            .Unwrap();
+
+        var fragmentShader = _gfx.CreateShader(EShaderType.Fragment, fragmentSource)
+            .Compile()
+            .Unwrap();
+
+        var program = _gfx.CreateShaderProgram()
+            .AttachShader(vertexShader)
+            .AttachShader(fragmentShader)
+            .Link()
+            .Unwrap();
+
+        vertexShader.Dispose();
+        fragmentShader.Dispose();
+
+        return new NativeRenderProgram(program);
     }
 
-    public ShaderProgram.BeforeLinking CreateShaderProgram()
+    public RenderMeshBuilder CreateMeshBuilder(RenderMeshLayout layout)
     {
-        return _gfx.CreateShaderProgram();
+        var format = layout switch
+        {
+            RenderMeshLayout.PositionTexture2D => Irodori.Buffer.VertexBufferFormat.Create()
+                .AddAttrib(Irodori.Buffer.VertexBufferFormat.Attrib.Vector2())
+                .AddAttrib(Irodori.Buffer.VertexBufferFormat.Attrib.Vector2()),
+            _ => throw new ArgumentOutOfRangeException(nameof(layout), layout, null)
+        };
+
+        return new NativeRenderMeshBuilder(_gfx.CreateVertexBuffer(format));
     }
 
-    public VertexBuffer.Unuploaded CreateVertexBuffer(VertexBufferFormat format)
+    public RenderTextureBuilder CreateTexture()
     {
-        return _gfx.CreateVertexBuffer(format);
+        return new NativeRenderTextureBuilder(_gfx.CreateTexture());
     }
 
-    public TextureObjectUnuploaded CreateTexture()
+    public RenderTargetBuilder CreateFramebuffer()
     {
-        return _gfx.CreateTexture();
-    }
-
-    public FramebufferObject.Unuploaded CreateFramebuffer()
-    {
-        return _gfx.CreateFramebuffer();
+        return new NativeRenderTargetBuilder(_gfx.CreateFramebuffer());
     }
 
     public void SwapBuffers()
@@ -107,6 +104,26 @@ public class GraphicsDevice : IDisposable
     public void PollEvents()
     {
         Window.PollEvents();
+    }
+
+    public void SetViewport(int x, int y, uint width, uint height)
+    {
+        _backend.Gl!.Viewport(x, y, width, height);
+    }
+
+    public void EnableScissorTest()
+    {
+        _backend.Gl!.Enable(EnableCap.ScissorTest);
+    }
+
+    public void DisableScissorTest()
+    {
+        _backend.Gl!.Disable(EnableCap.ScissorTest);
+    }
+
+    public void SetScissor(int x, int y, uint width, uint height)
+    {
+        _backend.Gl!.Scissor(x, y, width, height);
     }
 
     public void SetSize(int w, int h)

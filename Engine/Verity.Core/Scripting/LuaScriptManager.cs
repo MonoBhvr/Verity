@@ -52,7 +52,14 @@ public static class LuaScriptManager
                 .GetAwaiter()
                 .GetResult();
 
-            CreateWatcher(resolvedRoot);
+            try
+            {
+                CreateWatcher(resolvedRoot);
+            }
+            catch (PlatformNotSupportedException)
+            {
+                _watcher = null;
+            }
         }
     }
 

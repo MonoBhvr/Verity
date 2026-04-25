@@ -1979,8 +1979,7 @@ public sealed unsafe class UIEditorWindow : EditorWindow
             }
             case CanvasDragMode.Resize:
             {
-                UiRect resized = ResizeRect(_dragStartRect, _activeResizeHandle, mouseCanvas - _dragStartMouseCanvas);
-                ApplyRectToTransform(_selectedNode, resized);
+                ApplyResizeDrag(mouseCanvas);
                 break;
             }
             case CanvasDragMode.Rotate:
@@ -1994,6 +1993,23 @@ public sealed unsafe class UIEditorWindow : EditorWindow
         }
 
         UiLayoutEngine.Layout(_screen!, _screen!.ReferenceResolution.X, _screen.ReferenceResolution.Y);
+    }
+
+    private void ApplyResizeDrag(Vector2 mouseCanvas)
+    {
+        if (_selectedNode == null)
+            return;
+
+        Vector2 localDelta = RotatePoint(mouseCanvas - _dragStartMouseCanvas, -(_dragStartRotation * (MathF.PI / 180f)));
+        UiRect resized = ResizeRect(_dragStartRect, _activeResizeHandle, localDelta);
+
+        if (IsParentLayoutManaged(_selectedNode))
+        {
+            ApplySizeToTransform(_selectedNode, resized.Size);
+            return;
+        }
+
+        ApplyRectToTransform(_selectedNode, resized);
     }
 
     private static UiRect ResizeRect(UiRect rect, int handleIndex, Vector2 delta)
@@ -2040,6 +2056,37 @@ public sealed unsafe class UIEditorWindow : EditorWindow
         }
 
         return new UiRect(x, y, width, height);
+    }
+
+    private static bool IsParentLayoutManaged(UiNode node)
+    {
+        return node.Parent is UiContainer { Layout.Mode: not UiLayoutMode.Free };
+    }
+
+    private void ApplySizeToTransform(UiNode node, Vector2 desiredSize)
+    {
+        UiRect parentRect = node.Parent?.LayoutRect ?? new UiRect(0f, 0f, _screen!.ReferenceResolution.X, _screen.ReferenceResolution.Y);
+        UiTransform transform = node.Transform;
+        Vector2 aMin = new(
+            parentRect.X + parentRect.Width * transform.AnchorMin.X,
+            parentRect.Y + parentRect.Height * transform.AnchorMin.Y);
+        Vector2 aMax = new(
+            parentRect.X + parentRect.Width * transform.AnchorMax.X,
+            parentRect.Y + parentRect.Height * transform.AnchorMax.Y);
+
+        float resolvedWidth = Math.Clamp(Math.Max(8f, desiredSize.X), transform.MinSize.X, transform.MaxSize.X);
+        float resolvedHeight = Math.Clamp(Math.Max(8f, desiredSize.Y), transform.MinSize.Y, transform.MaxSize.Y);
+
+        if (transform.AnchorMin != transform.AnchorMax)
+        {
+            Vector4 margin = transform.Margin;
+            transform.Size = new Vector2(
+                resolvedWidth - (aMax.X - aMin.X) + margin.X + margin.Z,
+                resolvedHeight - (aMax.Y - aMin.Y) + margin.Y + margin.W);
+            return;
+        }
+
+        transform.Size = new Vector2(resolvedWidth, resolvedHeight);
     }
 
     private void CancelCanvasDrag()
@@ -2150,7 +2197,7 @@ public sealed unsafe class UIEditorWindow : EditorWindow
 
         if (_activeCanvasTool == CanvasTool.Scale)
         {
-            foreach (Vector2 handle in GetResizeHandlePositions(corners))
+            foreach (Vector2 handle in GetVisibleResizeHandles(_selectedNode, corners))
             {
                 draw.AddRectFilled(handle - new Vector2(4f, 4f), handle + new Vector2(4f, 4f), outline);
                 draw.AddRect(handle - new Vector2(4f, 4f), handle + new Vector2(4f, 4f), ImGui.GetColorU32(new Vector4(0.03f, 0.05f, 0.08f, 1f)));
@@ -2204,13 +2251,72 @@ public sealed unsafe class UIEditorWindow : EditorWindow
             return -1;
 
         Vector2[] handles = GetResizeHandlePositions(GetNodeScreenCorners(_selectedNode, canvasPos, scale));
-        for (int i = 0; i < handles.Length; i++)
+        foreach (int i in GetInteractiveResizeHandleIndices(_selectedNode))
         {
             if (Vector2.DistanceSquared(mouseScreen, handles[i]) <= 64f)
                 return i;
         }
 
         return -1;
+    }
+
+    private static IEnumerable<Vector2> GetVisibleResizeHandles(UiNode node, Vector2[] corners)
+    {
+        Vector2[] handles = GetResizeHandlePositions(corners);
+        foreach (int index in GetInteractiveResizeHandleIndices(node))
+            yield return handles[index];
+    }
+
+    private static IEnumerable<int> GetInteractiveResizeHandleIndices(UiNode node)
+    {
+        if (!IsParentLayoutManaged(node))
+        {
+            for (int i = 0; i < ResizeHandleDirections.Length; i++)
+                yield return i;
+            yield break;
+        }
+
+        if (node.Parent is not UiContainer container)
+            yield break;
+
+        bool widthEditable = IsWidthEditableInParentLayout(container.Layout);
+        bool heightEditable = IsHeightEditableInParentLayout(container.Layout);
+
+        for (int i = 0; i < ResizeHandleDirections.Length; i++)
+        {
+            Vector2 direction = ResizeHandleDirections[i];
+            bool changesWidth = direction.X != 0f;
+            bool changesHeight = direction.Y != 0f;
+
+            if (changesWidth && (!widthEditable || direction.X < 0f))
+                continue;
+            if (changesHeight && (!heightEditable || direction.Y < 0f))
+                continue;
+            if (!changesWidth && !changesHeight)
+                continue;
+
+            yield return i;
+        }
+    }
+
+    private static bool IsWidthEditableInParentLayout(UiLayoutGroup layout)
+    {
+        return layout.Mode switch
+        {
+            UiLayoutMode.Vertical or UiLayoutMode.ScrollContent or UiLayoutMode.Grid => !layout.FitChildren,
+            UiLayoutMode.Horizontal or UiLayoutMode.Wrap or UiLayoutMode.Circle => true,
+            _ => true
+        };
+    }
+
+    private static bool IsHeightEditableInParentLayout(UiLayoutGroup layout)
+    {
+        return layout.Mode switch
+        {
+            UiLayoutMode.Horizontal => !layout.FitChildren,
+            UiLayoutMode.Vertical or UiLayoutMode.ScrollContent or UiLayoutMode.Grid or UiLayoutMode.Wrap or UiLayoutMode.Circle => true,
+            _ => true
+        };
     }
 
     private bool IsRotateHandleHovered(Vector2 mouseScreen, Vector2 canvasPos, float scale)

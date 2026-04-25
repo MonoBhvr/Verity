@@ -1,6 +1,5 @@
 using System.Numerics;
 using Irodori.Framebuffer;
-using Irodori.Texture;
 using Verity.Core;
 
 namespace Verity.Graphics;
@@ -8,21 +7,21 @@ namespace Verity.Graphics;
 public class DebugDraw
 {
     private readonly Shader2D _shader;
-    private readonly Irodori.Buffer.VertexBuffer.Uploaded _quadBuffer;
-    private TextureObjectUploaded? _whitePixel;
+    private readonly RenderMesh _quadBuffer;
+    private RenderTexture? _whitePixel;
 
-    public DebugDraw(Shader2D shader, Irodori.Buffer.VertexBuffer.Uploaded quadBuffer)
+    public DebugDraw(Shader2D shader, RenderMesh quadBuffer)
     {
         _shader = shader;
         _quadBuffer = quadBuffer;
     }
 
-    public void SetWhitePixel(TextureObjectUploaded whitePixel)
+    public void SetWhitePixel(RenderTexture whitePixel)
     {
         _whitePixel = whitePixel;
     }
 
-    public void Render(Camera camera, FramebufferObject.Uploaded? targetFbo = null)
+    public void Render(Camera camera, RenderTarget? targetFbo = null)
     {
         if (_whitePixel == null) return;
 
@@ -38,7 +37,7 @@ public class DebugDraw
             _shader.SetModel(model);
             _shader.SetTexture(_whitePixel);
             _shader.SetColor(line.Color);
-            _quadBuffer.Draw(_shader.Program, targetFbo);
+            _shader.Draw(_quadBuffer, targetFbo);
         }
     }
 

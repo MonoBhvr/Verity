@@ -1,6 +1,6 @@
 using System.Numerics;
 using Irodori.Buffer;
-using Irodori.Shader;
+using Irodori.Framebuffer;
 using Irodori.Texture;
 
 namespace Verity.Graphics;
@@ -301,9 +301,7 @@ void main()
 }
 ";
 
-    private readonly ShaderProgram.Linked _program;
-
-    public ShaderProgram.Linked Program => _program;
+    private readonly RenderProgram _program;
 
     public struct ShaderUniform
     {
@@ -324,31 +322,14 @@ void main()
         return uniforms;
     }
 
-    private Shader2D(ShaderProgram.Linked program)
+    private Shader2D(RenderProgram program)
     {
         _program = program;
     }
 
-    public static Shader2D Create(GraphicsDevice device, string? vertexSource = null, string? fragmentSource = null)
+    public static Shader2D Create(IRenderDevice device, string? vertexSource = null, string? fragmentSource = null)
     {
-        var vertexShader = device.CreateShader(EShaderType.Vertex, vertexSource ?? VertexSource)
-            .Compile()
-            .Unwrap();
-
-        var fragmentShader = device.CreateShader(EShaderType.Fragment, fragmentSource ?? FragmentSource)
-            .Compile()
-            .Unwrap();
-
-        var program = device.CreateShaderProgram()
-            .AttachShader(vertexShader)
-            .AttachShader(fragmentShader)
-            .Link()
-            .Unwrap();
-
-        vertexShader.Dispose();
-        fragmentShader.Dispose();
-
-        return new Shader2D(program);
+        return new Shader2D(device.CreateProgram(vertexSource ?? VertexSource, fragmentSource ?? FragmentSource));
     }
 
     public void SetProjection(Matrix4x4 projection)
@@ -366,12 +347,12 @@ void main()
         _program.SetMat4("uModel", model);
     }
 
-    public void SetTexture(TextureObjectUploaded texture)
+    public void SetTexture(RenderTexture texture)
     {
         _program.SetTexture("uTexture", texture);
     }
 
-    public void SetTexture(string name, TextureObjectUploaded texture)
+    public void SetTexture(string name, RenderTexture texture)
     {
         _program.SetTexture(name, texture);
     }
@@ -402,6 +383,11 @@ void main()
     public void SetVec3(string name, Vector3 value) => _program.SetVec3(name, value);
     public void SetVec4(string name, Vector4 value) => _program.SetVec4(name, value);
     public void SetMat4(string name, Matrix4x4 value) => _program.SetMat4(name, value);
+
+    public void Draw(RenderMesh buffer, RenderTarget? targetFbo = null)
+    {
+        buffer.Draw(_program, targetFbo);
+    }
 
     public void Dispose()
     {

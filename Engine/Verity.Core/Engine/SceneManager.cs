@@ -9,20 +9,24 @@ namespace Verity.Core.Engine;
 public static class WorldLoader
 {
     public static event Action<string>? OnWorldLoaded;
+    public static string? LastLoadError { get; private set; }
 
     public static void LoadWorld(string worldPath, Assembly? userAssembly = null)
     {
         if (!File.Exists(worldPath))
         {
+            LastLoadError = $"World file not found: {worldPath}";
             Debug.LogWarning($"[WorldLoader] World file not found on disk: {worldPath}. Trying to load from memory/resources if possible.");
             return;
         }
 
         try {
+            LastLoadError = null;
             var json = File.ReadAllText(worldPath);
             LoadWorldFromJson(json, Path.GetFileNameWithoutExtension(worldPath), userAssembly);
             OnWorldLoaded?.Invoke(worldPath);
         } catch (Exception e) {
+            LastLoadError = e.Message;
             Debug.LogError($"[WorldLoader] Failed to load world at {worldPath}: {e}");
         }
     }
@@ -30,6 +34,7 @@ public static class WorldLoader
     public static void LoadWorldFromJson(string json, string name, Assembly? userAssembly = null)
     {
         try {
+            LastLoadError = null;
             EventBus.Clear();
             var world = WorldManager.CreateOrReplaceWorld(name);
             UiSystem.Clear();
@@ -37,6 +42,7 @@ public static class WorldLoader
             WorldManager.SetActiveWorld(world);
             Debug.Log($"[WorldLoader] Successfully loaded world: {name}");
         } catch (Exception e) {
+            LastLoadError = e.ToString();
             Debug.LogError($"[WorldLoader] Failed to deserialize world '{name}': {e}");
         }
     }
@@ -73,7 +79,7 @@ public class BuildSettings
     public static BuildSettings LoadFromJson(string json)
     {
         try {
-            var settings = JsonSerializer.Deserialize<BuildSettings>(json, JsonOptions);
+            var settings = JsonSerializer.Deserialize(json, CoreJsonContext.Default.BuildSettings);
             return settings ?? new BuildSettings();
         } catch {
             return new BuildSettings();

@@ -8,16 +8,16 @@ namespace Verity.Graphics;
 
 public class TextureManager : IDisposable
 {
-    private readonly GraphicsDevice _device;
-    private readonly LruCache<string, TextureObjectUploaded> _cache;
+    private readonly IRenderDevice _device;
+    private readonly LruCache<string, RenderTexture> _cache;
 
-    public TextureManager(GraphicsDevice device)
+    public TextureManager(IRenderDevice device)
     {
         _device = device;
-        _cache = new LruCache<string, TextureObjectUploaded>(256);
+        _cache = new LruCache<string, RenderTexture>(256);
     }
 
-    public TextureObjectUploaded Load(string path, SpriteTextureFilter filter = SpriteTextureFilter.Point, bool flipY = true)
+    public RenderTexture Load(string path, SpriteTextureFilter filter = SpriteTextureFilter.Point, bool flipY = true)
     {
         var fullPath = Path.GetFullPath(path);
         string cacheKey = BuildCacheKey(fullPath, filter, flipY);
@@ -32,7 +32,7 @@ public class TextureManager : IDisposable
         return uploaded;
     }
 
-    public TextureObjectUploaded LoadFromMemory(byte[] imageBytes, string cacheKey, SpriteTextureFilter filter = SpriteTextureFilter.Point, bool flipY = true)
+    public RenderTexture LoadFromMemory(byte[] imageBytes, string cacheKey, SpriteTextureFilter filter = SpriteTextureFilter.Point, bool flipY = true)
     {
         string actualCacheKey = BuildCacheKey(cacheKey, filter, flipY);
         if (_cache.TryGetValue(actualCacheKey, out var cached))
@@ -45,7 +45,7 @@ public class TextureManager : IDisposable
         return uploaded;
     }
 
-    public unsafe TextureObjectUploaded CreateFromRgba(byte[] pixels, int width, int height, string? cacheKey = null, SpriteTextureFilter filter = SpriteTextureFilter.Point)
+    public unsafe RenderTexture CreateFromRgba(byte[] pixels, int width, int height, string? cacheKey = null, SpriteTextureFilter filter = SpriteTextureFilter.Point)
     {
         string? actualCacheKey = cacheKey != null ? BuildCacheKey(cacheKey, filter, flipY: false) : null;
         if (actualCacheKey != null && _cache.TryGetValue(actualCacheKey, out var cached))
@@ -59,18 +59,15 @@ public class TextureManager : IDisposable
         return uploaded;
     }
 
-    private unsafe TextureObjectUploaded UploadPixels(byte[] pixels, int width, int height, SpriteTextureFilter filter)
+    private unsafe RenderTexture UploadPixels(byte[] pixels, int width, int height, SpriteTextureFilter filter)
     {
         fixed (byte* ptr = pixels)
         {
-            var textureData = TextureData.Create(ptr);
-            var textureFilter = filter == SpriteTextureFilter.Linear ? ETextureFilter.Linear : ETextureFilter.Nearest;
             return _device.CreateTexture()
                 .WithSize(width, height)
-                .WithTextureType(ETextureInternalType.Rgba8)
-                .WithFilter(textureFilter, textureFilter)
-                .Upload(textureData)
-                .Unwrap();
+                .WithRgba8()
+                .WithFilter(filter == SpriteTextureFilter.Linear ? RenderTextureFilter.Linear : RenderTextureFilter.Nearest)
+                .UploadRgba(pixels);
         }
     }
 
@@ -85,7 +82,7 @@ public class TextureManager : IDisposable
         return data.Length > 0 ? flipped : data;
     }
 
-    public TextureObjectUploaded CreateWhitePixel()
+    public RenderTexture CreateWhitePixel()
     {
         return CreateFromRgba([255, 255, 255, 255], 1, 1, "__white_pixel__");
     }
@@ -113,6 +110,8 @@ public class TextureManager : IDisposable
     {
         _cache.Dispose();
     }
+
+    public int CachedTextureCount => _cache.Count;
 
     private static string BuildCacheKey(string baseKey, SpriteTextureFilter filter, bool flipY) => $"{baseKey}|{filter}|flip:{flipY}";
 }

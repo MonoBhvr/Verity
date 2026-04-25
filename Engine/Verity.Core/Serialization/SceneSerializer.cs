@@ -1199,6 +1199,10 @@ public static class SceneSerializer
             else if (t == typeof(Sprite)) { val = AssetPathUtility.FromSpriteJsonNode(node); }
             else if (t == typeof(StyleAsset)) { var reference = AssetPathUtility.FromJsonNode(node); val = new StyleAsset(reference.Path, reference.Guid); }
             else if (t == typeof(ShaderAsset)) { var reference = AssetPathUtility.FromJsonNode(node); val = new ShaderAsset(reference.Path, reference.Guid); }
+            else if (t == typeof(Dictionary<(int x, int y), TileBase>))
+            {
+                val = JsonSerializer.Deserialize<Dictionary<(int x, int y), TileBase>>(node.ToJsonString(), _options);
+            }
             else if (typeof(Component).IsAssignableFrom(t))
             {
                 if (Guid.TryParse((string?)node["EntityId"], out var entityId))
@@ -1213,7 +1217,13 @@ public static class SceneSerializer
             }
             else if (t.IsEnum) val = Enum.Parse(t, node.ToString());
             else val = JsonSerializer.Deserialize(node.ToJsonString(), t, _options);
-        } catch { }
+        }
+        catch (Exception ex)
+        {
+            string targetType = target.GetType().FullName ?? target.GetType().Name;
+            string memberType = t.FullName ?? t.Name;
+            Debug.LogError($"[SceneSerializer] Failed to apply member '{name}' ({memberType}) on '{targetType}': {ex}");
+        }
 
         if (val != null)
         {

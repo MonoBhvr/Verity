@@ -227,7 +227,7 @@ public static class Input
     {
         if (evt.type == SDL.SDL_EventType.SDL_MOUSEMOTION)
         {
-            _mousePosition = new Vector2(evt.motion.x, evt.motion.y);
+            ProcessEvent(InputEvent.MouseMove(evt.motion.x, evt.motion.y));
             return;
         }
 
@@ -237,41 +237,75 @@ public static class Input
         {
             case SDL.SDL_EventType.SDL_KEYDOWN:
             {
-                var key = (KeyCode)evt.key.keysym.scancode;
-                if (_keysDown.Add(key)) _pressedBuffer.Add(key);
+                ProcessEvent(InputEvent.KeyDown((KeyCode)evt.key.keysym.scancode));
                 break;
             }
             case SDL.SDL_EventType.SDL_KEYUP:
             {
-                var key = (KeyCode)evt.key.keysym.scancode;
-                if (_keysDown.Remove(key)) _releasedBuffer.Add(key);
+                ProcessEvent(InputEvent.KeyUp((KeyCode)evt.key.keysym.scancode));
                 break;
             }
             case SDL.SDL_EventType.SDL_MOUSEBUTTONDOWN:
             {
-                var button = (MouseButton)evt.button.button;
-                if (_buttonsDown.Add(button)) _mousePressedBuffer.Add(button);
-                
-                // Map to unified KeyCode
-                var key = MapMouseButtonToKeyCode(button);
-                if (_keysDown.Add(key)) _pressedBuffer.Add(key);
+                ProcessEvent(InputEvent.MouseButtonDown((MouseButton)evt.button.button));
                 break;
             }
             case SDL.SDL_EventType.SDL_MOUSEBUTTONUP:
             {
-                var button = (MouseButton)evt.button.button;
-                if (_buttonsDown.Remove(button)) _mouseReleasedBuffer.Add(button);
-                
-                // Map to unified KeyCode
-                var key = MapMouseButtonToKeyCode(button);
-                if (_keysDown.Remove(key)) _releasedBuffer.Add(key);
+                ProcessEvent(InputEvent.MouseButtonUp((MouseButton)evt.button.button));
                 break;
             }
             case SDL.SDL_EventType.SDL_MOUSEWHEEL:
             {
-                _scrollDeltaBuffer += evt.wheel.y;
+                ProcessEvent(InputEvent.MouseWheel(evt.wheel.y));
                 break;
             }
+        }
+    }
+
+    public static void ProcessEvent(InputEvent evt)
+    {
+        if (evt.Kind == InputEventKind.MouseMove)
+        {
+            _mousePosition = new Vector2(evt.MouseX, evt.MouseY);
+            return;
+        }
+
+        if (!_enabled) return;
+
+        switch (evt.Kind)
+        {
+            case InputEventKind.KeyDown:
+                if (_keysDown.Add(evt.Key))
+                    _pressedBuffer.Add(evt.Key);
+                break;
+            case InputEventKind.KeyUp:
+                if (_keysDown.Remove(evt.Key))
+                    _releasedBuffer.Add(evt.Key);
+                break;
+            case InputEventKind.MouseButtonDown:
+                if (_buttonsDown.Add(evt.MouseButton))
+                    _mousePressedBuffer.Add(evt.MouseButton);
+
+                {
+                    var key = MapMouseButtonToKeyCode(evt.MouseButton);
+                    if (_keysDown.Add(key))
+                        _pressedBuffer.Add(key);
+                }
+                break;
+            case InputEventKind.MouseButtonUp:
+                if (_buttonsDown.Remove(evt.MouseButton))
+                    _mouseReleasedBuffer.Add(evt.MouseButton);
+
+                {
+                    var key = MapMouseButtonToKeyCode(evt.MouseButton);
+                    if (_keysDown.Remove(key))
+                        _releasedBuffer.Add(key);
+                }
+                break;
+            case InputEventKind.MouseWheel:
+                _scrollDeltaBuffer += evt.ScrollDelta;
+                break;
         }
     }
 

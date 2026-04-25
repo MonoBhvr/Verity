@@ -1,5 +1,3 @@
-using Irodori.Texture;
-
 namespace Verity.Graphics;
 
 public static class DefaultSprites
@@ -7,8 +5,8 @@ public static class DefaultSprites
     public const string SquareKey = "__builtin_square__";
     public const string CircleKey = "__builtin_circle__";
 
-    public static TextureObjectUploaded? Square { get; private set; }
-    public static TextureObjectUploaded? Circle { get; private set; }
+    public static RenderTexture? Square { get; private set; }
+    public static RenderTexture? Circle { get; private set; }
 
     public static void Initialize(TextureManager textureManager)
     {

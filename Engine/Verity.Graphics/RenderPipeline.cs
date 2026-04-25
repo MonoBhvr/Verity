@@ -74,14 +74,14 @@ public class RenderPipeline : IDisposable
     private readonly record struct OccluderCandidate(ShadowOccluder Occluder, float DistanceSquared);
     private readonly record struct ResolvedAssetInfo(string Path, bool Exists);
 
-    private readonly GraphicsDevice _device;
+    private readonly IRenderDevice _device;
     private readonly Shader2D _shader;
     private readonly TextureManager _textureManager;
     private readonly DebugDraw _debugDraw;
-    private readonly GlyphAtlasTextRenderer _textRenderer;
-    private readonly Irodori.Buffer.VertexBuffer.Uploaded _quadBuffer;
-    private readonly Irodori.Buffer.VertexBuffer.Unuploaded _dynamicBuffer;
-    private TextureObjectUploaded? _whitePixel;
+    private readonly GlyphAtlasTextRenderer? _textRenderer;
+    private readonly RenderMesh _quadBuffer;
+    private readonly RenderMeshBuilder _dynamicBuffer;
+    private RenderTexture? _whitePixel;
 
     private readonly LruCache<string, Shader2D> _shaderCache = new(64);
     private readonly LruCache<string, StyleRuntime> _styleCache = new(128);
@@ -94,14 +94,14 @@ public class RenderPipeline : IDisposable
     private readonly List<Vector2[]> _shadowPolygonScratch = new();
     private readonly List<(int Order, string Key)> _postProcessPasses = new();
 
-    private FramebufferObject.Uploaded? _worldFbo, _screenFbo;
-    private TextureObjectUploaded? _worldColorTex, _screenColorTex;
+    private RenderTarget? _worldFbo, _screenFbo;
+    private RenderTexture? _worldColorTex, _screenColorTex;
     private int _worldFboWidth, _worldFboHeight, _screenFboWidth, _screenFboHeight;
 
     // Post-processing
     private Shader2D? _copyShader, _brightExtractShader, _blurShader, _bloomCombineShader, _vignetteShader, _colorAdjustShader, _motionBlurShader, _distortionShader, _pixelateShader, _chromaticAberrationShader;
-    private FramebufferObject.Uploaded? _ppSceneFbo, _ppTempFbo1, _ppTempFbo2, _ppHistoryFbo, _ppBloomFbo1, _ppBloomFbo2;
-    private TextureObjectUploaded? _ppSceneTex, _ppTempTex1, _ppTempTex2, _ppHistoryTex, _ppBloomTex1, _ppBloomTex2;
+    private RenderTarget? _ppSceneFbo, _ppTempFbo1, _ppTempFbo2, _ppHistoryFbo, _ppBloomFbo1, _ppBloomFbo2;
+    private RenderTexture? _ppSceneTex, _ppTempTex1, _ppTempTex2, _ppHistoryTex, _ppBloomTex1, _ppBloomTex2;
     private int _ppW, _ppH;
     private int _ppBloomDownsample = 2;
     private bool _ppHistoryValid;
@@ -114,23 +114,21 @@ public class RenderPipeline : IDisposable
     public bool SortAxisAscending { get; set; } = true;
     public static string? BaseAssetsPath { get; set; }
 
-    public FramebufferObject.Uploaded? WorldFbo => _worldFbo;
-    public TextureObjectUploaded? WorldColorTexture => _worldColorTex;
-    public FramebufferObject.Uploaded? ScreenFbo => _screenFbo;
-    public TextureObjectUploaded? ScreenColorTexture => _screenColorTex;
+    public RenderTarget? WorldFbo => _worldFbo;
+    public RenderTexture? WorldColorTexture => _worldColorTex;
+    public RenderTarget? ScreenFbo => _screenFbo;
+    public RenderTexture? ScreenColorTexture => _screenColorTex;
 
-    public RenderPipeline(GraphicsDevice device, Shader2D shader, TextureManager textureManager)
+    public RenderPipeline(IRenderDevice device, Shader2D shader, TextureManager textureManager)
     {
         _device = device; _shader = shader; _textureManager = textureManager;
         _quadBuffer = CreateQuadBuffer(device);
         
-        var format = Irodori.Buffer.VertexBufferFormat.Create()
-            .AddAttrib(Irodori.Buffer.VertexBufferFormat.Attrib.Vector2())  // aPosition
-            .AddAttrib(Irodori.Buffer.VertexBufferFormat.Attrib.Vector2()); // aTexCoord
-        _dynamicBuffer = device.CreateVertexBuffer(format);
+        _dynamicBuffer = device.CreateMeshBuilder(RenderMeshLayout.PositionTexture2D);
 
         _debugDraw = new DebugDraw(shader, _quadBuffer);
-        _textRenderer = new GlyphAtlasTextRenderer(_device, _textureManager, _shader, ResolveAssetPath);
+        if (OperatingSystem.IsWindows())
+            _textRenderer = new GlyphAtlasTextRenderer(_device, _textureManager, _shader, ResolveAssetPath);
 
         // Initialize post-processing shaders.
         _copyShader = Shader2D.Create(_device, PostProcessShaders.ScreenVertex, PostProcessShaders.CopyFragment);
@@ -145,13 +143,9 @@ public class RenderPipeline : IDisposable
         _chromaticAberrationShader = Shader2D.Create(_device, PostProcessShaders.ScreenVertex, PostProcessShaders.ChromaticAberrationFragment);
     }
 
-    private static Irodori.Buffer.VertexBuffer.Uploaded CreateQuadBuffer(GraphicsDevice device)
+    private static RenderMesh CreateQuadBuffer(IRenderDevice device)
     {
-        var format = Irodori.Buffer.VertexBufferFormat.Create()
-            .AddAttrib(Irodori.Buffer.VertexBufferFormat.Attrib.Vector2())  // aPosition
-            .AddAttrib(Irodori.Buffer.VertexBufferFormat.Attrib.Vector2()); // aTexCoord
-
-        var data = Irodori.Buffer.IVertexData.Create<Vector2, Vector2>();
+        var data = RenderMeshData.CreatePositionTexture2D();
         data.AddVertex(new Vector2(0, 0), new Vector2(0, 0)); // top-left
         data.AddVertex(new Vector2(1, 0), new Vector2(1, 0)); // top-right
         data.AddVertex(new Vector2(0, 1), new Vector2(0, 1)); // bottom-left
@@ -159,18 +153,18 @@ public class RenderPipeline : IDisposable
 
         var indices = new int[] { 0, 2, 1, 1, 2, 3 };
 
-        var buffer = device.CreateVertexBuffer(format);
-        return buffer.Upload(data, indices).Unwrap();
+        var buffer = device.CreateMeshBuilder(RenderMeshLayout.PositionTexture2D);
+        return buffer.Upload(data, indices);
     }
 
-    public void SetWhitePixel(TextureObjectUploaded whitePixel) { _whitePixel = whitePixel; _debugDraw.SetWhitePixel(whitePixel); }
+    public void SetWhitePixel(RenderTexture whitePixel) { _whitePixel = whitePixel; _debugDraw.SetWhitePixel(whitePixel); }
 
     public unsafe void EnsureFbo(int w, int h)
     {
         if (_worldFbo != null && _worldFboWidth == w && _worldFboHeight == h) return;
         _worldFbo?.Dispose(); _worldColorTex?.Dispose();
-        _worldColorTex = _device.CreateTexture().WithSize(w, h).WithTextureType(ETextureInternalType.Rgba8).WithFilter(ETextureFilter.Nearest, ETextureFilter.Nearest).Upload(TextureData.Create((void*)null)).Unwrap();
-        _worldFbo = _device.CreateFramebuffer().WithColorAttachment(_worldColorTex).Upload().Unwrap();
+        _worldColorTex = _device.CreateTexture().WithSize(w, h).WithRgba8().WithFilter(RenderTextureFilter.Nearest).UploadEmpty();
+        _worldFbo = _device.CreateFramebuffer().WithColorAttachment(_worldColorTex).Upload();
         _worldFboWidth = w; _worldFboHeight = h;
     }
 
@@ -178,8 +172,8 @@ public class RenderPipeline : IDisposable
     {
         if (_screenFbo != null && _screenFboWidth == w && _screenFboHeight == h) return;
         _screenFbo?.Dispose(); _screenColorTex?.Dispose();
-        _screenColorTex = _device.CreateTexture().WithSize(w, h).WithTextureType(ETextureInternalType.Rgba8).WithFilter(ETextureFilter.Nearest, ETextureFilter.Nearest).Upload(TextureData.Create((void*)null)).Unwrap();
-        _screenFbo = _device.CreateFramebuffer().WithColorAttachment(_screenColorTex).Upload().Unwrap();
+        _screenColorTex = _device.CreateTexture().WithSize(w, h).WithRgba8().WithFilter(RenderTextureFilter.Nearest).UploadEmpty();
+        _screenFbo = _device.CreateFramebuffer().WithColorAttachment(_screenColorTex).Upload();
         _screenFboWidth = w; _screenFboHeight = h;
     }
 
@@ -194,45 +188,46 @@ public class RenderPipeline : IDisposable
         _ppBloomFbo1?.Dispose(); _ppBloomTex1?.Dispose();
         _ppBloomFbo2?.Dispose(); _ppBloomTex2?.Dispose();
 
-        _ppSceneTex = _device.CreateTexture().WithSize(w, h).WithTextureType(ETextureInternalType.Rgba8).WithFilter(ETextureFilter.Linear, ETextureFilter.Linear).Upload(TextureData.Create((void*)null)).Unwrap();
-        _ppSceneFbo = _device.CreateFramebuffer().WithColorAttachment(_ppSceneTex).Upload().Unwrap();
+        _ppSceneTex = _device.CreateTexture().WithSize(w, h).WithRgba8().WithFilter(RenderTextureFilter.Linear).UploadEmpty();
+        _ppSceneFbo = _device.CreateFramebuffer().WithColorAttachment(_ppSceneTex).Upload();
 
-        _ppTempTex1 = _device.CreateTexture().WithSize(w, h).WithTextureType(ETextureInternalType.Rgba8).WithFilter(ETextureFilter.Linear, ETextureFilter.Linear).Upload(TextureData.Create((void*)null)).Unwrap();
-        _ppTempFbo1 = _device.CreateFramebuffer().WithColorAttachment(_ppTempTex1).Upload().Unwrap();
+        _ppTempTex1 = _device.CreateTexture().WithSize(w, h).WithRgba8().WithFilter(RenderTextureFilter.Linear).UploadEmpty();
+        _ppTempFbo1 = _device.CreateFramebuffer().WithColorAttachment(_ppTempTex1).Upload();
 
-        _ppTempTex2 = _device.CreateTexture().WithSize(w, h).WithTextureType(ETextureInternalType.Rgba8).WithFilter(ETextureFilter.Linear, ETextureFilter.Linear).Upload(TextureData.Create((void*)null)).Unwrap();
-        _ppTempFbo2 = _device.CreateFramebuffer().WithColorAttachment(_ppTempTex2).Upload().Unwrap();
+        _ppTempTex2 = _device.CreateTexture().WithSize(w, h).WithRgba8().WithFilter(RenderTextureFilter.Linear).UploadEmpty();
+        _ppTempFbo2 = _device.CreateFramebuffer().WithColorAttachment(_ppTempTex2).Upload();
 
-        _ppHistoryTex = _device.CreateTexture().WithSize(w, h).WithTextureType(ETextureInternalType.Rgba8).WithFilter(ETextureFilter.Linear, ETextureFilter.Linear).Upload(TextureData.Create((void*)null)).Unwrap();
-        _ppHistoryFbo = _device.CreateFramebuffer().WithColorAttachment(_ppHistoryTex).Upload().Unwrap();
+        _ppHistoryTex = _device.CreateTexture().WithSize(w, h).WithRgba8().WithFilter(RenderTextureFilter.Linear).UploadEmpty();
+        _ppHistoryFbo = _device.CreateFramebuffer().WithColorAttachment(_ppHistoryTex).Upload();
 
         int bw = Math.Max(1, w / bloomDownsample);
         int bh = Math.Max(1, h / bloomDownsample);
-        _ppBloomTex1 = _device.CreateTexture().WithSize(bw, bh).WithTextureType(ETextureInternalType.Rgba8).WithFilter(ETextureFilter.Linear, ETextureFilter.Linear).Upload(TextureData.Create((void*)null)).Unwrap();
-        _ppBloomFbo1 = _device.CreateFramebuffer().WithColorAttachment(_ppBloomTex1).Upload().Unwrap();
+        _ppBloomTex1 = _device.CreateTexture().WithSize(bw, bh).WithRgba8().WithFilter(RenderTextureFilter.Linear).UploadEmpty();
+        _ppBloomFbo1 = _device.CreateFramebuffer().WithColorAttachment(_ppBloomTex1).Upload();
 
-        _ppBloomTex2 = _device.CreateTexture().WithSize(bw, bh).WithTextureType(ETextureInternalType.Rgba8).WithFilter(ETextureFilter.Linear, ETextureFilter.Linear).Upload(TextureData.Create((void*)null)).Unwrap();
-        _ppBloomFbo2 = _device.CreateFramebuffer().WithColorAttachment(_ppBloomTex2).Upload().Unwrap();
+        _ppBloomTex2 = _device.CreateTexture().WithSize(bw, bh).WithRgba8().WithFilter(RenderTextureFilter.Linear).UploadEmpty();
+        _ppBloomFbo2 = _device.CreateFramebuffer().WithColorAttachment(_ppBloomTex2).Upload();
 
         _ppW = w; _ppH = h;
         _ppBloomDownsample = bloomDownsample;
         _ppHistoryValid = false;
     }
 
-    public void RenderWorld(World world, Camera camera, FramebufferObject.Uploaded? targetFbo = null)
+    public void RenderWorld(World world, Camera camera, RenderTarget? targetFbo = null)
     {
+        bool browserFastPath = OperatingSystem.IsBrowser();
         bool isWorldFbo = (_worldFbo != null && targetFbo == _worldFbo);
         bool isScreenFbo = (_screenFbo != null && targetFbo == _screenFbo);
 
-        int targetW = isWorldFbo ? _worldFboWidth : (isScreenFbo ? _screenFboWidth : (int)_device.Window.GetWidth());
-        int targetH = isWorldFbo ? _worldFboHeight : (isScreenFbo ? _screenFboHeight : (int)_device.Window.GetHeight());
+        int targetW = isWorldFbo ? _worldFboWidth : (isScreenFbo ? _screenFboWidth : (int)_device.Width);
+        int targetH = isWorldFbo ? _worldFboHeight : (isScreenFbo ? _screenFboHeight : (int)_device.Height);
         if (targetW <= 0 || targetH <= 0) return;
 
         bool renderOutlineOnly = camera.RenderDetail == CameraRenderDetail.Outline;
-        bool renderLighting = camera.RenderDetail is CameraRenderDetail.Lighting or CameraRenderDetail.PostProcess;
-        bool usePostProcess = camera.RenderDetail == CameraRenderDetail.PostProcess &&
-                              camera.PostProcess.Enabled &&
-                              camera.PostProcess.HasAnyEnabledEffect();
+        bool renderLighting = !browserFastPath && camera.RenderDetail is CameraRenderDetail.Lighting or CameraRenderDetail.PostProcess;
+        bool usePostProcess = !browserFastPath && camera.RenderDetail == CameraRenderDetail.PostProcess &&
+                               camera.PostProcess.Enabled &&
+                               camera.PostProcess.HasAnyEnabledEffect();
         Guid currentCameraId = camera.Owner?.Id ?? Guid.Empty;
         if (_ppHistoryCameraId != currentCameraId)
         {
@@ -255,8 +250,8 @@ public class RenderPipeline : IDisposable
             ? ResolveCameraBackgroundColor(camera.BackgroundColor)
             : camera.BackgroundColor;
 
-        _device.Gl.Disable(EnableCap.ScissorTest);
-        _device.Gl.Viewport(0, 0, (uint)targetW, (uint)targetH);
+        _device.DisableScissorTest();
+        _device.SetViewport(0, 0, (uint)targetW, (uint)targetH);
         _device.Clear(camera.LetterboxColor, actualTargetFbo);
 
         int vx = 0, vy = 0, vw = targetW, vh = targetH;
@@ -271,14 +266,14 @@ public class RenderPipeline : IDisposable
 
         int fVw = Math.Max(1, vw), fVh = Math.Max(1, vh);
         if (isScreenFbo) {
-            _device.Gl.Viewport(vx, vy, (uint)fVw, (uint)fVh);
+            _device.SetViewport(vx, vy, (uint)fVw, (uint)fVh);
             camera.SetViewportRect(vx, targetH - (vy + fVh), fVw, fVh);
-            _device.Gl.Enable(EnableCap.ScissorTest);
-            _device.Gl.Scissor(vx, vy, (uint)fVw, (uint)fVh);
+            _device.EnableScissorTest();
+            _device.SetScissor(vx, vy, (uint)fVw, (uint)fVh);
             _device.Clear(resolvedBackgroundColor, actualTargetFbo);
-            _device.Gl.Disable(EnableCap.ScissorTest);
+            _device.DisableScissorTest();
         } else {
-            _device.Gl.Viewport(0, 0, (uint)targetW, (uint)targetH);
+            _device.SetViewport(0, 0, (uint)targetW, (uint)targetH);
             camera.SetViewportRect(0, 0, targetW, targetH);
             _device.Clear(resolvedBackgroundColor, actualTargetFbo);
         }
@@ -316,8 +311,8 @@ public class RenderPipeline : IDisposable
                     (spriteSlice.X + spriteSlice.Width) / (float)Math.Max(1, tex.Width),
                     (spriteSlice.Y + spriteSlice.Height) / (float)Math.Max(1, tex.Height));
 
-                if (isScreenFbo) _device.Gl.Viewport(vx, vy, (uint)fVw, (uint)fVh);
-                else _device.Gl.Viewport(0, 0, (uint)targetW, (uint)targetH);
+                if (isScreenFbo) _device.SetViewport(vx, vy, (uint)fVw, (uint)fVh);
+                else _device.SetViewport(0, 0, (uint)targetW, (uint)targetH);
 
                 var styleRuntime = ResolveStyle(sr.Style);
                 var activeShader = styleRuntime?.Shader ?? _shader;
@@ -333,12 +328,12 @@ public class RenderPipeline : IDisposable
                 activeShader.SetColor(sr.Color);
                 styleRuntime?.Apply(activeShader);
                 
-                _quadBuffer.Draw(activeShader.Program, actualTargetFbo).Unwrap();
+                activeShader.Draw(_quadBuffer, actualTargetFbo);
             }
             else if (r is TilemapRenderer tr)
             {
-                if (isScreenFbo) _device.Gl.Viewport(vx, vy, (uint)fVw, (uint)fVh);
-                else _device.Gl.Viewport(0, 0, (uint)targetW, (uint)targetH);
+                if (isScreenFbo) _device.SetViewport(vx, vy, (uint)fVw, (uint)fVh);
+                else _device.SetViewport(0, 0, (uint)targetW, (uint)targetH);
                 
                 tr.Render(this, camera, projection, view, actualTargetFbo);
             }
@@ -347,8 +342,8 @@ public class RenderPipeline : IDisposable
                 var vertices = pr.GetWorldVertices();
                 if (vertices.Length < 3) continue;
 
-                if (isScreenFbo) _device.Gl.Viewport(vx, vy, (uint)fVw, (uint)fVh);
-                else _device.Gl.Viewport(0, 0, (uint)targetW, (uint)targetH);
+                if (isScreenFbo) _device.SetViewport(vx, vy, (uint)fVw, (uint)fVh);
+                else _device.SetViewport(0, 0, (uint)targetW, (uint)targetH);
 
                 // 내부 채우기 (Fill) - 테두리는 그리지 않고 채우기만 수행
                 if (pr.Fill)
@@ -381,7 +376,7 @@ public class RenderPipeline : IDisposable
             DrawLetterboxBars(camera, targetW, targetH, windowAspect, shotAspect, targetFbo, isWorldFbo, isScreenFbo);
         }
 
-        _device.Gl.Viewport(0, 0, (uint)targetW, (uint)targetH);
+        _device.SetViewport(0, 0, (uint)targetW, (uint)targetH);
     }
 
     private Verity.Core.Color ResolveCameraBackgroundColor(Verity.Core.Color baseColor)
@@ -404,12 +399,12 @@ public class RenderPipeline : IDisposable
         return new Verity.Core.Color(baseColor.R * lighting.X, baseColor.G * lighting.Y, baseColor.B * lighting.Z, baseColor.A);
     }
 
-    private void DrawLetterboxBars(Camera camera, int targetW, int targetH, float windowAspect, float shotAspect, FramebufferObject.Uploaded? targetFbo, bool isWorldFbo, bool isScreenFbo)
+    private void DrawLetterboxBars(Camera camera, int targetW, int targetH, float windowAspect, float shotAspect, RenderTarget? targetFbo, bool isWorldFbo, bool isScreenFbo)
     {
         if (_whitePixel == null || !camera.FixedAspectRatio || isWorldFbo || isScreenFbo)
             return;
 
-        _device.Gl.Viewport(0, 0, (uint)targetW, (uint)targetH);
+        _device.SetViewport(0, 0, (uint)targetW, (uint)targetH);
         ConfigureUnlitShader(_shader);
         _shader.SetProjection(Matrix4x4.Identity);
         _shader.SetView(Matrix4x4.Identity);
@@ -424,9 +419,9 @@ public class RenderPipeline : IDisposable
             float barWidth = 1.0f - visibleWidth;
             float barCenter = (1.0f + visibleWidth) * 0.5f;
             _shader.SetModel(pivot * Matrix4x4.CreateScale(barWidth, 2.0f, 1.0f) * Matrix4x4.CreateTranslation(-barCenter, 0, 0));
-            _quadBuffer.Draw(_shader.Program, targetFbo).Unwrap();
+            _shader.Draw(_quadBuffer, targetFbo);
             _shader.SetModel(pivot * Matrix4x4.CreateScale(barWidth, 2.0f, 1.0f) * Matrix4x4.CreateTranslation(barCenter, 0, 0));
-            _quadBuffer.Draw(_shader.Program, targetFbo).Unwrap();
+            _shader.Draw(_quadBuffer, targetFbo);
         }
         else if (windowAspect < shotAspect)
         {
@@ -434,13 +429,13 @@ public class RenderPipeline : IDisposable
             float barHeight = 1.0f - visibleHeight;
             float barCenter = (1.0f + visibleHeight) * 0.5f;
             _shader.SetModel(pivot * Matrix4x4.CreateScale(2.0f, barHeight, 1.0f) * Matrix4x4.CreateTranslation(0, barCenter, 0));
-            _quadBuffer.Draw(_shader.Program, targetFbo).Unwrap();
+            _shader.Draw(_quadBuffer, targetFbo);
             _shader.SetModel(pivot * Matrix4x4.CreateScale(2.0f, barHeight, 1.0f) * Matrix4x4.CreateTranslation(0, -barCenter, 0));
-            _quadBuffer.Draw(_shader.Program, targetFbo).Unwrap();
+            _shader.Draw(_quadBuffer, targetFbo);
         }
     }
 
-    private void ApplyPostProcess(Camera camera, int w, int h, FramebufferObject.Uploaded? targetFbo)
+    private void ApplyPostProcess(Camera camera, int w, int h, RenderTarget? targetFbo)
     {
         var settings = camera.PostProcess;
         var bloom = settings.Bloom;
@@ -480,7 +475,7 @@ public class RenderPipeline : IDisposable
             return orderCompare != 0 ? orderCompare : string.CompareOrdinal(a.Key, b.Key);
         });
 
-        TextureObjectUploaded sourceTexture = _ppSceneTex;
+        RenderTexture sourceTexture = _ppSceneTex;
         bool useFirstTarget = true;
 
         foreach (var pass in _postProcessPasses)
@@ -599,7 +594,7 @@ public class RenderPipeline : IDisposable
         _ppHistoryValid = true;
     }
 
-    private TextureObjectUploaded BuildBloomTexture(TextureObjectUploaded sourceTexture, int w, int h, BloomSettings settings)
+    private RenderTexture BuildBloomTexture(RenderTexture sourceTexture, int w, int h, BloomSettings settings)
     {
         if (_ppSceneTex == null || _ppBloomTex1 == null || _ppBloomTex2 == null || _ppBloomFbo1 == null || _ppBloomFbo2 == null ||
             _brightExtractShader == null || _blurShader == null)
@@ -611,13 +606,13 @@ public class RenderPipeline : IDisposable
         int bw = Math.Max(1, w / downsample);
         int bh = Math.Max(1, h / downsample);
 
-        _device.Gl.Viewport(0, 0, (uint)bw, (uint)bh);
+        _device.SetViewport(0, 0, (uint)bw, (uint)bh);
         _device.Clear(Verity.Core.Color.Black, _ppBloomFbo1);
         _brightExtractShader.SetTexture("uTexture", sourceTexture);
         _brightExtractShader.SetFloat("uThreshold", settings.Threshold);
-        _quadBuffer.Draw(_brightExtractShader.Program, _ppBloomFbo1).Unwrap();
+        _brightExtractShader.Draw(_quadBuffer, _ppBloomFbo1);
 
-        TextureObjectUploaded source = _ppBloomTex1;
+        RenderTexture source = _ppBloomTex1;
         int iterations = Math.Clamp(settings.BlurIterations, 1, 8);
         float radius = Math.Max(0.25f, settings.Scatter);
 
@@ -626,12 +621,12 @@ public class RenderPipeline : IDisposable
             _blurShader.SetTexture("uTexture", source);
             _blurShader.SetVec2("uDirection", System.Numerics.Vector2.UnitX);
             _blurShader.SetFloat("uRadius", radius);
-            _quadBuffer.Draw(_blurShader.Program, _ppBloomFbo2).Unwrap();
+            _blurShader.Draw(_quadBuffer, _ppBloomFbo2);
 
             _blurShader.SetTexture("uTexture", _ppBloomTex2);
             _blurShader.SetVec2("uDirection", System.Numerics.Vector2.UnitY);
             _blurShader.SetFloat("uRadius", radius);
-            _quadBuffer.Draw(_blurShader.Program, _ppBloomFbo1).Unwrap();
+            _blurShader.Draw(_quadBuffer, _ppBloomFbo1);
 
             source = _ppBloomTex1;
         }
@@ -639,7 +634,7 @@ public class RenderPipeline : IDisposable
         return _ppBloomTex1;
     }
 
-    private TextureObjectUploaded? ApplyCustomPostProcess(CustomPostProcessSettings settings, TextureObjectUploaded sourceTexture, int w, int h, FramebufferObject.Uploaded destFbo, TextureObjectUploaded destTex)
+    private RenderTexture? ApplyCustomPostProcess(CustomPostProcessSettings settings, RenderTexture sourceTexture, int w, int h, RenderTarget destFbo, RenderTexture destTex)
     {
         if (_ppHistoryTex == null)
             return null;
@@ -649,7 +644,7 @@ public class RenderPipeline : IDisposable
             return null;
 
         var shader = styleRuntime.Shader;
-        _device.Gl.Viewport(0, 0, (uint)w, (uint)h);
+        _device.SetViewport(0, 0, (uint)w, (uint)h);
         _device.Clear(Verity.Core.Color.Clear, destFbo);
         styleRuntime.Apply(shader);
         shader.SetTexture("uTexture", sourceTexture);
@@ -660,7 +655,7 @@ public class RenderPipeline : IDisposable
         shader.SetFloat("uDeltaTime", Time.DeltaTime);
         shader.SetVec2("uResolution", new System.Numerics.Vector2(w, h));
         shader.SetVec2("uTexelSize", new System.Numerics.Vector2(1f / Math.Max(1, w), 1f / Math.Max(1, h)));
-        _quadBuffer.Draw(shader.Program, destFbo).Unwrap();
+        shader.Draw(_quadBuffer, destFbo);
 
         return destTex;
     }
@@ -681,26 +676,26 @@ public class RenderPipeline : IDisposable
         return false;
     }
 
-    private void ApplyScreenShader(FramebufferObject.Uploaded destFbo, int w, int h, Shader2D? shader, Action<Shader2D> configure)
+    private void ApplyScreenShader(RenderTarget destFbo, int w, int h, Shader2D? shader, Action<Shader2D> configure)
     {
         if (shader == null)
             return;
 
-        _device.Gl.Viewport(0, 0, (uint)w, (uint)h);
+        _device.SetViewport(0, 0, (uint)w, (uint)h);
         _device.Clear(Verity.Core.Color.Clear, destFbo);
         configure(shader);
-        _quadBuffer.Draw(shader.Program, destFbo).Unwrap();
+        shader.Draw(_quadBuffer, destFbo);
     }
 
-    private void BlitTexture(TextureObjectUploaded source, FramebufferObject.Uploaded? targetFbo, int w, int h)
+    private void BlitTexture(RenderTexture source, RenderTarget? targetFbo, int w, int h)
     {
         if (_copyShader == null)
             return;
 
-        _device.Gl.Viewport(0, 0, (uint)w, (uint)h);
+        _device.SetViewport(0, 0, (uint)w, (uint)h);
         _copyShader.SetTexture("uTexture", source);
         _copyShader.SetUvRect(System.Numerics.Vector2.Zero, System.Numerics.Vector2.One);
-        _quadBuffer.Draw(_copyShader.Program, targetFbo).Unwrap();
+        _copyShader.Draw(_quadBuffer, targetFbo);
     }
 
     private void PrepareFrameLighting(World world, bool enabled)
@@ -1563,7 +1558,7 @@ public class RenderPipeline : IDisposable
         }
     }
 
-    public bool TryGetSpriteUv(Sprite sprite, TextureObjectUploaded texture, out System.Numerics.Vector2 uvMin, out System.Numerics.Vector2 uvMax)
+    public bool TryGetSpriteUv(Sprite sprite, RenderTexture texture, out System.Numerics.Vector2 uvMin, out System.Numerics.Vector2 uvMax)
     {
         uvMin = System.Numerics.Vector2.Zero;
         uvMax = System.Numerics.Vector2.One;
@@ -1649,16 +1644,16 @@ public class RenderPipeline : IDisposable
         return localSprite * wm;
     }
 
-    private void RenderWorldOutline(World world, Camera camera, FramebufferObject.Uploaded? targetFbo, (int x, int y, int w, int h)? viewport, int targetW, int targetH)
+    private void RenderWorldOutline(World world, Camera camera, RenderTarget? targetFbo, (int x, int y, int w, int h)? viewport, int targetW, int targetH)
     {
         if (viewport.HasValue)
         {
             var v = viewport.Value;
-            _device.Gl.Viewport(v.x, v.y, (uint)v.w, (uint)v.h);
+            _device.SetViewport(v.x, v.y, (uint)v.w, (uint)v.h);
         }
         else
         {
-            _device.Gl.Viewport(0, 0, (uint)targetW, (uint)targetH);
+            _device.SetViewport(0, 0, (uint)targetW, (uint)targetH);
         }
 
         float thickness = MathF.Max(0.01f, camera.VisibleHalfHeight / Math.Max(1, camera.ViewportHeight) * 2.0f);
@@ -1706,7 +1701,7 @@ public class RenderPipeline : IDisposable
         if (!sr.UseSpritePivot)
             return sr.Pivot;
 
-        TextureObjectUploaded? texture = sr.Texture;
+            RenderTexture? texture = sr.Texture;
         if (texture == null && !string.IsNullOrWhiteSpace(sr.Sprite.Path))
             texture = LoadTexture(sr.Sprite);
 
@@ -1719,7 +1714,7 @@ public class RenderPipeline : IDisposable
         return sr.Pivot;
     }
 
-    private void RenderTilemapOutline(TilemapRenderer tr, float thickness, Verity.Core.Color color, Camera camera, FramebufferObject.Uploaded? fbo)
+    private void RenderTilemapOutline(TilemapRenderer tr, float thickness, Verity.Core.Color color, Camera camera, RenderTarget? fbo)
     {
         var tilemap = tr.Owner.GetComponent<Tilemap>();
         if (tilemap == null || !tilemap.TryGetTileBounds(out int minX, out int minY, out int maxX, out int maxY))
@@ -1736,7 +1731,7 @@ public class RenderPipeline : IDisposable
         RenderGizmoLine(tl, bl, thickness, color, camera, fbo);
     }
 
-    private void RenderPolygonOutline(PolygonRenderer renderer, float thickness, Verity.Core.Color color, Camera camera, FramebufferObject.Uploaded? fbo)
+    private void RenderPolygonOutline(PolygonRenderer renderer, float thickness, Verity.Core.Color color, Camera camera, RenderTarget? fbo)
     {
         Vector2[] vertices = renderer.GetWorldVertices();
         if (vertices.Length < 2)
@@ -1750,9 +1745,9 @@ public class RenderPipeline : IDisposable
         }
     }
 
-    public void RenderGizmoLine(Vector2 s, Vector2 e, float t, Verity.Core.Color c, Camera cam, FramebufferObject.Uploaded? fbo = null) { if (_whitePixel == null) return; ConfigureUnlitShader(_shader); _shader.SetProjection(cam.GetProjectionMatrix()); _shader.SetView(cam.GetViewMatrix()); var dir = e - s; float len = dir.Length(); if (len < 0.0001f) return; float ang = MathF.Atan2(dir.Y, dir.X); _shader.SetModel(Matrix4x4.CreateTranslation(0, -0.5f, 0) * Matrix4x4.CreateScale(len, t, 1f) * Matrix4x4.CreateRotationZ(ang) * Matrix4x4.CreateTranslation(s.X, s.Y, 0)); _shader.SetTexture(_whitePixel); _shader.SetUvRect(System.Numerics.Vector2.Zero, System.Numerics.Vector2.One); _shader.SetColor(c); _quadBuffer.Draw(_shader.Program, fbo).Unwrap(); }
+    public void RenderGizmoLine(Vector2 s, Vector2 e, float t, Verity.Core.Color c, Camera cam, RenderTarget? fbo = null) { if (_whitePixel == null) return; ConfigureUnlitShader(_shader); _shader.SetProjection(cam.GetProjectionMatrix()); _shader.SetView(cam.GetViewMatrix()); var dir = e - s; float len = dir.Length(); if (len < 0.0001f) return; float ang = MathF.Atan2(dir.Y, dir.X); _shader.SetModel(Matrix4x4.CreateTranslation(0, -0.5f, 0) * Matrix4x4.CreateScale(len, t, 1f) * Matrix4x4.CreateRotationZ(ang) * Matrix4x4.CreateTranslation(s.X, s.Y, 0)); _shader.SetTexture(_whitePixel); _shader.SetUvRect(System.Numerics.Vector2.Zero, System.Numerics.Vector2.One); _shader.SetColor(c); _shader.Draw(_quadBuffer, fbo); }
 
-    public void RenderGizmoRect(Vector2 center, Vector2 size, float rotationDeg, float thickness, Verity.Core.Color color, Camera cam, FramebufferObject.Uploaded? fbo = null)
+    public void RenderGizmoRect(Vector2 center, Vector2 size, float rotationDeg, float thickness, Verity.Core.Color color, Camera cam, RenderTarget? fbo = null)
     {
         float rad = rotationDeg * MathF.PI / 180f;
         float cos = MathF.Cos(rad);
@@ -1772,7 +1767,7 @@ public class RenderPipeline : IDisposable
         RenderGizmoLine(bl, tl, thickness, color, cam, fbo);
     }
 
-    public void RenderGizmoQuad(Vector2 center, Vector2 size, Verity.Core.Color color, Camera cam, FramebufferObject.Uploaded? fbo = null)
+    public void RenderGizmoQuad(Vector2 center, Vector2 size, Verity.Core.Color color, Camera cam, RenderTarget? fbo = null)
     {
         if (_whitePixel == null) return;
         ConfigureUnlitShader(_shader);
@@ -1782,10 +1777,10 @@ public class RenderPipeline : IDisposable
         _shader.SetTexture(_whitePixel);
         _shader.SetUvRect(System.Numerics.Vector2.Zero, System.Numerics.Vector2.One);
         _shader.SetColor(color);
-        _quadBuffer.Draw(_shader.Program, fbo).Unwrap();
+        _shader.Draw(_quadBuffer, fbo);
     }
 
-    public void DrawTile(TextureObjectUploaded tex, Matrix4x4 model, Verity.Core.Color color, Matrix4x4 projection, Matrix4x4 view, FramebufferObject.Uploaded? fbo, Entity? owner = null, string? sortingLayerName = null, System.Numerics.Vector2? uvMin = null, System.Numerics.Vector2? uvMax = null)
+    public void DrawTile(RenderTexture tex, Matrix4x4 model, Verity.Core.Color color, Matrix4x4 projection, Matrix4x4 view, RenderTarget? fbo, Entity? owner = null, string? sortingLayerName = null, System.Numerics.Vector2? uvMin = null, System.Numerics.Vector2? uvMax = null)
     {
         ApplyLighting(_shader, owner, sortingLayerName);
         _shader.SetProjection(projection);
@@ -1794,16 +1789,19 @@ public class RenderPipeline : IDisposable
         _shader.SetTexture(tex);
         _shader.SetUvRect(uvMin ?? System.Numerics.Vector2.Zero, uvMax ?? System.Numerics.Vector2.One);
         _shader.SetColor(color);
-        _quadBuffer.Draw(_shader.Program, fbo).Unwrap();
+        _shader.Draw(_quadBuffer, fbo);
     }
 
-    public void DrawText(TextRenderOptions options, Matrix4x4 projection, Matrix4x4 view, FramebufferObject.Uploaded? fbo = null)
+    public void DrawText(TextRenderOptions options, Matrix4x4 projection, Matrix4x4 view, RenderTarget? fbo = null)
     {
+        if (_textRenderer == null)
+            return;
+
         ConfigureUnlitShader(_shader);
         _textRenderer.DrawText(options, projection, view, fbo);
     }
 
-    public TextureObjectUploaded? LoadTexture(string path, string? guid = null)
+    public RenderTexture? LoadTexture(string path, string? guid = null)
     {
         try {
             if (TryResolveAssetPath(path, guid, out string fp))
@@ -1815,9 +1813,9 @@ public class RenderPipeline : IDisposable
         return null;
     }
 
-    public TextureObjectUploaded? LoadTexture(Sprite sprite) => LoadTexture(sprite.Path, sprite.Guid);
+    public RenderTexture? LoadTexture(Sprite sprite) => LoadTexture(sprite.Path, sprite.Guid);
 
-    private void RenderPolygonFill(Vector2[] vertices, int[] indices, Verity.Core.Color color, Camera cam, FramebufferObject.Uploaded? fbo, Entity? owner, string? sortingLayerName = null)
+    private void RenderPolygonFill(Vector2[] vertices, int[] indices, Verity.Core.Color color, Camera cam, RenderTarget? fbo, Entity? owner, string? sortingLayerName = null)
     {
         if (_whitePixel == null || vertices.Length < 3 || indices.Length < 3) return;
 
@@ -1829,17 +1827,17 @@ public class RenderPipeline : IDisposable
         _shader.SetUvRect(System.Numerics.Vector2.Zero, System.Numerics.Vector2.One);
         _shader.SetColor(color);
 
-        var data = Irodori.Buffer.IVertexData.Create<Vector2, Vector2>();
+        var data = RenderMeshData.CreatePositionTexture2D();
         for (int i = 0; i < vertices.Length; i++)
         {
             data.AddVertex(vertices[i], new Vector2(0.5f, 0.5f));
         }
 
-        using var uploaded = _dynamicBuffer.Upload(data, indices).Unwrap();
-        uploaded.Draw(_shader.Program, fbo).Unwrap();
+        using var uploaded = _dynamicBuffer.Upload(data, indices);
+        _shader.Draw(uploaded, fbo);
     }
 
-    private unsafe void RenderPolygonFill(Vector2[] vertices, Verity.Core.Color color, Camera cam, FramebufferObject.Uploaded? fbo, Entity? owner, string? sortingLayerName = null)
+    private unsafe void RenderPolygonFill(Vector2[] vertices, Verity.Core.Color color, Camera cam, RenderTarget? fbo, Entity? owner, string? sortingLayerName = null)
     {
         if (vertices.Length < 3) return;
         int[] indices = new int[(vertices.Length - 2) * 3];
@@ -1890,7 +1888,7 @@ public class RenderPipeline : IDisposable
         _distortionShader?.Dispose();
         _pixelateShader?.Dispose();
         _chromaticAberrationShader?.Dispose();
-        _textRenderer.Dispose();
+        _textRenderer?.Dispose();
 
         _shaderCache.Dispose();
         _styleCache.Dispose();

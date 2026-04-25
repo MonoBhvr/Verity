@@ -16,6 +16,10 @@ public enum CameraRenderDetail
 [NonDisableable]
 public class Camera : Component
 {
+    public Camera()
+    {
+    }
+
     public static Camera? Main => WorldManager.ActiveWorld?.GetAllEntities()
         .Select(e => e.GetComponent<Camera>())
         .FirstOrDefault(c => c != null && c.Enabled);

@@ -5,10 +5,29 @@ public enum LogLevel { Info, Warning, Error }
 public static class Debug
 {
     public static event Action<string, LogLevel>? OnLog;
+    public static string? LastMessage { get; private set; }
+    public static LogLevel? LastLevel { get; private set; }
 
-    public static void Log(string message) => OnLog?.Invoke(message, LogLevel.Info);
-    public static void LogWarning(string message) => OnLog?.Invoke(message, LogLevel.Warning);
-    public static void LogError(string message) => OnLog?.Invoke(message, LogLevel.Error);
+    public static void Log(string message)
+    {
+        LastMessage = message;
+        LastLevel = LogLevel.Info;
+        OnLog?.Invoke(message, LogLevel.Info);
+    }
+
+    public static void LogWarning(string message)
+    {
+        LastMessage = message;
+        LastLevel = LogLevel.Warning;
+        OnLog?.Invoke(message, LogLevel.Warning);
+    }
+
+    public static void LogError(string message)
+    {
+        LastMessage = message;
+        LastLevel = LogLevel.Error;
+        OnLog?.Invoke(message, LogLevel.Error);
+    }
 
     public struct LineCommand
     {

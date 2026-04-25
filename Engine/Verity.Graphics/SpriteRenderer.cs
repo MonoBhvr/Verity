@@ -1,5 +1,4 @@
 using System.Numerics;
-using Irodori.Texture;
 using Verity.Core.ECS;
 using Verity.Core;
 
@@ -29,7 +28,7 @@ public class SpriteRenderer : Component, IHasSize
     public StyleAsset Style { get; set; }
 
     [HideInInspector]
-    public TextureObjectUploaded? Texture { get; set; }
+    public RenderTexture? Texture { get; set; }
 
     [HideInInspector]
     public StyleRuntime? StyleRuntime { get; set; }
