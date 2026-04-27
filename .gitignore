@@ -11,10 +11,13 @@ riderModule.iml
 *.userosscache
 *.sln.docstates
 
-# Verity Game Assets (Templates/Demo assets)
+# Verity Game runtime staging
 Verity.Game/Assets/*
 !Verity.Game/Assets/.gitkeep
 Verity.Game/UserScripts.dll
+Verity.Game/scene.json
+Verity.Game/RuntimeContent/*
+!Verity.Game/RuntimeContent/.gitkeep
 
 # IDEs
 .idea/

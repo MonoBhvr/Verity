@@ -4,6 +4,7 @@ namespace Verity.Game.Runtime;
 
 public sealed class RuntimeAssemblyContentSource : IRuntimeContentSource
 {
+    private const string RuntimeContentDirectoryName = "RuntimeContent";
     private readonly Assembly _assembly;
     private readonly string _assemblyName;
     private readonly string _executableBaseDir;
@@ -17,25 +18,32 @@ public sealed class RuntimeAssemblyContentSource : IRuntimeContentSource
 
     public string PrepareContentRoot()
     {
+        string stagingRoot = GetStagingRoot(_executableBaseDir);
+        if (HasLooseRuntimeContent(stagingRoot))
+            return stagingRoot;
+
         if (HasLooseRuntimeContent(_executableBaseDir))
             return _executableBaseDir;
 
         string[] resourceNames = _assembly.GetManifestResourceNames();
-        if (!resourceNames.Any(name => name.StartsWith($"{_assemblyName}.Assets.", StringComparison.Ordinal)))
+        if (!resourceNames.Any(name =>
+                name.StartsWith($"{_assemblyName}.{RuntimeContentDirectoryName}.", StringComparison.Ordinal) ||
+                name.StartsWith($"{_assemblyName}.Assets.", StringComparison.Ordinal)))
             return _executableBaseDir;
 
-        string cacheRoot = Path.Combine(
+        string cacheBaseDir = Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
             "Verity",
             "RuntimeCache",
             GetRuntimeContentVersion());
-        string markerPath = Path.Combine(cacheRoot, ".verity-runtime-cache");
+        string cacheRoot = GetStagingRoot(cacheBaseDir);
+        string markerPath = Path.Combine(cacheBaseDir, ".verity-runtime-cache");
 
         if (Directory.Exists(cacheRoot) && File.Exists(markerPath))
             return cacheRoot;
 
-        if (Directory.Exists(cacheRoot))
-            Directory.Delete(cacheRoot, true);
+        if (Directory.Exists(cacheBaseDir))
+            Directory.Delete(cacheBaseDir, true);
 
         Directory.CreateDirectory(cacheRoot);
 
@@ -64,7 +72,7 @@ public sealed class RuntimeAssemblyContentSource : IRuntimeContentSource
     public string GetLoosePath(string relativePath)
     {
         string normalizedPath = NormalizeRelativePath(relativePath);
-        return Path.Combine(_executableBaseDir, normalizedPath.Replace('/', Path.DirectorySeparatorChar));
+        return Path.Combine(GetStagingRoot(_executableBaseDir), normalizedPath.Replace('/', Path.DirectorySeparatorChar));
     }
 
     public string? TryReadText(string relativePath)
@@ -78,6 +86,10 @@ public sealed class RuntimeAssemblyContentSource : IRuntimeContentSource
         string loosePath = GetLoosePath(relativePath);
         if (File.Exists(loosePath))
             return File.ReadAllBytes(loosePath);
+
+        string legacyLoosePath = GetLegacyLoosePath(relativePath);
+        if (File.Exists(legacyLoosePath))
+            return File.ReadAllBytes(legacyLoosePath);
 
         foreach (string resourceName in GetCandidateResourceNames(relativePath))
         {
@@ -96,6 +108,7 @@ public sealed class RuntimeAssemblyContentSource : IRuntimeContentSource
     private IEnumerable<string> GetCandidateResourceNames(string relativePath)
     {
         string normalizedPath = NormalizeRelativePath(relativePath);
+        yield return $"{_assemblyName}.{RuntimeContentDirectoryName}.{normalizedPath.Replace('/', '.')}";
         yield return $"{_assemblyName}.{normalizedPath.Replace('/', '.')}";
 
         if (normalizedPath.Equals("Assets/BuildSettings.json", StringComparison.OrdinalIgnoreCase))
@@ -131,6 +144,29 @@ public sealed class RuntimeAssemblyContentSource : IRuntimeContentSource
     {
         relativePath = string.Empty;
 
+        if (resourceName.Equals($"{_assemblyName}.{RuntimeContentDirectoryName}.scene.json", StringComparison.Ordinal))
+        {
+            relativePath = "scene.json";
+            return true;
+        }
+
+        if (resourceName.Equals($"{_assemblyName}.{RuntimeContentDirectoryName}.UserScripts.dll", StringComparison.Ordinal))
+        {
+            relativePath = "UserScripts.dll";
+            return true;
+        }
+
+        string runtimeAssetsPrefix = $"{_assemblyName}.{RuntimeContentDirectoryName}.Assets.";
+        if (resourceName.StartsWith(runtimeAssetsPrefix, StringComparison.Ordinal))
+        {
+            string runtimeSuffix = resourceName[runtimeAssetsPrefix.Length..];
+            if (!RuntimeContentPathMapper.TryConvertManifestSuffixToAssetPath(runtimeSuffix, out string runtimeAssetRelativePath))
+                return false;
+
+            relativePath = Path.Combine("Assets", runtimeAssetRelativePath);
+            return true;
+        }
+
         if (resourceName.Equals($"{_assemblyName}.scene.json", StringComparison.Ordinal))
         {
             relativePath = "scene.json";
@@ -164,5 +200,13 @@ public sealed class RuntimeAssemblyContentSource : IRuntimeContentSource
     private static string NormalizeRelativePath(string relativePath)
     {
         return relativePath.Replace('\\', '/').TrimStart('/');
+    }
+
+    private static string GetStagingRoot(string baseDir) => Path.Combine(baseDir, RuntimeContentDirectoryName);
+
+    private string GetLegacyLoosePath(string relativePath)
+    {
+        string normalizedPath = NormalizeRelativePath(relativePath);
+        return Path.Combine(_executableBaseDir, normalizedPath.Replace('/', Path.DirectorySeparatorChar));
     }
 }

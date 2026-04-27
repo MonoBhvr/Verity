@@ -28,7 +28,7 @@
   </ItemGroup>
 
   <ItemGroup>
-    <Compile Remove="Assets\**" />
+    <Compile Remove="Assets\**;RuntimeContent\**" />
   </ItemGroup>
 
   <ItemGroup>
@@ -49,6 +49,9 @@
 
   <!-- Include data as resources when publishing -->
   <ItemGroup>
+    <EmbeddedResource Include="RuntimeContent\scene.json" Condition="Exists('RuntimeContent\scene.json')" />
+    <EmbeddedResource Include="RuntimeContent\UserScripts.dll" Condition="Exists('RuntimeContent\UserScripts.dll')" />
+    <EmbeddedResource Include="RuntimeContent\Assets\**\*" Exclude="RuntimeContent\Assets\bin\**;RuntimeContent\Assets\obj\**" Condition="Exists('RuntimeContent\Assets')" />
     <EmbeddedResource Include="scene.json" Condition="Exists('scene.json')" />
     <EmbeddedResource Include="BuildSettings.json" Condition="Exists('BuildSettings.json')" />
     <EmbeddedResource Include="UserScripts.dll" Condition="Exists('UserScripts.dll')" />

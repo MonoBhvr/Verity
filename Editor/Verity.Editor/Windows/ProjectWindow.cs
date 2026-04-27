@@ -18,6 +18,8 @@ namespace Verity.Editor.Windows;
 
 public unsafe class ProjectWindow : EditorWindow
 {
+    private const string RuntimeContentDirectoryName = "RuntimeContent";
+
     private enum PublishBuildMode
     {
         Debug,
@@ -2248,8 +2250,9 @@ public unsafe class ProjectWindow : EditorWindow
                 }
 
                 string gameProjDir = Path.Combine(projectRoot, "Verity.Game");
+                string runtimeContentDir = Path.Combine(gameProjDir, RuntimeContentDirectoryName);
                 _app.BuildStatus = L10n.Tr("msg_publish_syncing_assets");
-                string gameAssets = Path.Combine(gameProjDir, "Assets");
+                string gameAssets = Path.Combine(runtimeContentDir, "Assets");
                 if (Directory.Exists(gameAssets))
                     Directory.Delete(gameAssets, true);
                 CopyDirectory(_app.AssetsPath!, gameAssets);
@@ -2263,7 +2266,8 @@ public unsafe class ProjectWindow : EditorWindow
                     File.Delete(settingsDest);
 
                 _app.BuildStatus = L10n.Tr("msg_publish_compiling_scripts");
-                string gameDll = Path.Combine(gameProjDir, "UserScripts.dll");
+                Directory.CreateDirectory(runtimeContentDir);
+                string gameDll = Path.Combine(runtimeContentDir, "UserScripts.dll");
                 _app.ScriptCompiler?.CompileToFile(gameDll);
 
                 _app.BuildStatus = L10n.Tr("msg_publish_running_dotnet");

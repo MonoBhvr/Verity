@@ -1,280 +1,319 @@
-# Verity 엔진 아키텍처 문서
+# Verity ?붿쭊 ?꾪궎?띿쿂 臾몄꽌
 
-이 문서는 Verity 엔진 전체 구조를 설명하는 상위 문서입니다.
+??臾몄꽌??Verity ?붿쭊 ?꾩껜 援ъ“瑜??ㅻ챸?섎뒗 ?곸쐞 臾몄꽌?낅땲??
 
-이 문서는 엔진이 실제로 어떤 실행 모델과 데이터 구조 위에서 동작하는지 설명하는 아키텍처 문서입니다.
+??臾몄꽌???붿쭊???ㅼ젣濡??대뼡 ?ㅽ뻾 紐⑤뜽怨??곗씠??援ъ“ ?꾩뿉???숈옉?섎뒗吏 ?ㅻ챸?섎뒗 ?꾪궎?띿쿂 臾몄꽌?낅땲??
 
-상세 클래스, 함수, 메서드, 프로퍼티 레퍼런스는 시스템별 문서로 분리되어 있습니다. 이렇게 분리한 이유는 다음과 같습니다.
+?곸꽭 ?대옒?? ?⑥닔, 硫붿꽌?? ?꾨줈?쇳떚 ?덊띁?곗뒪???쒖뒪?쒕퀎 臾몄꽌濡?遺꾨━?섏뼱 ?덉뒿?덈떎. ?대젃寃?遺꾨━???댁쑀???ㅼ쓬怨?媛숈뒿?덈떎.
 
-- 한 파일에 모든 API를 몰아넣으면 검색은 되지만 유지보수가 빠르게 어려워집니다.
-- 아키텍처 설명과 API 레퍼런스는 읽는 목적이 다릅니다.
-- Core, Physics, Graphics, UI처럼 변경 주기가 다른 시스템을 독립적으로 갱신할 수 있어야 합니다.
+- ???뚯씪??紐⑤뱺 API瑜?紐곗븘?ｌ쑝硫?寃?됱? ?섏?留??좎?蹂댁닔媛 鍮좊Ⅴ寃??대젮?뚯쭛?덈떎.
+- ?꾪궎?띿쿂 ?ㅻ챸怨?API ?덊띁?곗뒪???쎈뒗 紐⑹쟻???ㅻ쫭?덈떎.
+- Core, Physics, Graphics, UI泥섎읆 蹂寃?二쇨린媛 ?ㅻⅨ ?쒖뒪?쒖쓣 ?낅┰?곸쑝濡?媛깆떊?????덉뼱???⑸땲??
 
 ---
 
-## 1. 엔진 실행 모델
+## 1. ?붿쭊 ?ㅽ뻾 紐⑤뜽
 
-### 1.1 `VerityCore` 진입점과 초기화 단계
+### 1.1 `VerityCore` 吏꾩엯?먭낵 珥덇린???④퀎
 
-현재 `VerityCore` 자체는 거대한 bootstrap class라기보다, 엔진 전역 상태에 접근하는 매우 얇은 진입 표면입니다.
+?꾩옱 `VerityCore` ?먯껜??嫄곕???bootstrap class?쇨린蹂대떎, ?붿쭊 ?꾩뿭 ?곹깭???묎렐?섎뒗 留ㅼ슦 ?뉗? 吏꾩엯 ?쒕㈃?낅땲??
 
-- `VerityCore.Version`: 런타임/에디터가 공통으로 표시하는 엔진 버전 문자열입니다.
-- `VerityCore.ResetRuntime()`: `WorldManager.Reset()`과 `Time.Reset()`을 함께 호출해 월드 상태와 시간 상태를 초기화합니다.
+- `VerityCore.Version`: ?고????먮뵒?곌? 怨듯넻?쇰줈 ?쒖떆?섎뒗 ?붿쭊 踰꾩쟾 臾몄옄?댁엯?덈떎.
+- `VerityCore.ResetRuntime()`: `WorldManager.Reset()`怨?`Time.Reset()`???④퍡 ?몄텧???붾뱶 ?곹깭? ?쒓컙 ?곹깭瑜?珥덇린?뷀빀?덈떎.
 
-즉, 실제 엔진 기동 순서는 `VerityCore` 한 곳에 몰려 있지 않고, 호스트가 `VerityCore`와 각 서브시스템을 조합하는 방식입니다. 현재 런타임 기준 초기화 흐름은 `Verity.Game.Program.Main(...)`에서 다음 순서로 진행됩니다.
+利? ?ㅼ젣 ?붿쭊 湲곕룞 ?쒖꽌??`VerityCore` ??怨녹뿉 紐곕젮 ?덉? ?딄퀬, ?몄뒪?멸? `VerityCore`? 媛??쒕툕?쒖뒪?쒖쓣 議고빀?섎뒗 諛⑹떇?낅땲?? ?꾩옱 ?고???湲곗? 珥덇린???먮쫫? `Verity.Game.Program.Main(...)`?먯꽌 ?ㅼ쓬 ?쒖꽌濡?吏꾪뻾?⑸땲??
 
-1. 실행 경로와 content root를 준비하고 필요하면 runtime logging을 연결합니다.
-2. `GraphicsDevice`, `Shader2D`, `TextureManager`, `RenderPipeline`을 만들고 `RenderPipeline.BaseAssetsPath`, `SceneSerializer.AssetRootPath`, `UiSystem.AssetsRoot` 같은 전역 경로를 맞춥니다.
-3. `DefaultSprites.Initialize(...)`로 기본 렌더 자산을 준비합니다.
-4. `UserScripts.dll`을 로드해 사용자 스크립트 assembly를 확보합니다.
-5. `BuildSettings`, `Filters.json`, `ProjectSettings.json`을 읽고 `FilterManager`, `SortingLayer.SyncWithSettings(...)`, `UiSystem.ProjectSettings` 같은 설정성 서브시스템을 맞춥니다.
-6. 시작 월드를 `WorldLoader.LoadWorld(...)` 또는 `WorldLoader.LoadWorldFromJson(...)`으로 로드하고, 실패 시 fallback world 또는 `Empty World`를 활성화합니다.
-7. 월드가 준비되면 에셋 바인딩을 수행한 뒤 `Time.Reset()`과 `new GameLoop { ProjectSettings = projectSettings }`로 런타임 tick 상태를 시작합니다.
-8. `device.Window.OnSdlEvent += Verity.Input.Input.ProcessEvent`와 `AudioSystem.Initialize()`를 연결한 뒤 메인 루프에 들어갑니다.
+1. ?ㅽ뻾 寃쎈줈? content root瑜?以鍮꾪븯怨??꾩슂?섎㈃ runtime logging???곌껐?⑸땲??
+2. `GraphicsDevice`, `Shader2D`, `TextureManager`, `RenderPipeline`??留뚮뱾怨?`RenderPipeline.BaseAssetsPath`, `SceneSerializer.AssetRootPath`, `UiSystem.AssetsRoot` 媛숈? ?꾩뿭 寃쎈줈瑜?留욎땅?덈떎.
+3. `DefaultSprites.Initialize(...)`濡?湲곕낯 ?뚮뜑 ?먯궛??以鍮꾪빀?덈떎.
+4. `UserScripts.dll`??濡쒕뱶???ъ슜???ㅽ겕由쏀듃 assembly瑜??뺣낫?⑸땲??
+5. `BuildSettings`, `Filters.json`, `ProjectSettings.json`???쎄퀬 `FilterManager`, `SortingLayer.SyncWithSettings(...)`, `UiSystem.ProjectSettings` 媛숈? ?ㅼ젙???쒕툕?쒖뒪?쒖쓣 留욎땅?덈떎.
+6. ?쒖옉 ?붾뱶瑜?`WorldLoader.LoadWorld(...)` ?먮뒗 `WorldLoader.LoadWorldFromJson(...)`?쇰줈 濡쒕뱶?섍퀬, ?ㅽ뙣 ??fallback world ?먮뒗 `Empty World`瑜??쒖꽦?뷀빀?덈떎.
+7. ?붾뱶媛 以鍮꾨릺硫??먯뀑 諛붿씤?⑹쓣 ?섑뻾????`Time.Reset()`怨?`new GameLoop { ProjectSettings = projectSettings }`濡??고???tick ?곹깭瑜??쒖옉?⑸땲??
+8. `device.Window.OnSdlEvent += Verity.Input.Input.ProcessEvent`? `AudioSystem.Initialize()`瑜??곌껐????硫붿씤 猷⑦봽???ㅼ뼱媛묐땲??
 
-에디터 플레이 모드도 큰 구조는 같습니다. `EditorApp.EnterPlayMode()`는 현재 월드 snapshot을 저장하고 `Time.Reset()` 후 `GameLoop`를 새로 만든 다음 `IsPlaying = true`로 전환합니다. 즉, Verity의 “엔진 진입”은 단일 `Main` 함수 하나보다, 호스트가 월드/시간/루프를 재초기화해 실행 상태로 바꾸는 절차로 이해하는 편이 맞습니다.
+?먮뵒???뚮젅??紐⑤뱶????援ъ“??媛숈뒿?덈떎. `EditorApp.EnterPlayMode()`???꾩옱 ?붾뱶 snapshot????ν븯怨?`Time.Reset()` ??`GameLoop`瑜??덈줈 留뚮뱺 ?ㅼ쓬 `IsPlaying = true`濡??꾪솚?⑸땲?? 利? Verity???쒖뿏吏?吏꾩엯?앹? ?⑥씪 `Main` ?⑥닔 ?섎굹蹂대떎, ?몄뒪?멸? ?붾뱶/?쒓컙/猷⑦봽瑜??ъ큹湲고솕???ㅽ뻾 ?곹깭濡?諛붽씀???덉감濡??댄빐?섎뒗 ?몄씠 留욎뒿?덈떎.
 
-### 1.2 `GameLoop`의 3개 흐름 진입 방식
+### 1.2 `GameLoop`??3媛??먮쫫 吏꾩엯 諛⑹떇
 
-Verity는 기본적으로 세 개의 흐름을 분리해서 운용합니다.
+Verity??湲곕낯?곸쑝濡???媛쒖쓽 ?먮쫫??遺꾨━?댁꽌 ?댁슜?⑸땲??
 
-| 흐름 | 기준 값 | 역할 |
+| ?먮쫫 | 湲곗? 媛?| ??븷 |
 | :--- | :--- | :--- |
-| Logic Tick | `Time.TargetTPS` | 스크립트 lifecycle, coroutine, 애니메이션, 일반 게임 로직 처리 |
-| Physics Tick | `Time.TargetPTPS` | 강체 적분, 충돌 판정, 접촉 해석, 물리 이벤트 처리 |
-| Render Frame | 별도 프레임 루프 | 카메라 기준 렌더러 수집, 정렬, 드로우, 후처리 수행 |
+| Logic Tick | `Time.TargetTPS` | ?ㅽ겕由쏀듃 lifecycle, coroutine, ?좊땲硫붿씠?? ?쇰컲 寃뚯엫 濡쒖쭅 泥섎━ |
+| Physics Tick | `Time.TargetPTPS` | 媛뺤껜 ?곷텇, 異⑸룎 ?먯젙, ?묒큺 ?댁꽍, 臾쇰━ ?대깽??泥섎━ |
+| Render Frame | 蹂꾨룄 ?꾨젅??猷⑦봽 | 移대찓??湲곗? ?뚮뜑???섏쭛, ?뺣젹, ?쒕줈?? ?꾩쿂由??섑뻾 |
 
-세 흐름이 실제로 들어가는 입구는 다음과 같습니다.
+???먮쫫???ㅼ젣濡??ㅼ뼱媛???낃뎄???ㅼ쓬怨?媛숈뒿?덈떎.
 
-- Logic/Physics는 호스트가 프레임마다 `GameLoop.TickLogic(deltaTime)`를 호출하면서 함께 진입합니다.
-- Render는 `GameLoop.TickRender()`가 `OnRender`만 호출하는 최소 훅으로 존재하지만, 현재 런타임 기본 경로는 `RenderPipeline.RenderWorld(...)`와 `UiRenderer.Render(...)`를 호스트 메인 루프에서 직접 호출합니다.
-- 그래서 현재 구조는 “로직/물리는 `GameLoop` 중심, 렌더는 호스트 프레임 루프 중심”이라고 보는 것이 정확합니다.
+- Logic/Physics???몄뒪?멸? ?꾨젅?꾨쭏??`GameLoop.TickLogic(deltaTime)`瑜??몄텧?섎㈃???④퍡 吏꾩엯?⑸땲??
+- Render??`GameLoop.TickRender()`媛 `OnRender`留??몄텧?섎뒗 理쒖냼 ?낆쑝濡?議댁옱?섏?留? ?꾩옱 ?고???湲곕낯 寃쎈줈??`RenderPipeline.RenderWorld(...)`? `UiRenderer.Render(...)`瑜??몄뒪??硫붿씤 猷⑦봽?먯꽌 吏곸젒 ?몄텧?⑸땲??
+- 洹몃옒???꾩옱 援ъ“???쒕줈吏?臾쇰━??`GameLoop` 以묒떖, ?뚮뜑???몄뒪???꾨젅??猷⑦봽 以묒떖?앹씠?쇨퀬 蹂대뒗 寃껋씠 ?뺥솗?⑸땲??
 
-`TickLogic(deltaTime)`의 내부 진입 규칙도 중요합니다.
+`TickLogic(deltaTime)`???대? 吏꾩엯 洹쒖튃??以묒슂?⑸땲??
 
-1. `WorldLoader.PendingWorldName != null`이면 즉시 반환해 월드 전환 중에는 tick을 멈춥니다.
-2. `WorldManager.ActiveWorld`가 없으면 아무 것도 실행하지 않습니다.
-3. 활성 월드의 custom setting 또는 `ProjectSettings`에서 `TargetTPS`, `TargetPTPS`를 결정합니다.
-4. `deltaTime * Time.TimeScale`을 logic/physics accumulator에 누적하고, 각각의 고정 간격을 넘을 때만 tick을 실행합니다.
-5. 마지막에 `world.ProcessPendingDestroys()`를 호출해 로직/물리 중 예약된 파괴를 한 곳에서 정리합니다.
+1. `WorldLoader.PendingWorldName != null`?대㈃ 利됱떆 諛섑솚???붾뱶 ?꾪솚 以묒뿉??tick??硫덉땅?덈떎.
+2. `WorldManager.ActiveWorld`媛 ?놁쑝硫??꾨Т 寃껊룄 ?ㅽ뻾?섏? ?딆뒿?덈떎.
+3. ?쒖꽦 ?붾뱶??custom setting ?먮뒗 `ProjectSettings`?먯꽌 `TargetTPS`, `TargetPTPS`瑜?寃곗젙?⑸땲??
+4. `deltaTime * Time.TimeScale`??logic/physics accumulator???꾩쟻?섍퀬, 媛곴컖??怨좎젙 媛꾧꺽???섏쓣 ?뚮쭔 tick???ㅽ뻾?⑸땲??
+5. 留덉?留됱뿉 `world.ProcessPendingDestroys()`瑜??몄텧??濡쒖쭅/臾쇰━ 以??덉빟???뚭눼瑜???怨녹뿉???뺣━?⑸땲??
 
-Logic Tick 내부의 기본 실행 순서는 다음과 같습니다.
+Logic Tick ?대???湲곕낯 ?ㅽ뻾 ?쒖꽌???ㅼ쓬怨?媛숈뒿?덈떎.
 
 1. `Awake`
 2. `Start`
 3. `FixedUpdate`
 4. `Update`
-5. Coroutine 전진
+5. Coroutine ?꾩쭊
 6. `LateUpdate`
 
-이 구조의 존재 이유는 다음과 같습니다.
+??援ъ“??議댁옱 ?댁쑀???ㅼ쓬怨?媛숈뒿?덈떎.
 
-- 스크립트 갱신과 렌더링을 분리해야 프레임레이트 변화가 로직 의미를 직접 깨뜨리지 않습니다.
-- 물리는 별도 tick으로 분리해야 충돌과 적분의 일관성을 유지할 수 있습니다.
-- coroutine이 logic tick 기준으로 전진해야 스크립트 대기 규칙이 예측 가능해집니다.
+- ?ㅽ겕由쏀듃 媛깆떊怨??뚮뜑留곸쓣 遺꾨━?댁빞 ?꾨젅?꾨젅?댄듃 蹂?붽? 濡쒖쭅 ?섎?瑜?吏곸젒 源⑤쑉由ъ? ?딆뒿?덈떎.
+- 臾쇰━??蹂꾨룄 tick?쇰줈 遺꾨━?댁빞 異⑸룎怨??곷텇???쇨??깆쓣 ?좎??????덉뒿?덈떎.
+- coroutine??logic tick 湲곗??쇰줈 ?꾩쭊?댁빞 ?ㅽ겕由쏀듃 ?湲?洹쒖튃???덉륫 媛?ν빐吏묐땲??
 
-### 1.3 Logic / Physics / Render 세부 흐름
+### 1.3 Logic / Physics / Render ?몃? ?먮쫫
 
 #### Logic Flow: `PerformLogicTick(...)`
 
-Logic Flow는 한 번 진입할 때마다 다음 순서로 진행됩니다.
+Logic Flow????踰?吏꾩엯???뚮쭏???ㅼ쓬 ?쒖꽌濡?吏꾪뻾?⑸땲??
 
-1. `RuntimeProfiler.BeginLogicTick()`으로 profiling 구간을 시작합니다.
-2. `Verity.Input.Input.NewLogicTick()`으로 입력 상태를 logic tick 경계에 맞춰 갱신합니다.
-3. `Time.DeltaTime`, `Time.TotalTime`, `Time.LogicTickCount`를 갱신합니다.
-4. `AnimationSystem.Update(fixedDelta)`를 먼저 실행합니다.
-5. 활성 스크립트 목록을 가져와 아직 실행되지 않은 스크립트에 `Awake`, `Start`를 1회만 호출합니다.
-6. 모든 활성 스크립트에 `FixedUpdate`, `Update`, coroutine 전진, `LateUpdate`를 순서대로 호출합니다.
-7. 각 단계 뒤에 `OnFixedUpdate`, `OnUpdate`, `OnLateUpdate` 같은 엔진 측 콜백 훅도 호출합니다.
+1. `RuntimeProfiler.BeginLogicTick()`?쇰줈 profiling 援ш컙???쒖옉?⑸땲??
+2. `Verity.Input.Input.NewLogicTick()`?쇰줈 ?낅젰 ?곹깭瑜?logic tick 寃쎄퀎??留욎떠 媛깆떊?⑸땲??
+3. `Time.DeltaTime`, `Time.TotalTime`, `Time.LogicTickCount`瑜?媛깆떊?⑸땲??
+4. `AnimationSystem.Update(fixedDelta)`瑜?癒쇱? ?ㅽ뻾?⑸땲??
+5. ?쒖꽦 ?ㅽ겕由쏀듃 紐⑸줉??媛?몄? ?꾩쭅 ?ㅽ뻾?섏? ?딆? ?ㅽ겕由쏀듃??`Awake`, `Start`瑜?1?뚮쭔 ?몄텧?⑸땲??
+6. 紐⑤뱺 ?쒖꽦 ?ㅽ겕由쏀듃??`FixedUpdate`, `Update`, coroutine ?꾩쭊, `LateUpdate`瑜??쒖꽌?濡??몄텧?⑸땲??
+7. 媛??④퀎 ?ㅼ뿉 `OnFixedUpdate`, `OnUpdate`, `OnLateUpdate` 媛숈? ?붿쭊 痢?肄쒕갚 ?낅룄 ?몄텧?⑸땲??
 
-중요한 점은 Verity에서 `FixedUpdate`가 physics tick 안이 아니라 logic flow 안에 있다는 점입니다. 즉, 사용자 스크립트의 `FixedUpdate`는 “logic 고정 tick 단계”이고, 실제 물리 적분은 별도의 Physics Flow에서 수행됩니다.
+以묒슂???먯? Verity?먯꽌 `FixedUpdate`媛 physics tick ?덉씠 ?꾨땲??logic flow ?덉뿉 ?덈떎???먯엯?덈떎. 利? ?ъ슜???ㅽ겕由쏀듃??`FixedUpdate`???쐋ogic 怨좎젙 tick ?④퀎?앹씠怨? ?ㅼ젣 臾쇰━ ?곷텇? 蹂꾨룄??Physics Flow?먯꽌 ?섑뻾?⑸땲??
 
 #### Physics Flow: `PerformPhysicsTick(...)`
 
-Physics Flow는 physics accumulator가 `physicsFixedDelta` 이상일 때만 진입합니다.
+Physics Flow??physics accumulator媛 `physicsFixedDelta` ?댁긽???뚮쭔 吏꾩엯?⑸땲??
 
-1. `Time.PhysicsTickCount`를 증가시킵니다.
-2. `PhysicsManager.Step(fixedDelta, world, ProjectSettings)`로 실제 물리 시뮬레이션을 수행합니다.
-3. 완료 후 `OnPhysicsTick` 콜백을 호출합니다.
+1. `Time.PhysicsTickCount`瑜?利앷??쒗궢?덈떎.
+2. `PhysicsManager.Step(fixedDelta, world, ProjectSettings)`濡??ㅼ젣 臾쇰━ ?쒕??덉씠?섏쓣 ?섑뻾?⑸땲??
+3. ?꾨즺 ??`OnPhysicsTick` 肄쒕갚???몄텧?⑸땲??
 
-이 흐름은 로직과 동일한 프레임 안에서 여러 번 돌 수도 있고, 프레임 상황에 따라 한 번도 돌지 않을 수도 있습니다. 핵심은 render frame과 1:1로 묶이지 않는다는 점입니다.
+???먮쫫? 濡쒖쭅怨??숈씪???꾨젅???덉뿉???щ윭 踰????섎룄 ?덇퀬, ?꾨젅???곹솴???곕씪 ??踰덈룄 ?뚯? ?딆쓣 ?섎룄 ?덉뒿?덈떎. ?듭떖? render frame怨?1:1濡?臾띠씠吏 ?딅뒗?ㅻ뒗 ?먯엯?덈떎.
 
 #### Render Flow
 
-Render Flow는 현재 `GameLoop`에 완전히 흡수되어 있지 않습니다.
+Render Flow???꾩옱 `GameLoop`???꾩쟾???≪닔?섏뼱 ?덉? ?딆뒿?덈떎.
 
-- `GameLoop.TickRender()`는 `OnRender?.Invoke()`만 수행하는 얇은 확장 지점입니다.
-- 실제 런타임 기본 구현은 호스트 루프에서 카메라를 찾고 `RenderPipeline.RenderWorld(world, mainCam)`를 호출한 뒤, `UiRenderer.Render(...)`로 UI canvas를 그립니다.
-- 따라서 Render Flow는 현재 구조상 “엔진 루프의 세 번째 축”이지만, 구현 위치는 `GameLoop`보다 런타임/에디터 호스트에 더 가깝습니다.
+- `GameLoop.TickRender()`??`OnRender?.Invoke()`留??섑뻾?섎뒗 ?뉗? ?뺤옣 吏?먯엯?덈떎.
+- ?ㅼ젣 ?고???湲곕낯 援ы쁽? ?몄뒪??猷⑦봽?먯꽌 移대찓?쇰? 李얘퀬 `RenderPipeline.RenderWorld(world, mainCam)`瑜??몄텧???? `UiRenderer.Render(...)`濡?UI canvas瑜?洹몃┰?덈떎.
+- ?곕씪??Render Flow???꾩옱 援ъ“???쒖뿏吏?猷⑦봽????踰덉㎏ 異뺚앹씠吏留? 援ы쁽 ?꾩튂??`GameLoop`蹂대떎 ?고????먮뵒???몄뒪?몄뿉 ??媛源앹뒿?덈떎.
 
-### 1.4 엔진 종료 흐름
+### 1.4 ?붿쭊 醫낅즺 ?먮쫫
 
-런타임 종료는 메인 루프 `while (!device.ShouldClose)`가 끝난 뒤 정리 단계로 이어집니다.
+?고???醫낅즺??硫붿씤 猷⑦봽 `while (!device.ShouldClose)`媛 ?앸궃 ???뺣━ ?④퀎濡??댁뼱吏묐땲??
 
-1. `AudioSystem.Shutdown()`으로 오디오 시스템을 먼저 종료합니다.
-2. `renderPipeline.Dispose()`, `shader.Dispose()`, `textureManager.Dispose()`로 그래픽 리소스를 해제합니다.
-3. 마지막으로 `device.Dispose()`와 log writer 정리를 수행합니다.
+1. `AudioSystem.Shutdown()`?쇰줈 ?ㅻ뵒???쒖뒪?쒖쓣 癒쇱? 醫낅즺?⑸땲??
+2. `renderPipeline.Dispose()`, `shader.Dispose()`, `textureManager.Dispose()`濡?洹몃옒??由ъ냼?ㅻ? ?댁젣?⑸땲??
+3. 留덉?留됱쑝濡?`device.Dispose()`? log writer ?뺣━瑜??섑뻾?⑸땲??
 
-에디터 플레이 모드 종료는 별도 경로입니다. `EditorApp.ExitPlayMode()`는 저장해 둔 snapshot을 `Restore(...)`해 월드 상태를 되돌리고, 에셋을 다시 바인딩한 뒤 `_gameLoop = null`, `IsPlaying = false`, `Verity.Input.Input.Enabled = true` 순서로 플레이 상태를 해제합니다.
+?먮뵒???뚮젅??紐⑤뱶 醫낅즺??蹂꾨룄 寃쎈줈?낅땲?? `EditorApp.ExitPlayMode()`????ν빐 ??snapshot??`Restore(...)`???붾뱶 ?곹깭瑜??섎룎由ш퀬, ?먯뀑???ㅼ떆 諛붿씤?⑺븳 ??`_gameLoop = null`, `IsPlaying = false`, `Verity.Input.Input.Enabled = true` ?쒖꽌濡??뚮젅???곹깭瑜??댁젣?⑸땲??
 
-즉, Verity의 shutdown도 단일 `VerityCore.Shutdown()` API보다, “호스트가 각 서브시스템의 수명주기를 역순으로 정리하는 구조”로 이해해야 합니다.
+利? Verity??shutdown???⑥씪 `VerityCore.Shutdown()` API蹂대떎, ?쒗샇?ㅽ듃媛 媛??쒕툕?쒖뒪?쒖쓽 ?섎챸二쇨린瑜???닚?쇰줈 ?뺣━?섎뒗 援ъ“?앸줈 ?댄빐?댁빞 ?⑸땲??
 
 ---
 
-## 2. ECS와 월드 구조
+## 2. ECS? ?붾뱶 援ъ“
 
-Verity의 런타임 코어는 `World`, `Entity`, `Component`, `Transform`, `Script` 다섯 축으로 이해하면 됩니다.
+Verity???고???肄붿뼱??`World`, `Entity`, `Component`, `Transform`, `Script` ?ㅼ꽢 異뺤쑝濡??댄빐?섎㈃ ?⑸땲??
 
-| 타입 | 존재 이유 | 현재 구현상 핵심 포인트 |
+| ???| 議댁옱 ?댁쑀 | ?꾩옱 援ы쁽???듭떖 ?ъ씤??|
 | :--- | :--- | :--- |
-| `World` | 전체 엔티티 트리와 전역 설정을 관리하기 위해 | 루트 엔티티 목록, 플랫 엔티티 캐시, 활성 스크립트 캐시, `StateVersion` 보유 |
-| `Entity` | 컴포넌트를 묶는 최소 런타임 단위가 필요해서 | 컴포넌트 리스트 기반, 타입별 조회 캐시 보유 |
-| `Component` | 공통 수명주기와 소유 관계를 묶기 위해 | `Owner`, `Transform`, `Enabled` 제공 |
-| `Transform` | 계층과 좌표계를 모든 엔티티에 일관되게 부여하기 위해 | local/world matrix, world rotation, world scale dirty-cache 사용 |
-| `Script` / `LuaScriptComponent` | 게임 로직을 ECS 컴포넌트로 붙일 수 있게 하기 위해 | C#은 `Script`, Lua는 `LuaScriptComponent`로 연결되고 둘 다 월드/엔티티 수명주기를 따름 |
+| `World` | ?꾩껜 ?뷀떚???몃━? ?꾩뿭 ?ㅼ젙??愿由ы븯湲??꾪빐 | 猷⑦듃 ?뷀떚??紐⑸줉, ?뚮옯 ?뷀떚??罹먯떆, ?쒖꽦 ?ㅽ겕由쏀듃 罹먯떆, `StateVersion` 蹂댁쑀 |
+| `Entity` | 而댄룷?뚰듃瑜?臾띕뒗 理쒖냼 ?고????⑥쐞媛 ?꾩슂?댁꽌 | 而댄룷?뚰듃 由ъ뒪??湲곕컲, ??낅퀎 議고쉶 罹먯떆 蹂댁쑀 |
+| `Component` | 怨듯넻 ?섎챸二쇨린? ?뚯쑀 愿怨꾨? 臾띔린 ?꾪빐 | `Owner`, `Transform`, `Enabled` ?쒓났 |
+| `Transform` | 怨꾩링怨?醫뚰몴怨꾨? 紐⑤뱺 ?뷀떚?곗뿉 ?쇨??섍쾶 遺?ы븯湲??꾪빐 | local/world matrix, world rotation, world scale dirty-cache ?ъ슜 |
+| `Script` / `LuaScriptComponent` | 寃뚯엫 濡쒖쭅??ECS 而댄룷?뚰듃濡?遺숈씪 ???덇쾶 ?섍린 ?꾪빐 | C#? `Script`, Lua??`LuaScriptComponent`濡??곌껐?섍퀬 ?????붾뱶/?뷀떚???섎챸二쇨린瑜??곕쫫 |
 
-### 2.1 최근 구조 변경의 의미
+### 2.1 理쒓렐 援ъ“ 蹂寃쎌쓽 ?섎?
 
-이번 문서 정리 대상이 된 최근 구조 변경은 성능 관점에서 중요합니다.
+?대쾲 臾몄꽌 ?뺣━ ??곸씠 ??理쒓렐 援ъ“ 蹂寃쎌? ?깅뒫 愿?먯뿉??以묒슂?⑸땲??
 
-| 변경점 | 이전 문제 | 현재 구조 |
+| 蹂寃쎌젏 | ?댁쟾 臾몄젣 | ?꾩옱 援ъ“ |
 | :--- | :--- | :--- |
-| `World.GetAllEntities()` 플랫 캐시 | 재귀 `yield return`로 enumerator 할당과 느린 순회 발생 | 한 번 평탄화한 `IReadOnlyList<Entity>` 캐시 재사용 |
-| `World.StateVersion` | 물리/기타 시스템이 월드 상태 변화를 싸게 감지하기 어려움 | 상태가 바뀔 때 버전 증가, 캐시 재구축 트리거로 사용 |
-| `Entity.GetComponent<T>()` 캐시 | 선형 탐색 반복 | 타입별 단건/다건 캐시 사용 |
-| `Transform` dirty-cache | world transform 계산이 부모 체인을 계속 다시 탐색 | local/world matrix 및 회전/스케일 캐시 |
+| `World.GetAllEntities()` ?뚮옯 罹먯떆 | ?ш? `yield return`濡?enumerator ?좊떦怨??먮┛ ?쒗쉶 諛쒖깮 | ??踰??됲깂?뷀븳 `IReadOnlyList<Entity>` 罹먯떆 ?ъ궗??|
+| `World.StateVersion` | 臾쇰━/湲고? ?쒖뒪?쒖씠 ?붾뱶 ?곹깭 蹂?붾? ?멸쾶 媛먯??섍린 ?대젮? | ?곹깭媛 諛붾???踰꾩쟾 利앷?, 罹먯떆 ?ш뎄異??몃━嫄곕줈 ?ъ슜 |
+| `Entity.GetComponent<T>()` 罹먯떆 | ?좏삎 ?먯깋 諛섎났 | ??낅퀎 ?④굔/?ㅺ굔 罹먯떆 ?ъ슜 |
+| `Transform` dirty-cache | world transform 怨꾩궛??遺紐?泥댁씤??怨꾩냽 ?ㅼ떆 ?먯깋 | local/world matrix 諛??뚯쟾/?ㅼ???罹먯떆 |
 
 ---
 
-## 3. 스크립팅 통합 구조
+## 3. ?ㅽ겕由쏀똿 ?듯빀 援ъ“
 
-이 문서는 스크립팅 사용법 자체보다, 스크립트 시스템이 엔진 구조 안에 어떻게 연결되는지를 설명합니다.
+??臾몄꽌???ㅽ겕由쏀똿 ?ъ슜踰??먯껜蹂대떎, ?ㅽ겕由쏀듃 ?쒖뒪?쒖씠 ?붿쭊 援ъ“ ?덉뿉 ?대뼸寃??곌껐?섎뒗吏瑜??ㅻ챸?⑸땲??
 
-### 3.1 ECS에 스크립트가 붙는 방식
+### 3.1 ECS???ㅽ겕由쏀듃媛 遺숇뒗 諛⑹떇
 
-Verity는 스크립트를 ECS 컴포넌트로 다룹니다.
+Verity???ㅽ겕由쏀듃瑜?ECS 而댄룷?뚰듃濡??ㅻ９?덈떎.
 
-- C# 스크립트는 `Script`를 통해 엔티티에 부착됩니다.
-- Lua 스크립트는 `LuaScriptComponent`를 통해 엔티티에 부착됩니다.
-- 두 방식 모두 `Entity`와 `Component`의 소유 관계, 활성화 상태, 월드 전환 규칙을 그대로 따릅니다.
+- C# ?ㅽ겕由쏀듃??`Script`瑜??듯빐 ?뷀떚?곗뿉 遺李⑸맗?덈떎.
+- Lua ?ㅽ겕由쏀듃??`LuaScriptComponent`瑜??듯빐 ?뷀떚?곗뿉 遺李⑸맗?덈떎.
+- ??諛⑹떇 紐⑤몢 `Entity`? `Component`???뚯쑀 愿怨? ?쒖꽦???곹깭, ?붾뱶 ?꾪솚 洹쒖튃??洹몃?濡??곕쫭?덈떎.
 
-즉, 스크립팅은 ECS 바깥의 별도 런타임이 아니라, 월드 안에 배치된 컴포넌트 계층 위에서 동작하는 로직 계층입니다.
+利? ?ㅽ겕由쏀똿? ECS 諛붽묑??蹂꾨룄 ?고??꾩씠 ?꾨땲?? ?붾뱶 ?덉뿉 諛곗튂??而댄룷?뚰듃 怨꾩링 ?꾩뿉???숈옉?섎뒗 濡쒖쭅 怨꾩링?낅땲??
 
-### 3.2 GameLoop와 스크립트의 연결
+### 3.2 GameLoop? ?ㅽ겕由쏀듃???곌껐
 
-스크립트 실행은 `GameLoop`의 logic flow에 연결됩니다.
+?ㅽ겕由쏀듃 ?ㅽ뻾? `GameLoop`??logic flow???곌껐?⑸땲??
 
-- `Awake`, `Start`, `FixedUpdate`, `Update`, coroutine 전진, `LateUpdate`는 logic tick 순서 안에서 처리됩니다.
-- Physics 시뮬레이션은 별도 physics flow에서 수행되므로, 스크립트는 물리와 같은 프레임에 실행되더라도 동일한 단계로 취급되지 않습니다.
-- coroutine 역시 render frame이 아니라 logic tick 기준으로 전진하므로, 스크립트 대기 규칙은 렌더 속도와 분리됩니다.
+- `Awake`, `Start`, `FixedUpdate`, `Update`, coroutine ?꾩쭊, `LateUpdate`??logic tick ?쒖꽌 ?덉뿉??泥섎━?⑸땲??
+- Physics ?쒕??덉씠?섏? 蹂꾨룄 physics flow?먯꽌 ?섑뻾?섎?濡? ?ㅽ겕由쏀듃??臾쇰━? 媛숈? ?꾨젅?꾩뿉 ?ㅽ뻾?섎뜑?쇰룄 ?숈씪???④퀎濡?痍④툒?섏? ?딆뒿?덈떎.
+- coroutine ??떆 render frame???꾨땲??logic tick 湲곗??쇰줈 ?꾩쭊?섎?濡? ?ㅽ겕由쏀듃 ?湲?洹쒖튃? ?뚮뜑 ?띾룄? 遺꾨━?⑸땲??
 
-세부 lifecycle API, coroutine 사용법, shortcut API는 [Scripting 문서](./Docs/Scripting.md)로 분리합니다.
-
----
-
-## 4. 물리 엔진 구조
-
-현재 물리 엔진은 다음 계층으로 이해할 수 있습니다.
-
-1. 월드에서 물리 객체와 shape를 수집
-2. spatial hash grid로 broad phase 후보 추출
-3. SAT 기반 narrow phase 충돌 판정
-4. pair 단위 contact 그룹화
-5. penetration correction과 impulse 해석
-6. touch/detect 이벤트 dispatch
-
-### 4.1 현재 물리 구조의 핵심 특징
-
-- `Physical` 하나에 여러 `PhysicalShape`를 붙일 수 있습니다.
-- `Physical`이 없는 shape는 가상 static body로 취급됩니다.
-- 물리 객체 캐시는 `World.StateVersion`이 바뀔 때만 재구축됩니다.
-- sub-step은 고정 8회가 아니라 adaptive 방식입니다.
-
-### 4.2 남아 있는 제약
-
-- grid는 여전히 sub-step마다 다시 구축됩니다.
-- continuous collision detection은 없습니다.
-- solver warm starting, island solving도 아직 없습니다.
+?몃? lifecycle API, coroutine ?ъ슜踰? shortcut API??[Scripting 臾몄꽌](./Docs/Scripting.md)濡?遺꾨━?⑸땲??
 
 ---
 
-## 5. 렌더링 구조
+## 4. 臾쇰━ ?붿쭊 援ъ“
 
-현재 렌더링은 CPU 정렬 기반의 immediate draw 모델에 가깝습니다.
+?꾩옱 臾쇰━ ?붿쭊? ?ㅼ쓬 怨꾩링?쇰줈 ?댄빐?????덉뒿?덈떎.
 
-### 5.1 현재 렌더링 파이프라인의 핵심
+1. ?붾뱶?먯꽌 臾쇰━ 媛앹껜? shape瑜??섏쭛
+2. spatial hash grid濡?broad phase ?꾨낫 異붿텧
+3. SAT 湲곕컲 narrow phase 異⑸룎 ?먯젙
+4. pair ?⑥쐞 contact 洹몃９??5. penetration correction怨?impulse ?댁꽍
+6. touch/detect ?대깽??dispatch
 
-- 월드 전체 엔티티를 단일 순회하며 렌더러를 수집합니다.
-- sorting layer와 order in layer를 기준으로 CPU에서 정렬합니다.
-- sprite 경로 해석, slice 해석, 그림자 보조 데이터는 캐시합니다.
-- 그림자 occluder 후보 정렬에는 scratch buffer를 재사용합니다.
+### 4.1 ?꾩옱 臾쇰━ 援ъ“???듭떖 ?뱀쭠
 
-### 5.2 아직 해결되지 않은 큰 제약
+- `Physical` ?섎굹???щ윭 `PhysicalShape`瑜?遺숈씪 ???덉뒿?덈떎.
+- `Physical`???녿뒗 shape??媛??static body濡?痍④툒?⑸땲??
+- 臾쇰━ 媛앹껜 罹먯떆??`World.StateVersion`??諛붾??뚮쭔 ?ш뎄異뺣맗?덈떎.
+- sub-step? 怨좎젙 8?뚭? ?꾨땲??adaptive 諛⑹떇?낅땲??
 
-진짜 draw-call batching은 아직 없습니다.
+### 4.2 ?⑥븘 ?덈뒗 ?쒖빟
 
-이건 단순 최적화가 아니라 렌더 상태, 텍스처 묶음, 머티리얼 경계, uniform 업로드 방식까지 다시 잡아야 하는 아키텍처 레벨 작업입니다. 따라서 현재 문서에서는 “이미 해결된 문제”와 “남아 있는 구조적 한계”를 분리해서 기록합니다.
-
-### 5.3 UI 렌더링의 위치
-
-UI는 렌더링 파이프라인과 완전히 분리된 독립 앱이 아니라, 월드 렌더 뒤에 이어지는 별도 레이어로 동작합니다.
-
-- 런타임 기본 경로에서는 `RenderPipeline.RenderWorld(...)` 뒤에 `UiRenderer.Render(...)`가 호출됩니다.
-- `UiSystem`은 에셋 루트와 프로젝트 설정을 공유하며, 월드 렌더와 같은 호스트 프레임 루프에 매달려 있습니다.
-- 따라서 UI는 엔진 구조상 별도 사용자 경험 계층이지만, 실행 시점은 render flow에 인접한 후단 패스로 이해하는 것이 맞습니다.
+- grid???ъ쟾??sub-step留덈떎 ?ㅼ떆 援ъ텞?⑸땲??
+- continuous collision detection? ?놁뒿?덈떎.
+- solver warm starting, island solving???꾩쭅 ?놁뒿?덈떎.
 
 ---
 
-## 6. 에디터 구조
+## 5. ?뚮뜑留?援ъ“
 
-에디터는 엔진 바깥의 별도 제품이 아니라, 동일한 월드/ECS/렌더링 시스템을 호스팅하는 상위 애플리케이션입니다.
+?꾩옱 ?뚮뜑留곸? CPU ?뺣젹 湲곕컲??immediate draw 紐⑤뜽??媛源앹뒿?덈떎.
 
-### 6.1 플레이 모드와 런타임 재사용
+### 5.1 ?꾩옱 ?뚮뜑留??뚯씠?꾨씪?몄쓽 ?듭떖
 
-- `EditorApp.EnterPlayMode()`는 현재 월드 snapshot을 저장한 뒤 `Time.Reset()`과 새 `GameLoop`를 통해 런타임 상태를 다시 구성합니다.
-- `EditorApp.ExitPlayMode()`는 snapshot 복원, 에셋 재바인딩, 입력/플레이 상태 해제를 통해 편집 상태로 되돌립니다.
-- 즉, 에디터의 플레이 모드는 별도 엔진을 하나 더 실행하는 방식이 아니라, 같은 엔진 시스템을 재초기화해 재사용하는 구조입니다.
+- ?붾뱶 ?꾩껜 ?뷀떚?곕? ?⑥씪 ?쒗쉶?섎ŉ ?뚮뜑?щ? ?섏쭛?⑸땲??
+- sorting layer? order in layer瑜?湲곗??쇰줈 CPU?먯꽌 ?뺣젹?⑸땲??
+- sprite 寃쎈줈 ?댁꽍, slice ?댁꽍, 洹몃┝??蹂댁“ ?곗씠?곕뒗 罹먯떆?⑸땲??
+- 洹몃┝??occluder ?꾨낫 ?뺣젹?먮뒗 scratch buffer瑜??ъ궗?⑺빀?덈떎.
 
-### 6.2 에디터의 역할
+### 5.2 ?꾩쭅 ?닿껐?섏? ?딆? ???쒖빟
 
-에디터는 다음 역할을 담당합니다.
+吏꾩쭨 draw-call batching? ?꾩쭅 ?놁뒿?덈떎.
 
-- 월드/에셋/프로젝트 설정을 편집하는 호스트 UI 제공
-- 플레이 모드 전환과 런타임 수명주기 제어
-- 엔진 서브시스템이 사용할 경로, 설정, 에셋 바인딩 상태 관리
+?닿굔 ?⑥닚 理쒖쟻?붽? ?꾨땲???뚮뜑 ?곹깭, ?띿뒪泥?臾띠쓬, 癒명떚由ъ뼹 寃쎄퀎, uniform ?낅줈??諛⑹떇源뚯? ?ㅼ떆 ?≪븘???섎뒗 ?꾪궎?띿쿂 ?덈꺼 ?묒뾽?낅땲?? ?곕씪???꾩옱 臾몄꽌?먯꽌???쒖씠誘??닿껐??臾몄젣?앹? ?쒕궓???덈뒗 援ъ“???쒓퀎?앸? 遺꾨━?댁꽌 湲곕줉?⑸땲??
 
-따라서 에디터는 Core, ECS, GameLoop, Rendering, UI 위에 올라가는 orchestration 계층으로 보는 편이 정확합니다.
+### 5.3 UI ?뚮뜑留곸쓽 ?꾩튂
 
----
+UI???뚮뜑留??뚯씠?꾨씪?멸낵 ?꾩쟾??遺꾨━???낅┰ ?깆씠 ?꾨땲?? ?붾뱶 ?뚮뜑 ?ㅼ뿉 ?댁뼱吏??蹂꾨룄 ?덉씠?대줈 ?숈옉?⑸땲??
 
-## 7. 현재 남아 있는 공통 병목 후보
-
-이번 코드와 문서를 기준으로, 여전히 성능에 민감한 지점은 다음과 같습니다.
-
-- `FindObjectOfType`, `FindObjectsOfType` 같은 전역 검색 API
-- 부모/자식 방향의 재귀 컴포넌트 검색
-- UI binding/action의 reflection 경로
-- 텍스트 렌더링의 무거운 glyph/raster 경로
-- `AssetPathUtility` 캐시 미스 시 파일 시스템 접근
-- batching 부재로 인한 많은 sprite/tile draw submit 비용
+- ?고???湲곕낯 寃쎈줈?먯꽌??`RenderPipeline.RenderWorld(...)` ?ㅼ뿉 `UiRenderer.Render(...)`媛 ?몄텧?⑸땲??
+- `UiSystem`? ?먯뀑 猷⑦듃? ?꾨줈?앺듃 ?ㅼ젙??怨듭쑀?섎ŉ, ?붾뱶 ?뚮뜑? 媛숈? ?몄뒪???꾨젅??猷⑦봽??留ㅻ떖???덉뒿?덈떎.
+- ?곕씪??UI???붿쭊 援ъ“??蹂꾨룄 ?ъ슜??寃쏀뿕 怨꾩링?댁?留? ?ㅽ뻾 ?쒖젏? render flow???몄젒???꾨떒 ?⑥뒪濡??댄빐?섎뒗 寃껋씠 留욎뒿?덈떎.
 
 ---
 
-## 8. 문서 구성
+## 6. ?먮뵒??援ъ“
 
-아래 문서들이 실제 상세 레퍼런스입니다.
+?먮뵒?곕뒗 ?붿쭊 諛붽묑??蹂꾨룄 ?쒗뭹???꾨땲?? ?숈씪???붾뱶/ECS/?뚮뜑留??쒖뒪?쒖쓣 ?몄뒪?낇븯???곸쐞 ?좏뵆由ъ??댁뀡?낅땲??
 
-| 문서 | 범위 |
+### 6.1 ?뚮젅??紐⑤뱶? ?고????ъ궗??
+- `EditorApp.EnterPlayMode()`???꾩옱 ?붾뱶 snapshot????ν븳 ??`Time.Reset()`怨???`GameLoop`瑜??듯빐 ?고????곹깭瑜??ㅼ떆 援ъ꽦?⑸땲??
+- `EditorApp.ExitPlayMode()`??snapshot 蹂듭썝, ?먯뀑 ?щ컮?몃뵫, ?낅젰/?뚮젅???곹깭 ?댁젣瑜??듯빐 ?몄쭛 ?곹깭濡??섎룎由쎈땲??
+- 利? ?먮뵒?곗쓽 ?뚮젅??紐⑤뱶??蹂꾨룄 ?붿쭊???섎굹 ???ㅽ뻾?섎뒗 諛⑹떇???꾨땲?? 媛숈? ?붿쭊 ?쒖뒪?쒖쓣 ?ъ큹湲고솕???ъ궗?⑺븯??援ъ“?낅땲??
+
+### 6.2 ?먮뵒?곗쓽 ??븷
+
+?먮뵒?곕뒗 ?ㅼ쓬 ??븷???대떦?⑸땲??
+
+- ?붾뱶/?먯뀑/?꾨줈?앺듃 ?ㅼ젙???몄쭛?섎뒗 ?몄뒪??UI ?쒓났
+- ?뚮젅??紐⑤뱶 ?꾪솚怨??고????섎챸二쇨린 ?쒖뼱
+- ?붿쭊 ?쒕툕?쒖뒪?쒖씠 ?ъ슜??寃쎈줈, ?ㅼ젙, ?먯뀑 諛붿씤???곹깭 愿由?
+?곕씪???먮뵒?곕뒗 Core, ECS, GameLoop, Rendering, UI ?꾩뿉 ?щ씪媛??orchestration 怨꾩링?쇰줈 蹂대뒗 ?몄씠 ?뺥솗?⑸땲??
+
+---
+
+## 7. ?꾩옱 ?⑥븘 ?덈뒗 怨듯넻 蹂묐ぉ ?꾨낫
+
+?대쾲 肄붾뱶? 臾몄꽌瑜?湲곗??쇰줈, ?ъ쟾???깅뒫??誘쇨컧??吏?먯? ?ㅼ쓬怨?媛숈뒿?덈떎.
+
+- `FindObjectOfType`, `FindObjectsOfType` 媛숈? ?꾩뿭 寃??API
+- 遺紐??먯떇 諛⑺뼢???ш? 而댄룷?뚰듃 寃??- UI binding/action??reflection 寃쎈줈
+- ?띿뒪???뚮뜑留곸쓽 臾닿굅??glyph/raster 寃쎈줈
+- `AssetPathUtility` 罹먯떆 誘몄뒪 ???뚯씪 ?쒖뒪???묎렐
+- batching 遺?щ줈 ?명븳 留롮? sprite/tile draw submit 鍮꾩슜
+
+---
+
+## 8. 臾몄꽌 援ъ꽦
+
+?꾨옒 臾몄꽌?ㅼ씠 ?ㅼ젣 ?곸꽭 ?덊띁?곗뒪?낅땲??
+
+| 臾몄꽌 | 踰붿쐞 |
 | :--- | :--- |
-| [Core 문서](./Docs/Core.md) | ECS, 월드, 공용 수학 타입, 디버그, 타일맵, 에셋 경로 유틸리티, `ObjectPool<T>`, `SceneTransition`, `SaveManager` |
-| [Scripting 문서](./Docs/Scripting.md) | `Script`, lifecycle, coroutine, 스크립트 shortcut API, `EventBus` |
-| [Physics 문서](./Docs/Physics.md) | `Physical`, `PhysicalShape`, 쿼리, contact, solver 구조 |
-| [Graphics 문서](./Docs/Graphics.md) | 카메라, 렌더러, 조명, sorting layer, 후처리, UI 텍스트 렌더링, `ParticleEmitter`, `ParticleSystem`, `ProfilerOverlay` |
-| [Animation 문서](./Docs/Animation.md) | `Animator`, clip, track, controller graph |
-| [Audio 문서](./Docs/Audio.md) | `AudioClip`, `AudioSource`, `AudioManager`, audio system |
-| [Input 문서](./Docs/Input.md) | 입력 폴링, `KeyCode`, `MouseButton` |
-| [Filter 문서](./Docs/Filter.md) | `Filter`, `MixedFilter`, `FilterRegistry`, bitmask 체계 |
-| [UI 문서](./Docs/UI.md) | UI 노드, 캔버스, 바인딩, 레이아웃, 현재 스크린 UI 구조, `DynamicArea` 부분 갱신 |
-| [Editor 문서](./Docs/Editor.md) | 에디터 앱 구조, 플레이 모드, 인스펙터/계층/프로젝트 도구 |
+| [Core 臾몄꽌](./Docs/Core.md) | ECS, ?붾뱶, 怨듭슜 ?섑븰 ??? ?붾쾭洹? ??쇰㏊, ?먯뀑 寃쎈줈 ?좏떥由ы떚, `ObjectPool<T>`, `SceneTransition`, `SaveManager` |
+| [Scripting 臾몄꽌](./Docs/Scripting.md) | `Script`, lifecycle, coroutine, ?ㅽ겕由쏀듃 shortcut API, `EventBus` |
+| [Physics 臾몄꽌](./Docs/Physics.md) | `Physical`, `PhysicalShape`, 荑쇰━, contact, solver 援ъ“ |
+| [Graphics 臾몄꽌](./Docs/Graphics.md) | 移대찓?? ?뚮뜑?? 議곕챸, sorting layer, ?꾩쿂由? UI ?띿뒪???뚮뜑留? `ParticleEmitter`, `ParticleSystem`, `ProfilerOverlay` |
+| [Animation 臾몄꽌](./Docs/Animation.md) | `Animator`, clip, track, controller graph |
+| [Audio 臾몄꽌](./Docs/Audio.md) | `AudioClip`, `AudioSource`, `AudioManager`, audio system |
+| [Input 臾몄꽌](./Docs/Input.md) | ?낅젰 ?대쭅, `KeyCode`, `MouseButton` |
+| [Filter 臾몄꽌](./Docs/Filter.md) | `Filter`, `MixedFilter`, `FilterRegistry`, bitmask 泥닿퀎 |
+| [UI 臾몄꽌](./Docs/UI.md) | UI ?몃뱶, 罹붾쾭?? 諛붿씤?? ?덉씠?꾩썐, ?꾩옱 ?ㅽ겕由?UI 援ъ“, `DynamicArea` 遺遺?媛깆떊 |
+| [Editor 臾몄꽌](./Docs/Editor.md) | ?먮뵒????援ъ“, ?뚮젅??紐⑤뱶, ?몄뒪?숉꽣/怨꾩링/?꾨줈?앺듃 ?꾧뎄 |
 
 ---
+
+## 9. 브라우저 런타임과 렌더 백엔드
+
+현재 아키텍처는 단일 렌더 디바이스 기반 구조가 아니라, 공통 렌더 계층 아래에 타깃별 백엔드가 분리된 구조입니다.
+
+### 9.1 계층 구조
+
+| 계층 | 공통/타깃 | 주요 타입 |
+| :--- | :--- | :--- |
+| 상위 렌더 로직 | 공통 | `RenderPipeline`, `Shader2D`, `TextureManager`, `UiRenderer` |
+| 렌더 디바이스 추상화 | 공통 | `IRenderDevice`, `RenderProgram`, `RenderTexture`, `RenderTarget`, `RenderMesh` |
+| 네이티브 백엔드 | 타깃별 | `GraphicsDevice`, `NativeRenderProgram`, `NativeRenderTexture` |
+| 브라우저 백엔드 | 타깃별 | `BrowserRenderDevice`, `BrowserRenderProgram`, `BrowserRenderTexture` |
+
+즉 현재 Verity는 "공통 파이프라인 + 타깃별 렌더 백엔드" 구조로 보는 것이 맞습니다.
+
+### 9.2 브라우저 진입 경로
+
+브라우저 타깃은 `Verity.Game.Browser` 프로젝트가 담당합니다.
+
+주요 흐름:
+
+1. `main.js`가 WebAssembly 런타임과 캔버스를 초기화
+2. `BrowserEntry`가 브라우저 런타임 진입점 역할 수행
+3. `BrowserRenderDevice`가 상위 렌더 요청을 브라우저 백엔드로 연결
+4. `graphics.js`가 실제 WebGL 2.0 호출을 수행
+
+### 9.3 셰이더 경로 해석
+
+웹에서는 프로그램 생성 전에 `BrowserShaderSourceAdaptation`이 데스크톱 GLSL 소스를 WebGL 2.0 / GLSL ES 3.00 규격으로 변환합니다.
+
+따라서 웹 셰이더 문제는 다음 세 층 중 어디서든 발생할 수 있습니다.
+
+- 공통 렌더 파이프라인
+- 브라우저 셰이더 소스 변환
+- JS WebGL 바인딩/컴파일
+
+### 9.4 관련 문서
+
+이 브라우저 백엔드 설명은 이제 다음 문서와 함께 읽는 것이 맞습니다.
+
+- [Graphics 문서](./Docs/Graphics.md): 렌더링 기능과 브라우저 렌더 백엔드 보강
+- [Build 문서](./Docs/Build.md): 웹 빌드, 퍼블리시, 브라우저 런타임, 셰이더 변환, 트리밍 보강
