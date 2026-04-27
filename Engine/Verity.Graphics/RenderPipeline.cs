@@ -83,16 +83,18 @@ public class RenderPipeline : IDisposable
     private readonly RenderMeshBuilder _dynamicBuffer;
     private RenderTexture? _whitePixel;
 
-    private readonly LruCache<string, Shader2D> _shaderCache = new(64);
-    private readonly LruCache<string, StyleRuntime> _styleCache = new(128);
-    private readonly LruCache<string, Vector2[][]> _spriteShadowShapeCache = new(256);
-    private readonly LruCache<string, ResolvedAssetInfo> _resolvedAssetCache = new(512);
-    private readonly LruCache<string, SpriteSlice> _spriteSliceCache = new(256);
+    private readonly ConcurrentLruCache<string, Shader2D> _shaderCache = new(64);
+    private readonly ConcurrentLruCache<string, StyleRuntime> _styleCache = new(128);
+    private readonly ConcurrentLruCache<string, Vector2[][]> _spriteShadowShapeCache = new(256);
+    private readonly ConcurrentLruCache<string, ResolvedAssetInfo> _resolvedAssetCache = new(512);
+    private readonly ConcurrentLruCache<string, SpriteSlice> _spriteSliceCache = new(256);
     private readonly List<Component> _sortedRenderers = new();
     private readonly List<RendererSortItem> _rendererSortItems = new();
     private readonly List<OccluderCandidate> _occluderCandidates = new();
     private readonly List<Vector2[]> _shadowPolygonScratch = new();
     private readonly List<(int Order, string Key)> _postProcessPasses = new();
+    private readonly List<float> _browserQuadVertices = new();
+    private readonly List<int> _browserQuadIndices = new();
 
     private RenderTarget? _worldFbo, _screenFbo;
     private RenderTexture? _worldColorTex, _screenColorTex;
@@ -109,6 +111,12 @@ public class RenderPipeline : IDisposable
     private readonly List<Light2D> _frameLights = new();
     private readonly List<ShadowOccluder> _frameShadowOccluders = new();
     private bool _frameLightingEnabled;
+    private RenderTexture? _browserBatchTexture;
+    private RenderTarget? _browserBatchTarget;
+    private Matrix4x4 _browserBatchProjection;
+    private Matrix4x4 _browserBatchView;
+    private Verity.Core.Color _browserBatchColor;
+    private bool _browserBatchActive;
 
     public SortAxis CustomSortAxis { get; set; } = SortAxis.Y;
     public bool SortAxisAscending { get; set; } = true;
@@ -225,7 +233,7 @@ public class RenderPipeline : IDisposable
 
         bool renderOutlineOnly = camera.RenderDetail == CameraRenderDetail.Outline;
         bool renderLighting = !browserFastPath && camera.RenderDetail is CameraRenderDetail.Lighting or CameraRenderDetail.PostProcess;
-        bool usePostProcess = !browserFastPath && camera.RenderDetail == CameraRenderDetail.PostProcess &&
+        bool usePostProcess = camera.RenderDetail == CameraRenderDetail.PostProcess &&
                                camera.PostProcess.Enabled &&
                                camera.PostProcess.HasAnyEnabledEffect();
         Guid currentCameraId = camera.Owner?.Id ?? Guid.Empty;
@@ -339,6 +347,7 @@ public class RenderPipeline : IDisposable
             }
             else if (r is PolygonRenderer pr)
             {
+                FlushBrowserQuadBatch();
                 var vertices = pr.GetWorldVertices();
                 if (vertices.Length < 3) continue;
 
@@ -354,6 +363,8 @@ public class RenderPipeline : IDisposable
         }
 
         }
+
+        FlushBrowserQuadBatch();
 
         if (isWorldFbo && camera.ShowGizmos)
         {
@@ -1445,24 +1456,35 @@ public class RenderPipeline : IDisposable
             string key = $"{cacheScope}:{GetCacheKey(asset.Path)}";
         if (_styleCache.TryGetValue(key, out var cached)) return cached;
         
-        if (!TryResolveAssetPath(asset.Path, asset.Guid, out string fullPath)) return null;
+        if (!TryResolveAssetPath(asset.Path, asset.Guid, out string fullPath))
+        {
+            Verity.Core.Debug.LogError($"[RenderPipeline] Style asset not found: {asset.Path}");
+            return null;
+        }
         try {
             string json = File.ReadAllText(fullPath);
             var data = StyleData.FromJson(json);
             if (data == null) return null;
             var runtime = new StyleRuntime();
-            if (!string.IsNullOrWhiteSpace(data.ShaderPath)) runtime.Shader = ResolveShader(new ShaderAsset(data.ShaderPath), defaultVertexSource, cacheScope);
+            string? normalizedShaderPath = NormalizeEmbeddedAssetPath(data.ShaderPath);
+            if (!string.IsNullOrWhiteSpace(normalizedShaderPath))
+                runtime.Shader = ResolveShader(new ShaderAsset(normalizedShaderPath), defaultVertexSource, cacheScope);
             foreach (var (k, v) in data.Floats) runtime.Floats[k] = v;
             foreach (var (k, v) in data.Vector2s) runtime.Vector2s[k] = v;
             foreach (var (k, v) in data.Vector3s) runtime.Vector3s[k] = v;
             foreach (var (k, v) in data.Vector4s) runtime.Vector4s[k] = v;
             foreach (var (k, v) in data.Colors) runtime.Colors[k] = v;
             foreach (var (k, v) in data.Textures) {
-                if (TryResolveAssetPath(v, null, out string texPath)) runtime.Textures[k] = _textureManager.Load(texPath);
+                string? normalizedTexturePath = NormalizeEmbeddedAssetPath(v);
+                if (!string.IsNullOrWhiteSpace(normalizedTexturePath) && TryResolveAssetPath(normalizedTexturePath, null, out string texPath))
+                    runtime.Textures[k] = _textureManager.Load(texPath);
             }
             _styleCache.Set(key, runtime);
             return runtime;
-        } catch { return null; }
+        } catch (Exception e) {
+            Verity.Core.Debug.LogError($"[RenderPipeline] Failed to load style {key}: {e.Message}");
+            return null;
+        }
     }
 
     private Shader2D? ResolveShader(ShaderAsset asset, string? defaultVertexSource = null, string cacheScope = "shader")
@@ -1506,6 +1528,22 @@ public class RenderPipeline : IDisposable
     }
 
     private string ResolveAssetPath(string p, string? guid = null) => AssetPathUtility.ResolvePath(BaseAssetsPath, p, guid);
+
+    private static string? NormalizeEmbeddedAssetPath(string? path)
+    {
+        if (string.IsNullOrWhiteSpace(path))
+            return path;
+
+        string normalized = path.Replace('\\', '/');
+        int assetsIndex = normalized.LastIndexOf("/Assets/", StringComparison.OrdinalIgnoreCase);
+        if (assetsIndex >= 0)
+            return normalized[(assetsIndex + 1)..];
+
+        if (normalized.StartsWith("Assets/", StringComparison.OrdinalIgnoreCase))
+            return normalized;
+
+        return path;
+    }
 
     private bool TryResolveAssetPath(string p, string? guid, out string fullPath)
     {
@@ -1782,14 +1820,107 @@ public class RenderPipeline : IDisposable
 
     public void DrawTile(RenderTexture tex, Matrix4x4 model, Verity.Core.Color color, Matrix4x4 projection, Matrix4x4 view, RenderTarget? fbo, Entity? owner = null, string? sortingLayerName = null, System.Numerics.Vector2? uvMin = null, System.Numerics.Vector2? uvMax = null)
     {
+        System.Numerics.Vector2 resolvedUvMin = uvMin ?? System.Numerics.Vector2.Zero;
+        System.Numerics.Vector2 resolvedUvMax = uvMax ?? System.Numerics.Vector2.One;
+
+        if (OperatingSystem.IsBrowser())
+        {
+            if (!CanUseBrowserQuadBatch(tex, projection, view, fbo, color))
+            {
+                FlushBrowserQuadBatch();
+                BeginBrowserQuadBatch(tex, projection, view, fbo, color);
+            }
+
+            EnqueueBrowserQuad(model, resolvedUvMin, resolvedUvMax);
+            return;
+        }
+
         ApplyLighting(_shader, owner, sortingLayerName);
         _shader.SetProjection(projection);
         _shader.SetView(view);
         _shader.SetModel(model);
         _shader.SetTexture(tex);
-        _shader.SetUvRect(uvMin ?? System.Numerics.Vector2.Zero, uvMax ?? System.Numerics.Vector2.One);
+        _shader.SetUvRect(resolvedUvMin, resolvedUvMax);
         _shader.SetColor(color);
         _shader.Draw(_quadBuffer, fbo);
+    }
+
+    public void FlushBrowserQuadBatch()
+    {
+        if (!_browserBatchActive || _browserBatchTexture == null || _browserQuadIndices.Count == 0)
+            return;
+
+        var data = RenderMeshData.CreatePositionTexture2D();
+        for (int i = 0; i < _browserQuadVertices.Count; i += 4)
+            data.AddVertex(new Vector2(_browserQuadVertices[i], _browserQuadVertices[i + 1]), new Vector2(_browserQuadVertices[i + 2], _browserQuadVertices[i + 3]));
+
+        using RenderMesh uploaded = _dynamicBuffer.Upload(data, _browserQuadIndices.ToArray());
+        ConfigureUnlitShader(_shader);
+        _shader.SetProjection(_browserBatchProjection);
+        _shader.SetView(_browserBatchView);
+        _shader.SetModel(Matrix4x4.Identity);
+        _shader.SetTexture(_browserBatchTexture);
+        _shader.SetUvRect(System.Numerics.Vector2.Zero, System.Numerics.Vector2.One);
+        _shader.SetColor(_browserBatchColor);
+        _shader.Draw(uploaded, _browserBatchTarget);
+
+        _browserQuadVertices.Clear();
+        _browserQuadIndices.Clear();
+        _browserBatchTexture = null;
+        _browserBatchTarget = null;
+        _browserBatchProjection = Matrix4x4.Identity;
+        _browserBatchView = Matrix4x4.Identity;
+        _browserBatchColor = Verity.Core.Color.White;
+        _browserBatchActive = false;
+    }
+
+    private bool CanUseBrowserQuadBatch(RenderTexture texture, Matrix4x4 projection, Matrix4x4 view, RenderTarget? fbo, Verity.Core.Color color)
+    {
+        return _browserBatchActive &&
+               ReferenceEquals(_browserBatchTexture, texture) &&
+               ReferenceEquals(_browserBatchTarget, fbo) &&
+               _browserBatchProjection == projection &&
+               _browserBatchView == view &&
+               _browserBatchColor.Equals(color);
+    }
+
+    private void BeginBrowserQuadBatch(RenderTexture texture, Matrix4x4 projection, Matrix4x4 view, RenderTarget? fbo, Verity.Core.Color color)
+    {
+        _browserBatchTexture = texture;
+        _browserBatchTarget = fbo;
+        _browserBatchProjection = projection;
+        _browserBatchView = view;
+        _browserBatchColor = color;
+        _browserBatchActive = true;
+    }
+
+    private void EnqueueBrowserQuad(Matrix4x4 model, System.Numerics.Vector2 uvMin, System.Numerics.Vector2 uvMax)
+    {
+        int vertexBase = _browserQuadVertices.Count / 4;
+        Vector2 topLeft = TransformPoint(0f, 0f, model);
+        Vector2 topRight = TransformPoint(1f, 0f, model);
+        Vector2 bottomLeft = TransformPoint(0f, 1f, model);
+        Vector2 bottomRight = TransformPoint(1f, 1f, model);
+
+        AddBrowserBatchVertex(topLeft, new System.Numerics.Vector2(uvMin.X, uvMin.Y));
+        AddBrowserBatchVertex(topRight, new System.Numerics.Vector2(uvMax.X, uvMin.Y));
+        AddBrowserBatchVertex(bottomLeft, new System.Numerics.Vector2(uvMin.X, uvMax.Y));
+        AddBrowserBatchVertex(bottomRight, new System.Numerics.Vector2(uvMax.X, uvMax.Y));
+
+        _browserQuadIndices.Add(vertexBase + 0);
+        _browserQuadIndices.Add(vertexBase + 2);
+        _browserQuadIndices.Add(vertexBase + 1);
+        _browserQuadIndices.Add(vertexBase + 1);
+        _browserQuadIndices.Add(vertexBase + 2);
+        _browserQuadIndices.Add(vertexBase + 3);
+    }
+
+    private void AddBrowserBatchVertex(Vector2 position, System.Numerics.Vector2 uv)
+    {
+        _browserQuadVertices.Add(position.X);
+        _browserQuadVertices.Add(position.Y);
+        _browserQuadVertices.Add(uv.X);
+        _browserQuadVertices.Add(uv.Y);
     }
 
     public void DrawText(TextRenderOptions options, Matrix4x4 projection, Matrix4x4 view, RenderTarget? fbo = null)

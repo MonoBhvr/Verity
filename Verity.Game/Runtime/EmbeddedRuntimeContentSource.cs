@@ -74,8 +74,6 @@ public sealed class EmbeddedRuntimeContentSource : IRuntimeContentSource
                 continue;
 
             string outputPath = Path.Combine(_baseDir, relativePath);
-            if (File.Exists(outputPath))
-                continue;
 
             using Stream? resourceStream = _assembly.GetManifestResourceStream(resourceName);
             if (resourceStream == null)
@@ -84,6 +82,9 @@ public sealed class EmbeddedRuntimeContentSource : IRuntimeContentSource
             string? outputDir = Path.GetDirectoryName(outputPath);
             if (!string.IsNullOrWhiteSpace(outputDir))
                 Directory.CreateDirectory(outputDir);
+
+            if (File.Exists(outputPath))
+                File.Delete(outputPath);
 
             using FileStream fileStream = File.Create(outputPath);
             resourceStream.CopyTo(fileStream);
@@ -117,36 +118,10 @@ public sealed class EmbeddedRuntimeContentSource : IRuntimeContentSource
             return false;
 
         string suffix = resourceName[assetsPrefix.Length..];
-        if (!TryConvertManifestSuffixToAssetPath(suffix, out string assetRelativePath))
+        if (!RuntimeContentPathMapper.TryConvertManifestSuffixToAssetPath(suffix, out string assetRelativePath))
             return false;
 
         relativePath = Path.Combine("Assets", assetRelativePath);
-        return true;
-    }
-
-    private static bool TryConvertManifestSuffixToAssetPath(string suffix, out string assetRelativePath)
-    {
-        string[] knownExtensions =
-        [
-            ".fontasset.meta", ".uiprefab.meta", ".uistyle.meta", ".animtile.meta", ".ruletile.meta", ".blueprint.meta",
-            ".controller.meta", ".shader.meta", ".style.meta", ".verity.meta", ".json.meta", ".png.meta", ".jpg.meta",
-            ".jpeg.meta", ".bmp.meta", ".wav.meta", ".ogg.meta", ".mp3.meta", ".ttf.meta", ".otf.meta", ".tile.meta",
-            ".ui.meta", ".fontasset", ".uiprefab", ".uistyle", ".animtile", ".ruletile", ".blueprint", ".controller",
-            ".shader", ".style", ".verity", ".json", ".png", ".jpg", ".jpeg", ".bmp", ".wav", ".ogg", ".mp3",
-            ".ttf", ".otf", ".tile", ".ui"
-        ];
-
-        foreach (string extension in knownExtensions)
-        {
-            if (!suffix.EndsWith(extension, StringComparison.OrdinalIgnoreCase))
-                continue;
-
-            string stem = suffix[..^extension.Length];
-            assetRelativePath = stem.Replace('.', Path.DirectorySeparatorChar) + extension;
-            return true;
-        }
-
-        assetRelativePath = suffix.Replace('.', Path.DirectorySeparatorChar);
         return true;
     }
 

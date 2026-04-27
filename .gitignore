@@ -27,6 +27,22 @@ tmp/
 .codex-temp/
 **/obj_codex/
 **/bin_codex/
+**/obj_verify/
+**/bin_verify/
+
+# Browser/runtime build outputs
+**/obj_browser/
+**/bin_browser/
+**/obj_browser_publish/
+**/bin_browser_publish/
+**/obj_browser_itch/
+**/bin_browser_itch/
+/Build/
+/bin_browser/
+/bin_browser_itch/
+/VerityBrowser_itch.zip
+/serve_browser.py
+/.tmp/
 
 # Sisyphus
 .sisyphus/

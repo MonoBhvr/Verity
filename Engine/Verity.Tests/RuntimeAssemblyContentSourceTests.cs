@@ -33,6 +33,16 @@ public sealed class RuntimeAssemblyContentSourceTests : IDisposable
         Assert.Contains("\"scene\":true", contentSource.TryReadText("scene.json"));
     }
 
+    [Theory]
+    [InlineData("NewLuaScript.lua", "NewLuaScript.lua")]
+    [InlineData("NewLuaScript.lua.meta", "NewLuaScript.lua.meta")]
+    [InlineData("Script.ChangeColor.cs", "Script\\ChangeColor.cs")]
+    public void TryConvertManifestSuffixToAssetPath_PreservesKnownExtensions(string suffix, string expectedPath)
+    {
+        Assert.True(RuntimeContentPathMapper.TryConvertManifestSuffixToAssetPath(suffix, out string actualPath));
+        Assert.Equal(expectedPath, actualPath);
+    }
+
     public void Dispose()
     {
         if (Directory.Exists(_runtimeRoot))

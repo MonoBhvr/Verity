@@ -24,6 +24,10 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <InternalsVisibleTo Include="Verity.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
     <Compile Remove="Assets\**" />
   </ItemGroup>
 

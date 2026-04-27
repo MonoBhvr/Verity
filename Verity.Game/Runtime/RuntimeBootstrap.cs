@@ -223,6 +223,84 @@ public static class RuntimeBootstrap
         DynamicallyAccessedMemberTypes.NonPublicProperties |
         DynamicallyAccessedMemberTypes.PublicMethods,
         typeof(MoveCharacter))]
+    [DynamicDependency(
+        DynamicallyAccessedMemberTypes.PublicConstructors |
+        DynamicallyAccessedMemberTypes.PublicProperties |
+        DynamicallyAccessedMemberTypes.PublicMethods,
+        typeof(Verity.Core.Scripting.LuaScriptContext))]
+    [DynamicDependency(
+        DynamicallyAccessedMemberTypes.PublicConstructors |
+        DynamicallyAccessedMemberTypes.PublicProperties |
+        DynamicallyAccessedMemberTypes.PublicMethods,
+        typeof(Verity.Core.Scripting.LuaVector2Value))]
+    [DynamicDependency(
+        DynamicallyAccessedMemberTypes.PublicConstructors |
+        DynamicallyAccessedMemberTypes.PublicProperties |
+        DynamicallyAccessedMemberTypes.PublicMethods,
+        typeof(Verity.Core.Scripting.LuaVector3Value))]
+    [DynamicDependency(
+        DynamicallyAccessedMemberTypes.PublicConstructors |
+        DynamicallyAccessedMemberTypes.PublicProperties |
+        DynamicallyAccessedMemberTypes.PublicMethods,
+        typeof(Verity.Core.Scripting.LuaTransformHandle))]
+    [DynamicDependency(
+        DynamicallyAccessedMemberTypes.PublicConstructors |
+        DynamicallyAccessedMemberTypes.PublicProperties |
+        DynamicallyAccessedMemberTypes.PublicMethods,
+        typeof(Verity.Core.Scripting.LuaEntityHandle))]
+    [DynamicDependency(
+        DynamicallyAccessedMemberTypes.PublicConstructors |
+        DynamicallyAccessedMemberTypes.PublicProperties |
+        DynamicallyAccessedMemberTypes.PublicMethods,
+        typeof(Verity.Core.Scripting.LuaComponentProxy))]
+    [DynamicDependency(
+        DynamicallyAccessedMemberTypes.PublicConstructors |
+        DynamicallyAccessedMemberTypes.PublicProperties |
+        DynamicallyAccessedMemberTypes.PublicMethods,
+        typeof(Verity.Core.Scripting.LuaEntityApi))]
+    [DynamicDependency(
+        DynamicallyAccessedMemberTypes.PublicConstructors |
+        DynamicallyAccessedMemberTypes.PublicProperties |
+        DynamicallyAccessedMemberTypes.PublicMethods,
+        typeof(Verity.Core.Scripting.LuaTimeApi))]
+    [DynamicDependency(
+        DynamicallyAccessedMemberTypes.PublicConstructors |
+        DynamicallyAccessedMemberTypes.PublicProperties |
+        DynamicallyAccessedMemberTypes.PublicMethods,
+        typeof(Verity.Core.Scripting.LuaInputApi))]
+    [DynamicDependency(
+        DynamicallyAccessedMemberTypes.PublicConstructors |
+        DynamicallyAccessedMemberTypes.PublicProperties |
+        DynamicallyAccessedMemberTypes.PublicMethods,
+        typeof(Verity.Core.Scripting.LuaKeysApi))]
+    [DynamicDependency(
+        DynamicallyAccessedMemberTypes.PublicParameterlessConstructor |
+        DynamicallyAccessedMemberTypes.PublicProperties,
+        typeof(Verity.Core.StyleData))]
+    [DynamicDependency(
+        DynamicallyAccessedMemberTypes.PublicMethods,
+        typeof(Verity.Input.Input))]
+    [DynamicDependency(
+        DynamicallyAccessedMemberTypes.PublicParameterlessConstructor |
+        DynamicallyAccessedMemberTypes.PublicFields |
+        DynamicallyAccessedMemberTypes.NonPublicFields |
+        DynamicallyAccessedMemberTypes.PublicProperties |
+        DynamicallyAccessedMemberTypes.NonPublicProperties,
+        typeof(Verity.Core.World.Tile))]
+    [DynamicDependency(
+        DynamicallyAccessedMemberTypes.PublicParameterlessConstructor |
+        DynamicallyAccessedMemberTypes.PublicFields |
+        DynamicallyAccessedMemberTypes.NonPublicFields |
+        DynamicallyAccessedMemberTypes.PublicProperties |
+        DynamicallyAccessedMemberTypes.NonPublicProperties,
+        typeof(Verity.Core.World.AnimatedTile))]
+    [DynamicDependency(
+        DynamicallyAccessedMemberTypes.PublicParameterlessConstructor |
+        DynamicallyAccessedMemberTypes.PublicFields |
+        DynamicallyAccessedMemberTypes.NonPublicFields |
+        DynamicallyAccessedMemberTypes.PublicProperties |
+        DynamicallyAccessedMemberTypes.NonPublicProperties,
+        typeof(Verity.Core.World.RuleTile))]
     public static BrowserRuntimeSession CreateBrowserSession(IRuntimeHost runtimeHost)
     {
         string executableBaseDir = AppContext.BaseDirectory;

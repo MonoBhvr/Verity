@@ -982,7 +982,7 @@ public unsafe class InspectorWindow : EditorWindow
     private void DrawSpritePreview(Sprite sprite)
     {
         var texture = _app.LoadSpriteTexture(sprite);
-        if (texture is not OpenGlTexture glTex)
+        if (texture == null || texture.ImGuiTextureId == 0)
         {
             ImGui.TextDisabled(AssetPathUtility.DisplayName(sprite.Path));
             return;
@@ -992,7 +992,7 @@ public unsafe class InspectorWindow : EditorWindow
         Vector2 size = new(Math.Min(192, Math.Max(32, slice.Width * 4)), Math.Min(192, Math.Max(32, slice.Height * 4)));
         Vector2 uvMin = new(slice.X / (float)Math.Max(1, texture.Width), 1f - (slice.Y / (float)Math.Max(1, texture.Height)));
         Vector2 uvMax = new((slice.X + slice.Width) / (float)Math.Max(1, texture.Width), 1f - ((slice.Y + slice.Height) / (float)Math.Max(1, texture.Height)));
-        ImGui.Image(new ImTextureRef(null, new ImTextureID((nint)glTex.Id)), size, uvMin, uvMax);
+        ImGui.Image(new ImTextureRef(null, new ImTextureID(texture.ImGuiTextureId)), size, uvMin, uvMax);
         ImGui.TextDisabled(AssetPathUtility.DisplayName(sprite.Path));
     }
 
@@ -1278,8 +1278,8 @@ public unsafe class InspectorWindow : EditorWindow
             ImGui.Text(L10n.Tr("label_style_asset_editor")); ImGui.Separator();
             ImGui.SetNextItemWidth(ImGui.GetContentRegionAvail().X - 100);
             DrawShaderField(L10n.Tr("CreationType_Shader"), (ShaderAsset)(data.ShaderPath ?? ""), val => { 
-                if (val is ShaderAsset sa) data.ShaderPath = sa.Path;
-                else if (val is string s) data.ShaderPath = s;
+                if (val is ShaderAsset sa) data.ShaderPath = NormalizeStyleAssetPath(sa.Path);
+                else if (val is string s) data.ShaderPath = NormalizeStyleAssetPath(s);
                 SaveStyle(path, data); 
             });
             ImGui.SameLine();
@@ -1306,7 +1306,7 @@ public unsafe class InspectorWindow : EditorWindow
                                 if (u.Name.Contains("Color", StringComparison.OrdinalIgnoreCase)) { var c = data.Colors.TryGetValue(u.Name, out var col) ? col : Color.White; var v4 = (Vector4)c; if (ImGui.ColorEdit4("##v", ref v4)) { data.Colors[u.Name] = (Color)v4; changed = true; } }
                                 else { Vector4 val = data.Vector4s.TryGetValue(u.Name, out var v) ? v : Vector4.One; if (ImGui.DragFloat4("##v", ref val)) { data.Vector4s[u.Name] = val; changed = true; } }
                             }
-                            else if (u.Type == "sampler2D") { string val = data.Textures.TryGetValue(u.Name, out var s) ? s : ""; DrawAssetReferenceField("##v", val, ".png;.jpg;.jpeg", newVal => { data.Textures[u.Name] = (string)newVal!; SaveStyle(path, data); }); }
+                            else if (u.Type == "sampler2D") { string val = data.Textures.TryGetValue(u.Name, out var s) ? s : ""; DrawAssetReferenceField("##v", val, ".png;.jpg;.jpeg", newVal => { data.Textures[u.Name] = NormalizeStyleAssetPath((string?)newVal) ?? string.Empty; SaveStyle(path, data); }); }
                             if (changed) { SaveStyle(path, data); string relPath = Path.GetRelativePath(_app.ProjectPath!, path).Replace("\\", "/"); _app.RenderPipeline.ClearStyleCache(relPath); }
                             ImGui.PopID();
                         }
@@ -1317,6 +1317,25 @@ public unsafe class InspectorWindow : EditorWindow
     }
 
     private string ResolveAssetPath(string p) => Path.IsPathRooted(p) ? p : (_app.ProjectPath == null ? p : Path.Combine(_app.ProjectPath, p));
+    private string? NormalizeStyleAssetPath(string? path)
+    {
+        if (string.IsNullOrWhiteSpace(path))
+            return path;
+
+        string normalized = path.Replace('\\', '/');
+        if (_app.ProjectPath != null)
+        {
+            string projectPath = _app.ProjectPath.Replace('\\', '/').TrimEnd('/');
+            if (normalized.StartsWith(projectPath + "/", StringComparison.OrdinalIgnoreCase))
+                return normalized[(projectPath.Length + 1)..];
+        }
+
+        int assetsIndex = normalized.LastIndexOf("/Assets/", StringComparison.OrdinalIgnoreCase);
+        if (assetsIndex >= 0)
+            return normalized[(assetsIndex + 1)..];
+
+        return normalized;
+    }
     private void SaveStyle(string path, StyleData data) { try { string json = data.ToJson(); File.WriteAllText(path, json); _cachedTextFiles[path] = (File.GetLastWriteTimeUtc(path), json); _cachedStyleData[path] = (File.GetLastWriteTimeUtc(path), data); if (_app.ProjectPath != null) { string relPath = Path.GetRelativePath(_app.ProjectPath, path).Replace("\\", "/"); _app.RenderPipeline.ClearStyleCache(relPath); } } catch { } }
 
     private void DrawWorldSettingsInspector(string path) {
@@ -1432,9 +1451,9 @@ public unsafe class InspectorWindow : EditorWindow
         }
     }
 
-    private void DrawSpriteImportPreview(string fullPath, TextureObjectUploaded tex, int width, int height, SpriteImportSettings settings)
+    private void DrawSpriteImportPreview(string fullPath, RenderTexture tex, int width, int height, SpriteImportSettings settings)
     {
-        if (tex is not OpenGlTexture glTex)
+        if (tex.ImGuiTextureId == 0)
             return;
 
         SpriteSlice selected = GetSelectedSlice(fullPath, settings, width, height);
@@ -1445,9 +1464,9 @@ public unsafe class InspectorWindow : EditorWindow
         var uvMax = new Vector2((selected.X + selected.Width) / (float)Math.Max(1, width), 1f - ((selected.Y + selected.Height) / (float)Math.Max(1, height)));
 
         ImGui.Text($"{L10n.Tr("label_preview_slice")}: {selected.Name}");
-        ImGui.Image(new ImTextureRef(null, new ImTextureID((nint)glTex.Id)), drawSize, new Vector2(0, 1), new Vector2(1, 0));
+        ImGui.Image(new ImTextureRef(null, new ImTextureID(tex.ImGuiTextureId)), drawSize, new Vector2(0, 1), new Vector2(1, 0));
         ImGui.Text($"{L10n.Tr("label_slice_rect")}: {selected.X}, {selected.Y}, {selected.Width}, {selected.Height}");
-        ImGui.Image(new ImTextureRef(null, new ImTextureID((nint)glTex.Id)), new Vector2(Math.Min(192, selected.Width * 4), Math.Min(192, selected.Height * 4)), uvMin, uvMax);
+        ImGui.Image(new ImTextureRef(null, new ImTextureID(tex.ImGuiTextureId)), new Vector2(Math.Min(192, selected.Width * 4), Math.Min(192, selected.Height * 4)), uvMin, uvMax);
     }
 
     private bool DrawSpriteSliceEditor(string fullPath, int textureWidth, int textureHeight, SpriteImportSettings settings)
@@ -2037,8 +2056,10 @@ public unsafe class InspectorWindow : EditorWindow
                     {
                         if (ImGui.Selectable(GetPostProcessEffectLabel(effectKey)))
                         {
+                            _app.RecordUndo();
                             AddPostProcessEffect(settings, effectKey);
                             onUpdate(settings);
+                            SaveWorldAfterStructuralInspectorChange();
                         }
                     }
                     ImGui.EndCombo();
@@ -2074,8 +2095,10 @@ public unsafe class InspectorWindow : EditorWindow
                         ImGui.TableNextColumn();
                         if (ImGui.SmallButton(L10n.Tr("ctx_remove")))
                         {
+                            _app.RecordUndo();
                             RemovePostProcessEffect(settings, effectKey);
                             onUpdate(settings);
+                            SaveWorldAfterStructuralInspectorChange();
                             removed = true;
                         }
 
@@ -2098,6 +2121,14 @@ public unsafe class InspectorWindow : EditorWindow
             ImGui.TreePop();
         }
         ImGui.PopID();
+    }
+
+    private void SaveWorldAfterStructuralInspectorChange()
+    {
+        if (WorldManager.ActiveWorld == null)
+            return;
+
+        _app.GetWindow<ProjectWindow>()?.SaveActiveWorldAsAsset();
     }
 
     private static string LocalizeTypeName(Type type) => LocalizeTypeName(type.Name);

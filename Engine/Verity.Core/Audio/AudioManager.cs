@@ -15,6 +15,8 @@ namespace Verity.Core.Audio;
 [SingleInstancePerWorld]
 public class AudioManager : Script
 {
+    private const int MusicChannelMarker = -2;
+
     private static AudioManager? _instance;
     public static AudioManager Instance 
     {
@@ -38,6 +40,8 @@ public class AudioManager : Script
     private float _masterVolume = 1.0f;
     private readonly Random _random = new();
     private AudioListener? _activeListener;
+    private AudioSource? _activeMusicSource;
+    private bool _loggedPitchUnsupported;
 
     public AudioManager()
     {
@@ -140,16 +144,19 @@ public class AudioManager : Script
         if (source.Clip == null || source.Clip.Handle == IntPtr.Zero) return;
 
         var group = GetGroup(source.GroupName);
-        
-        float baseVol = source.Volume * source.Clip.DefaultVolume;
-        float volume = baseVol * (float)(_random.NextDouble() * (source.MaxVolume - source.MinVolume) + source.MinVolume);
-        
-        float basePitch = source.Pitch * source.Clip.DefaultPitch * group.Pitch;
-        float finalPitch = basePitch * (float)(_random.NextDouble() * (source.MaxPitch - source.MinPitch) + source.MinPitch);
+
+        source.RuntimeVolumeScale = NextRange(source.MinVolume, source.MaxVolume);
+        source.RuntimePitchScale = NextRange(source.MinPitch, source.MaxPitch);
+        LogUnsupportedPitchIfNeeded(source, group);
 
         if (source.Clip.Type == AudioType.Music)
         {
-            SDL_mixer.Mix_VolumeMusic((int)(volume * group.GetFinalVolume(_masterVolume) * 128));
+            if (_activeMusicSource != null && !ReferenceEquals(_activeMusicSource, source))
+                _activeMusicSource.CurrentChannel = -1;
+
+            _activeMusicSource = source;
+            source.CurrentChannel = MusicChannelMarker;
+            ApplyMusicVolume(source, group);
             SDL_mixer.Mix_PlayMusic(source.Clip.Handle, source.Loop ? -1 : 0);
         }
         else
@@ -165,9 +172,7 @@ public class AudioManager : Script
             {
                 source.CurrentChannel = channel;
                 group.ActiveChannels.Enqueue(channel);
-                
-                float finalVol = volume * group.GetFinalVolume(_masterVolume);
-                SDL_mixer.Mix_Volume(channel, (int)(finalVol * 128));
+                ApplyChannelVolume(source, group, channel);
 
                 if (source.IsSpatial)
                 {
@@ -180,7 +185,12 @@ public class AudioManager : Script
     public void Stop(AudioSource source)
     {
         if (source.Clip == null) return;
-        if (source.Clip.Type == AudioType.Music) SDL_mixer.Mix_HaltMusic();
+        if (source.Clip.Type == AudioType.Music)
+        {
+            SDL_mixer.Mix_HaltMusic();
+            if (ReferenceEquals(_activeMusicSource, source))
+                _activeMusicSource = null;
+        }
         else if (source.CurrentChannel != -1)
         {
             SDL_mixer.Mix_HaltChannel(source.CurrentChannel);
@@ -198,7 +208,15 @@ public class AudioManager : Script
                 int ch = group.ActiveChannels.Dequeue();
                 SDL_mixer.Mix_HaltChannel(ch);
             }
-            if (groupName == "BGM") SDL_mixer.Mix_HaltMusic();
+            if (groupName == "BGM")
+            {
+                SDL_mixer.Mix_HaltMusic();
+                if (_activeMusicSource != null)
+                {
+                    _activeMusicSource.CurrentChannel = -1;
+                    _activeMusicSource = null;
+                }
+            }
         }
     }
 
@@ -237,15 +255,28 @@ public class AudioManager : Script
         var sources = Owner.World.GetAllComponents<AudioSource>();
         foreach (var source in sources)
         {
+            if (source.Clip?.Type == AudioType.Music)
+            {
+                if (ReferenceEquals(_activeMusicSource, source) && SDL_mixer.Mix_PlayingMusic() == 1)
+                {
+                    ApplyMusicVolume(source, GetGroup(source.GroupName));
+                }
+                else
+                {
+                    source.CurrentChannel = -1;
+                    if (ReferenceEquals(_activeMusicSource, source))
+                        _activeMusicSource = null;
+                }
+
+                continue;
+            }
+
             if (source.CurrentChannel != -1 && SDL_mixer.Mix_Playing(source.CurrentChannel) == 1)
             {
                 if (source.IsSpatial)
                     ApplySpatialEffect(source.CurrentChannel, source.Transform.WorldPosition, source.MinDistance, source.MaxDistance);
-                
-                var group = GetGroup(source.GroupName);
-                float groupVol = group.GetFinalVolume(_masterVolume);
-                float clipDefaultVol = source.Clip?.DefaultVolume ?? 1.0f;
-                SDL_mixer.Mix_Volume(source.CurrentChannel, (int)(source.Volume * clipDefaultVol * groupVol * 128));
+
+                ApplyChannelVolume(source, GetGroup(source.GroupName), source.CurrentChannel);
             }
             else
             {
@@ -293,5 +324,49 @@ public class AudioManager : Script
         byte right = (byte)((1.0f + Math.Clamp(panFactor, -1f, 0f)) * 255);
         
         SDL_mixer.Mix_SetPanning(channel, left, right);
+    }
+
+    private float NextRange(float min, float max)
+    {
+        if (max < min)
+            (min, max) = (max, min);
+
+        return (float)(_random.NextDouble() * (max - min) + min);
+    }
+
+    private void ApplyChannelVolume(AudioSource source, AudioGroup group, int channel)
+    {
+        float finalVolume = GetSourceFinalVolume(source, group);
+        SDL_mixer.Mix_Volume(channel, ToSdlVolume(finalVolume));
+    }
+
+    private void ApplyMusicVolume(AudioSource source, AudioGroup group)
+    {
+        float finalVolume = GetSourceFinalVolume(source, group);
+        SDL_mixer.Mix_VolumeMusic(ToSdlVolume(finalVolume));
+    }
+
+    private float GetSourceFinalVolume(AudioSource source, AudioGroup group)
+    {
+        float clipDefaultVolume = source.Clip?.DefaultVolume ?? 1.0f;
+        return source.Volume * clipDefaultVolume * source.RuntimeVolumeScale * group.GetFinalVolume(_masterVolume);
+    }
+
+    private static int ToSdlVolume(float volume)
+    {
+        return (int)(Math.Clamp(volume, 0f, 1f) * 128);
+    }
+
+    private void LogUnsupportedPitchIfNeeded(AudioSource source, AudioGroup group)
+    {
+        if (_loggedPitchUnsupported)
+            return;
+
+        float requestedPitch = source.Pitch * (source.Clip?.DefaultPitch ?? 1.0f) * group.Pitch * source.RuntimePitchScale;
+        if (Math.Abs(requestedPitch - 1.0f) <= 0.001f)
+            return;
+
+        Debug.LogWarning("[AudioManager] Pitch adjustment is not supported by the current SDL2_mixer backend. Volume changes will apply, but pitch values are ignored.");
+        _loggedPitchUnsupported = true;
     }
 }

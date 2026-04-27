@@ -109,6 +109,30 @@ internal static class BuildSettingsEditorUi
         if (ImGui.InputText(L10n.Tr("label_logo_path"), ref logo, 256))
             settings.LogoPath = logo;
         ImGui.TextDisabled(L10n.Tr("label_logo_hint"));
+
+        ImGui.Dummy(new Vector2(0, 20));
+        ImGui.TextColored(new Vector4(0.7f, 0.7f, 1f, 1f), L10n.Tr("label_build_app"));
+        ImGui.Separator();
+
+        string appName = settings.AppName ?? string.Empty;
+        if (ImGui.InputText(L10n.Tr("label_app_name"), ref appName, 256))
+            settings.AppName = appName;
+
+        string appIconPath = settings.AppIconPath ?? string.Empty;
+        if (ImGui.InputText(L10n.Tr("label_app_icon_path"), ref appIconPath, 256))
+            settings.AppIconPath = appIconPath;
+        ImGui.TextDisabled(L10n.Tr("label_app_icon_hint"));
+
+        int width = Math.Max(320, settings.WindowWidth);
+        int height = Math.Max(180, settings.WindowHeight);
+        if (ImGui.InputInt(L10n.Tr("label_window_width"), ref width))
+            settings.WindowWidth = Math.Max(320, width);
+        if (ImGui.InputInt(L10n.Tr("label_window_height"), ref height))
+            settings.WindowHeight = Math.Max(180, height);
+
+        bool resizable = settings.WindowResizable;
+        if (ImGui.Checkbox(L10n.Tr("label_window_resizable"), ref resizable))
+            settings.WindowResizable = resizable;
     }
 
     private static void AddToBuild(EditorApp app, string fullPath)

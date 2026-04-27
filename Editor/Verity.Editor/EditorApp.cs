@@ -102,6 +102,7 @@ public class EditorApp : IDisposable
     public BuildSettings BuildSettings { get; private set; } = new();
 
     public bool IsPlaying { get; private set; }
+    public int LastPlayLogicTicksThisFrame { get; private set; }
     public bool IsBuilding { get; set; }
     public string BuildStatus { get; set; } = "";
 
@@ -302,6 +303,21 @@ public class EditorApp : IDisposable
         ResetDirty();
         ShowOverlayMessage(L10n.Tr("msg_blueprint_saved", Path.GetFileNameWithoutExtension(normalized)));
         return true;
+    }
+
+    public bool SaveActiveAssetForBuild()
+    {
+        if (IsPlaying)
+        {
+            ShowOverlayMessage(L10n.Tr("msg_cannot_save_world_play_mode"), 3.0f);
+            return false;
+        }
+
+        if (IsEditingBlueprint)
+            return SaveActiveBlueprint();
+
+        GetWindow<ProjectWindow>()?.SaveActiveWorldAsAsset();
+        return WorldManager.ActiveWorld != null;
     }
 
     public Entity? GetBlueprintDefaultParent()
@@ -1465,7 +1481,7 @@ public class EditorApp : IDisposable
             long currentTicks = _stopwatch.ElapsedTicks;
             float deltaTime = (float)(currentTicks - lastTicks) / Stopwatch.Frequency;
             lastTicks = currentTicks;
-            Time.FrameCount++;
+            Time.AdvanceFrame();
             if (!IsPlaying) { Time.DeltaTime = deltaTime; Time.TotalTime += deltaTime; }
             Verity.Input.Input.Enabled = _isScreenFocused;
 
@@ -1485,7 +1501,9 @@ public class EditorApp : IDisposable
             }
 
             stageStart = Stopwatch.GetTimestamp();
-            if (IsPlaying && _gameLoop != null) _gameLoop.TickLogic(deltaTime);
+            LastPlayLogicTicksThisFrame = IsPlaying && _gameLoop != null
+                ? _gameLoop.TickLogic(deltaTime)
+                : 0;
             _profiler.RecordFrameStage("Play Logic", Stopwatch.GetElapsedTime(stageStart).TotalMilliseconds);
 
             HandleGlobalShortcuts();
@@ -1644,38 +1662,74 @@ public class EditorApp : IDisposable
     private void DrawOverlays(float dt)
     {
         var viewport = ImGui.GetMainViewport();
-        var dl = ImGui.GetForegroundDrawList();
-        var center = viewport.Pos + viewport.Size * 0.5f;
+        ImGui.SetNextWindowViewport(viewport.ID);
+        ImGui.SetNextWindowPos(viewport.Pos);
+        ImGui.SetNextWindowSize(viewport.Size);
+        ImGui.PushStyleVar(ImGuiStyleVar.WindowRounding, 0f);
+        ImGui.PushStyleVar(ImGuiStyleVar.WindowBorderSize, 0f);
+        ImGui.PushStyleVar(ImGuiStyleVar.WindowPadding, Vector2.Zero);
+        ImGui.PushStyleColor(ImGuiCol.WindowBg, Vector4.Zero);
 
-        if (IsBuilding) {
-            // Full screen dimming
-            dl.AddRectFilled(viewport.Pos, viewport.Pos + viewport.Size, ImGui.GetColorU32(new Vector4(0, 0, 0, 0.6f)));
-            
-            string t1 = L10n.Tr("msg_building_project"); string t2 = BuildStatus;
-            var s1 = ImGui.CalcTextSize(t1); var s2 = ImGui.CalcTextSize(t2);
-            
-            dl.AddText(center - new System.Numerics.Vector2(s1.X * 0.5f, 20), ImGui.GetColorU32(new Vector4(1, 1, 0, 1)), t1);
-            dl.AddText(center - new System.Numerics.Vector2(s2.X * 0.5f, -10), ImGui.GetColorU32(new Vector4(1, 1, 1, 1)), t2);
-        }
+        var overlayFlags = ImGuiWindowFlags.NoDecoration |
+                           ImGuiWindowFlags.NoDocking |
+                           ImGuiWindowFlags.NoMove |
+                           ImGuiWindowFlags.NoResize |
+                           ImGuiWindowFlags.NoBackground |
+                           ImGuiWindowFlags.NoSavedSettings |
+                           ImGuiWindowFlags.NoNav |
+                           ImGuiWindowFlags.NoFocusOnAppearing;
 
-        if (_overlayMessages.Count > 0) {
-            float yOffset = viewport.Size.Y - 40;
-            for (int i = _overlayMessages.Count - 1; i >= 0; i--) {
-                var msg = _overlayMessages[i];
-                string text = $"[Verity] {msg.text}";
-                var textSize = ImGui.CalcTextSize(text);
-                var pos = viewport.Pos + new System.Numerics.Vector2(20, yOffset - textSize.Y);
-                
-                // Draw background box for readability
-                dl.AddRectFilled(pos - new System.Numerics.Vector2(5, 2), pos + textSize + new System.Numerics.Vector2(5, 2), ImGui.GetColorU32(new Vector4(0, 0, 0, 0.8f)), 4f);
-                dl.AddText(pos, ImGui.GetColorU32(new Vector4(1, 0.8f, 0.2f, 1)), text);
-                
-                yOffset -= (textSize.Y + 10);
-                float newDur = msg.duration - dt; 
-                if (newDur <= 0) _overlayMessages.RemoveAt(i); 
-                else _overlayMessages[i] = (msg.text, newDur);
+        if (!IsBuilding)
+            overlayFlags |= ImGuiWindowFlags.NoInputs;
+
+        if (ImGui.Begin("##GlobalOverlay", overlayFlags))
+        {
+            var dl = ImGui.GetWindowDrawList();
+            var center = new System.Numerics.Vector2(viewport.Pos.X + viewport.Size.X * 0.5f, viewport.Pos.Y + viewport.Size.Y * 0.5f);
+
+            if (IsBuilding)
+            {
+                dl.AddRectFilled(viewport.Pos, viewport.Pos + viewport.Size, ImGui.GetColorU32(new Vector4(0, 0, 0, 0.6f)));
+
+                string t1 = L10n.Tr("msg_building_project");
+                string t2 = BuildStatus;
+                var s1 = ImGui.CalcTextSize(t1);
+                var s2 = ImGui.CalcTextSize(t2);
+
+                dl.AddText(new System.Numerics.Vector2(center.X - s1.X * 0.5f, center.Y - 20), ImGui.GetColorU32(new Vector4(1, 1, 0, 1)), t1);
+                dl.AddText(new System.Numerics.Vector2(center.X - s2.X * 0.5f, center.Y + 10), ImGui.GetColorU32(new Vector4(1, 1, 1, 1)), t2);
+            }
+
+            if (_overlayMessages.Count > 0)
+            {
+                float yOffset = viewport.Size.Y - 40;
+                for (int i = _overlayMessages.Count - 1; i >= 0; i--)
+                {
+                    var msg = _overlayMessages[i];
+                    string text = $"[Verity] {msg.text}";
+                    var textSize = ImGui.CalcTextSize(text);
+                    var pos = new System.Numerics.Vector2(viewport.Pos.X + 20, viewport.Pos.Y + yOffset - textSize.Y);
+
+                    dl.AddRectFilled(
+                        new System.Numerics.Vector2(pos.X - 5, pos.Y - 2),
+                        new System.Numerics.Vector2(pos.X + textSize.X + 5, pos.Y + textSize.Y + 2),
+                        ImGui.GetColorU32(new Vector4(0, 0, 0, 0.8f)),
+                        4f);
+                    dl.AddText(pos, ImGui.GetColorU32(new Vector4(1, 0.8f, 0.2f, 1)), text);
+
+                    yOffset -= textSize.Y + 10;
+                    float newDur = msg.duration - dt;
+                    if (newDur <= 0)
+                        _overlayMessages.RemoveAt(i);
+                    else
+                        _overlayMessages[i] = (msg.text, newDur);
+                }
             }
         }
+
+        ImGui.End();
+        ImGui.PopStyleColor();
+        ImGui.PopStyleVar(3);
     }
 
     private unsafe void DrawLauncher()
@@ -1693,10 +1747,10 @@ public class EditorApp : IDisposable
         string editorLogoPath = EditorLogoPath;
         if (File.Exists(editorLogoPath)) {
             var tex = _textureManager.Load(editorLogoPath);
-            if (tex is OpenGlTexture glTex) {
-                float aspect = (float)glTex.Width / glTex.Height; float drawH = 100; float drawW = drawH * aspect;
+            if (tex != null && tex.ImGuiTextureId != 0) {
+                float aspect = (float)tex.Width / tex.Height; float drawH = 100; float drawW = drawH * aspect;
                 ImGui.SetCursorPosX((winSize.X - drawW) * 0.5f);
-                ImGui.Image(new ImTextureRef(null, new ImTextureID((nint)glTex.Id)), new Vector2(drawW, drawH), new Vector2(0, 1), new Vector2(1, 0));
+                ImGui.Image(new ImTextureRef(null, new ImTextureID(tex.ImGuiTextureId)), new Vector2(drawW, drawH), new Vector2(0, 1), new Vector2(1, 0));
             }
         } else {
             ImGui.SetCursorPosX((winSize.X - 400) * 0.5f); ImGui.TextColored(new Vector4(0.3f, 0.7f, 1.0f, 1.0f), L10n.Tr("label_launcher_brand"));
@@ -1803,10 +1857,8 @@ public class EditorApp : IDisposable
                 ImGui.EndMenu();
             }
             if (ImGui.BeginMenu(L10n.Tr("menu_build"))) {
+                if (ImGui.MenuItem(L10n.Tr("window_buildmanager"))) GetWindow<BuildManagerWindow>()!.IsOpen = true;
                 if (ImGui.MenuItem(L10n.Tr("window_buildsettings"))) GetWindow<BuildSettingsWindow>()!.IsOpen = true;
-                ImGui.Separator();
-                if (ImGui.MenuItem(L10n.Tr("menu_publishDebug"))) assetWindow?.PublishDebugBuild();
-                if (ImGui.MenuItem(L10n.Tr("menu_publishRelease"))) assetWindow?.PublishReleaseBuild();
                 ImGui.EndMenu();
             }
             float mid = ImGui.GetWindowWidth() * 0.5f; ImGui.SetCursorPosX(mid - 30);
@@ -2192,6 +2244,7 @@ public class EditorApp : IDisposable
                 {
                     ConsoleWindow => new Vector2(960f, 300f),
                     AnimationWindow => new Vector2(1020f, 520f),
+                    BuildManagerWindow => new Vector2(760f, 520f),
                     BuildSettingsWindow => new Vector2(900f, 620f),
                     FilterEditorWindow => new Vector2(980f, 680f),
                     TilePaletteWindow => new Vector2(900f, 560f),
@@ -2411,13 +2464,10 @@ public class EditorApp : IDisposable
 
         if (ImGui.BeginMenu(L10n.Tr("menu_build")))
         {
+            if (ImGui.MenuItem(L10n.Tr("window_buildmanager")))
+                OpenWindow<BuildManagerWindow>();
             if (ImGui.MenuItem(L10n.Tr("window_buildsettings")))
                 OpenWindow<BuildSettingsWindow>();
-            ImGui.Separator();
-            if (ImGui.MenuItem(L10n.Tr("menu_publishDebug")))
-                assetWindow?.PublishDebugBuild();
-            if (ImGui.MenuItem(L10n.Tr("menu_publishRelease")))
-                assetWindow?.PublishReleaseBuild();
             ImGui.EndMenu();
         }
 
@@ -2604,7 +2654,7 @@ public class EditorApp : IDisposable
         return AssetPathUtility.ResolveSpriteSlice(fullPath, sprite, raw.Width, raw.Height).Pivot;
     }
 
-    public TextureObjectUploaded? LoadSpriteTexture(Sprite sprite)
+    public RenderTexture? LoadSpriteTexture(Sprite sprite)
     {
         if (string.IsNullOrWhiteSpace(sprite.Path))
             return null;
@@ -2830,6 +2880,8 @@ public class EditorApp : IDisposable
             if (ProjectPath != null) {
                 string relPath = Path.GetRelativePath(ProjectPath, changedPath).Replace("\\", "/");
                 _renderPipeline.ClearStyleCache(relPath);
+                if (!File.Exists(changedPath))
+                    GetWindow<ProjectWindow>()?.RemoveDeletedStyleReferences(relPath);
             }
         } else if (ext == ".shader") {
             _renderPipeline.ClearShaderCache(changedPath);

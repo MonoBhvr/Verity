@@ -8,6 +8,7 @@ using Verity.Core;
 using Verity.Core.World;
 using Verity.Core.ECS;
 using Verity.Core.Serialization;
+using Verity.Graphics;
 
 namespace Verity.Editor.Windows;
 
@@ -75,10 +76,10 @@ public unsafe class TilePaletteWindow : EditorWindow
                     {
                         var preview = TryGetPreviewData(GetPreviewSprite(tile));
                         
-                        if (preview.Texture is OpenGlTexture glTex)
+                        if (preview.Texture != null && preview.Texture.ImGuiTextureId != 0)
                         {
                             ImGui.SetCursorScreenPos(pos + new System.Numerics.Vector2(5, 5));
-                            ImGui.Image(new ImTextureRef(null, new ImTextureID((nint)glTex.Id)), new Vector2(cellSize - 10, cellSize - 10), preview.UvMin, preview.UvMax);
+                            ImGui.Image(new ImTextureRef(null, new ImTextureID(preview.Texture.ImGuiTextureId)), new Vector2(cellSize - 10, cellSize - 10), preview.UvMin, preview.UvMax);
                         }
                         else
                         {
@@ -358,10 +359,10 @@ public unsafe class TilePaletteWindow : EditorWindow
         drawList.AddRect(start, start + size, ImGui.GetColorU32(new Vector4(1f, 1f, 1f, 0.2f)), 6f);
 
         var preview = TryGetPreviewData(GetPreviewSprite(tile));
-        if (preview.Texture is OpenGlTexture glTex)
+        if (preview.Texture != null && preview.Texture.ImGuiTextureId != 0)
         {
             ImGui.SetCursorScreenPos(start + new System.Numerics.Vector2(8, 8));
-            ImGui.Image(new ImTextureRef(null, new ImTextureID((nint)glTex.Id)), new Vector2(80, 80), preview.UvMin, preview.UvMax);
+            ImGui.Image(new ImTextureRef(null, new ImTextureID(preview.Texture.ImGuiTextureId)), new Vector2(80, 80), preview.UvMin, preview.UvMax);
         }
         else
         {
@@ -493,7 +494,7 @@ public unsafe class TilePaletteWindow : EditorWindow
         };
     }
 
-    private (TextureObjectUploaded? Texture, Vector2 UvMin, Vector2 UvMax) TryGetPreviewData(Sprite? sprite)
+    private (RenderTexture? Texture, Vector2 UvMin, Vector2 UvMax) TryGetPreviewData(Sprite? sprite)
     {
         if (!sprite.HasValue || string.IsNullOrWhiteSpace(sprite.Value.Path))
         {

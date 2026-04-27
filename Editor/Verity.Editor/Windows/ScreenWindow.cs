@@ -1,7 +1,6 @@
 using System.Diagnostics;
 using System.Numerics;
 using Hexa.NET.ImGui;
-using Irodori.Backend.OpenGL;
 using Verity.Core.ECS;
 using Verity.Core.World;
 using Verity.Graphics;
@@ -74,11 +73,11 @@ public class ScreenWindow : EditorWindow
         }
 
         var colorTex = _app.RenderPipeline.ScreenColorTexture;
-        if (colorTex is OpenGlTexture glTex)
+        if (colorTex != null && colorTex.ImGuiTextureId != 0)
         {
             unsafe
             {
-                var texRef = new ImTextureRef(null, new ImTextureID((nint)glTex.Id));
+                var texRef = new ImTextureRef(null, new ImTextureID(colorTex.ImGuiTextureId));
                 ImGui.Image(texRef, contentSize, new Vector2(0, 1), new Vector2(1, 0));
             }
 
@@ -89,8 +88,11 @@ public class ScreenWindow : EditorWindow
 
     private bool ShouldRenderFrame(bool sizeChanged, bool overlayActive)
     {
-        if (!_hasRenderedFrame || sizeChanged || _app.IsPlaying || overlayActive)
+        if (!_hasRenderedFrame || sizeChanged || overlayActive)
             return true;
+
+        if (_app.IsPlaying)
+            return _app.LastPlayLogicTicksThisFrame > 0;
 
         if (ImGui.IsWindowFocused(ImGuiFocusedFlags.RootAndChildWindows) || ImGui.IsWindowHovered(ImGuiHoveredFlags.RootAndChildWindows))
             return true;

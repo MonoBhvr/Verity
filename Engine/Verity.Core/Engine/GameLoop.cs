@@ -6,6 +6,9 @@ namespace Verity.Core.Engine;
 
 public class GameLoop
 {
+    private const int MaxBrowserLogicTicksPerFrame = 1;
+    private const int MaxBrowserPhysicsTicksPerFrame = 1;
+
     public Action? OnUpdate { get; set; }
     public Action? OnFixedUpdate { get; set; }
     public Action? OnPhysicsTick { get; set; }
@@ -17,12 +20,12 @@ public class GameLoop
 
     public ProjectSettings ProjectSettings { get; set; } = ProjectSettings.Default;
 
-    public void TickLogic(float deltaTime)
+    public int TickLogic(float deltaTime)
     {
-        if (WorldLoader.PendingWorldName != null) return;
+        if (WorldLoader.PendingWorldName != null) return 0;
 
         var world = WorldManager.ActiveWorld;
-        if (world == null) return;
+        if (world == null) return 0;
 
         float scaledDelta = deltaTime * Time.TimeScale;
 
@@ -34,22 +37,40 @@ public class GameLoop
 
         float logicFixedDelta = 1.0f / Math.Max(1, targetTPS);
         float physicsFixedDelta = 1.0f / Math.Max(1, targetPTPS);
+        bool browserFastPath = OperatingSystem.IsBrowser();
 
         _logicAccumulator += scaledDelta;
+        int logicTicksThisFrame = 0;
         while (_logicAccumulator >= logicFixedDelta)
         {
             PerformLogicTick(world, logicFixedDelta);
             _logicAccumulator -= logicFixedDelta;
+
+            logicTicksThisFrame++;
+            if (browserFastPath && logicTicksThisFrame >= MaxBrowserLogicTicksPerFrame)
+            {
+                _logicAccumulator = 0f;
+                break;
+            }
         }
 
         _physicsAccumulator += scaledDelta;
+        int physicsTicksThisFrame = 0;
         while (_physicsAccumulator >= physicsFixedDelta)
         {
             PerformPhysicsTick(world, physicsFixedDelta);
             _physicsAccumulator -= physicsFixedDelta;
+
+            physicsTicksThisFrame++;
+            if (browserFastPath && physicsTicksThisFrame >= MaxBrowserPhysicsTicksPerFrame)
+            {
+                _physicsAccumulator = 0f;
+                break;
+            }
         }
         
         world.ProcessPendingDestroys();
+        return logicTicksThisFrame;
     }
 
     private void PerformLogicTick(World.World world, float fixedDelta)

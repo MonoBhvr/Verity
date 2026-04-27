@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Reflection;
 using System.Text.Json;
+using StbImageSharp;
 using Verity.Core;
 using Verity.Core.Audio;
 using Verity.Core.ECS;
@@ -62,7 +63,13 @@ internal sealed class RuntimeApp : IDisposable
         _writeRuntimeLog = writeRuntimeLog;
         _minimalBrowserMode = minimalBrowserMode;
 
-        _device = _runtimeHost.CreateGraphicsDevice("Verity Game", 1280, 720, true);
+        _buildSettings = LoadBuildSettings();
+
+        string appTitle = string.IsNullOrWhiteSpace(_buildSettings.AppName) ? "Verity Game" : _buildSettings.AppName;
+        int windowWidth = Math.Max(320, _buildSettings.WindowWidth);
+        int windowHeight = Math.Max(180, _buildSettings.WindowHeight);
+
+        _device = _runtimeHost.CreateGraphicsDevice(appTitle, windowWidth, windowHeight, _buildSettings.WindowResizable);
         _writeRuntimeLog("Runtime", $"GraphicsDevice created: {_device.Width}x{_device.Height}");
 
         _shader = Shader2D.Create(_device);
@@ -77,10 +84,10 @@ internal sealed class RuntimeApp : IDisposable
         UiRenderer.DefaultFontFamily = _fallbackFontFamily;
         _renderPipeline.SetWhitePixel(_textureManager.CreateWhitePixel());
         DefaultSprites.Initialize(_textureManager);
+        ApplyWindowBranding(appTitle);
 
         if (_minimalBrowserMode)
         {
-            _buildSettings = new BuildSettings();
             _projectSettings = new ProjectSettings();
             _gameLoop = new GameLoop { ProjectSettings = _projectSettings };
             _stopwatch = Stopwatch.StartNew();
@@ -92,7 +99,6 @@ internal sealed class RuntimeApp : IDisposable
         }
 
         _userAssembly = LoadUserAssembly();
-        _buildSettings = LoadBuildSettings();
         _projectSettings = LoadProjectSettings();
 
         _writeRuntimeLog("Build", $"WorldCount={_buildSettings.Worlds.Count}, StartWorldIndex={_buildSettings.StartWorldIndex}");
@@ -148,13 +154,20 @@ internal sealed class RuntimeApp : IDisposable
             deltaTime = 0.1f;
 
         RuntimeProfiler.Enabled = ProfilerOverlay.ShowProfiler;
-        _profilerOverlay.TickFrame();
         _device.PollEvents();
-        _gameLoop.TickLogic(deltaTime);
-        UiSystem.Update(_device.Width, _device.Height);
+        int logicTicksThisFrame = _gameLoop.TickLogic(deltaTime);
+        if (logicTicksThisFrame <= 0)
+            return;
+
+        _profilerOverlay.TickFrame();
+        uint viewportWidth = _device.Width;
+        uint viewportHeight = _device.Height;
+        if (UiSystem.ActiveCanvases.Count > 0)
+            UiSystem.Update(viewportWidth, viewportHeight);
 
         var world = WorldManager.ActiveWorld;
         Camera? mainCam = world != null ? FindCameraRecursiveInWorld(world) : null;
+        Time.AdvanceFrame();
         _frameCount++;
         _framesSinceLastFpsSample++;
         UpdateBrowserDebugState(world);
@@ -180,15 +193,15 @@ internal sealed class RuntimeApp : IDisposable
                 _writeRuntimeLog("Render", $"No active camera. world={(world?.Name ?? "<null>")}, canvases={UiSystem.ActiveCanvases.Count}");
                 _missingCameraLogged = true;
             }
-            _device.SetViewport(0, 0, _device.Width, _device.Height);
-            _device.Clear(new Verity.Core.Color(0.2f, 0.2f, 0.2f, 1.0f));
+                _device.SetViewport(0, 0, viewportWidth, viewportHeight);
+                _device.Clear(new Verity.Core.Color(0.2f, 0.2f, 0.2f, 1.0f));
         }
 
         foreach (var canvas in UiSystem.ActiveCanvases)
-            UiRenderer.Render(_renderPipeline, canvas.Screen, (int)_device.Width, (int)_device.Height);
+            UiRenderer.Render(_renderPipeline, canvas.Screen, (int)viewportWidth, (int)viewportHeight);
 
         _profilerOverlay.SetRenderTime(Stopwatch.GetElapsedTime(renderStart).TotalMilliseconds);
-        _profilerOverlay.Render(_renderPipeline, world, (int)_device.Width, (int)_device.Height);
+        _profilerOverlay.Render(_renderPipeline, world, (int)viewportWidth, (int)viewportHeight);
 
         _device.SwapBuffers();
         Verity.Core.Debug.ClearDrawCommands();
@@ -240,6 +253,37 @@ internal sealed class RuntimeApp : IDisposable
         _shader.Dispose();
         _textureManager.Dispose();
         _device.Dispose();
+    }
+
+    private void ApplyWindowBranding(string appTitle)
+    {
+        if (_device is not GraphicsDevice graphicsDevice)
+            return;
+
+        graphicsDevice.SetWindowTitle(appTitle);
+
+        if (string.IsNullOrWhiteSpace(_buildSettings.AppIconPath))
+            return;
+
+        try
+        {
+            byte[]? imageBytes = null;
+            string resolvedPath = AssetPathUtility.ResolvePath(_baseDir, _buildSettings.AppIconPath, _buildSettings.AppIconGuid);
+            if (File.Exists(resolvedPath))
+                imageBytes = File.ReadAllBytes(resolvedPath);
+            else
+                imageBytes = _contentSource.TryReadBytes(_buildSettings.AppIconPath);
+
+            if (imageBytes == null)
+                return;
+
+            ImageResult image = ImageResult.FromMemory(imageBytes, ColorComponents.RedGreenBlueAlpha);
+            graphicsDevice.SetWindowIcon(image.Data, image.Width, image.Height);
+        }
+        catch (Exception ex)
+        {
+            _writeRuntimeLog("Runtime", $"Failed to apply app icon: {ex.Message}");
+        }
     }
 
     private Assembly? LoadUserAssembly()

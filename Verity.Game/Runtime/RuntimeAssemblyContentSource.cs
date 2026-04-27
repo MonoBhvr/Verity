@@ -154,36 +154,10 @@ public sealed class RuntimeAssemblyContentSource : IRuntimeContentSource
             return false;
 
         string suffix = resourceName[assetsPrefix.Length..];
-        if (!TryConvertManifestSuffixToAssetPath(suffix, out string assetRelativePath))
+        if (!RuntimeContentPathMapper.TryConvertManifestSuffixToAssetPath(suffix, out string assetRelativePath))
             return false;
 
         relativePath = Path.Combine("Assets", assetRelativePath);
-        return true;
-    }
-
-    private static bool TryConvertManifestSuffixToAssetPath(string suffix, out string assetRelativePath)
-    {
-        string[] knownExtensions =
-        [
-            ".fontasset.meta", ".uiprefab.meta", ".uistyle.meta", ".animtile.meta", ".ruletile.meta", ".blueprint.meta",
-            ".controller.meta", ".shader.meta", ".style.meta", ".verity.meta", ".json.meta", ".png.meta", ".jpg.meta",
-            ".jpeg.meta", ".bmp.meta", ".wav.meta", ".ogg.meta", ".mp3.meta", ".ttf.meta", ".otf.meta", ".tile.meta",
-            ".ui.meta", ".fontasset", ".uiprefab", ".uistyle", ".animtile", ".ruletile", ".blueprint", ".controller",
-            ".shader", ".style", ".verity", ".json", ".png", ".jpg", ".jpeg", ".bmp", ".wav", ".ogg", ".mp3",
-            ".ttf", ".otf", ".tile", ".ui"
-        ];
-
-        foreach (string extension in knownExtensions)
-        {
-            if (!suffix.EndsWith(extension, StringComparison.OrdinalIgnoreCase))
-                continue;
-
-            string stem = suffix[..^extension.Length];
-            assetRelativePath = stem.Replace('.', Path.DirectorySeparatorChar) + extension;
-            return true;
-        }
-
-        assetRelativePath = suffix.Replace('.', Path.DirectorySeparatorChar);
         return true;
     }
 

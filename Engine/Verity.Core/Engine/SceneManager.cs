@@ -56,6 +56,12 @@ public class BuildSettings
     public List<string> Worlds { get; set; } = new();
     public int StartWorldIndex { get; set; } = 0;
     public string? LogoPath { get; set; }
+    public string AppName { get; set; } = "Verity Game";
+    public string AppIconPath { get; set; } = string.Empty;
+    public string AppIconGuid { get; set; } = string.Empty;
+    public int WindowWidth { get; set; } = 1280;
+    public int WindowHeight { get; set; } = 720;
+    public bool WindowResizable { get; set; } = true;
 
     private static readonly JsonSerializerOptions JsonOptions = new() {
         PropertyNameCaseInsensitive = true,

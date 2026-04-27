@@ -105,7 +105,7 @@ public unsafe class ProjectWindow : EditorWindow
 
     private readonly struct BrowserPreview
     {
-        public BrowserPreview(TextureObjectUploaded? texture, Vector2 uvMin, Vector2 uvMax, int width, int height)
+        public BrowserPreview(RenderTexture? texture, Vector2 uvMin, Vector2 uvMax, int width, int height)
         {
             Texture = texture;
             UvMin = uvMin;
@@ -114,7 +114,7 @@ public unsafe class ProjectWindow : EditorWindow
             Height = height;
         }
 
-        public TextureObjectUploaded? Texture { get; }
+        public RenderTexture? Texture { get; }
         public Vector2 UvMin { get; }
         public Vector2 UvMax { get; }
         public int Width { get; }
@@ -1222,7 +1222,7 @@ public unsafe class ProjectWindow : EditorWindow
 
     private void DrawTexturePreview(BrowserPreview preview, Vector2 position, float size)
     {
-        if (preview.Texture is not OpenGlTexture glTex)
+        if (preview.Texture == null || preview.Texture.ImGuiTextureId == 0)
             return;
 
         float aspect = MathF.Max(0.01f, preview.Width / (float)Math.Max(1, preview.Height));
@@ -1237,7 +1237,7 @@ public unsafe class ProjectWindow : EditorWindow
             position.X + (size - drawWidth) * 0.5f,
             position.Y + (size - drawHeight) * 0.5f);
         var drawList = ImGui.GetWindowDrawList();
-        drawList.AddImage(new ImTextureRef(null, new ImTextureID((nint)glTex.Id)), drawPos, drawPos + new Vector2(drawWidth, drawHeight), preview.UvMin, preview.UvMax);
+        drawList.AddImage(new ImTextureRef(null, new ImTextureID(preview.Texture.ImGuiTextureId)), drawPos, drawPos + new Vector2(drawWidth, drawHeight), preview.UvMin, preview.UvMax);
     }
 
     private bool TryGetFullTexturePreview(string assetPath, out BrowserPreview preview)
@@ -1646,6 +1646,10 @@ public unsafe class ProjectWindow : EditorWindow
     private void DeleteAsset(string path)
     {
         string normalized = NormalizePath(path);
+        string extension = Path.GetExtension(normalized).ToLowerInvariant();
+        string? relativePath = _app.ProjectPath != null
+            ? Path.GetRelativePath(_app.ProjectPath, normalized).Replace("\\", "/")
+            : null;
         try
         {
             if (File.Exists(normalized))
@@ -1665,11 +1669,55 @@ public unsafe class ProjectWindow : EditorWindow
             AssetPathUtility.InvalidateCache(_app.ProjectPath);
             InvalidateBrowserCache();
             ClearSelectionForDeletedPath(normalized);
+
+            if (extension == ".style" && !string.IsNullOrWhiteSpace(relativePath))
+                RemoveDeletedStyleReferences(relativePath);
         }
         catch (Exception e)
         {
             Verity.Core.Debug.LogError($"[Asset] Delete Failed: {e.Message}");
         }
+    }
+
+    internal void RemoveDeletedStyleReferences(string relativePath)
+    {
+        var world = WorldManager.ActiveWorld;
+        if (world == null)
+            return;
+
+        string normalizedRelativePath = AssetPathUtility.Normalize(relativePath);
+        bool changed = false;
+
+        foreach (var entity in world.GetAllEntities())
+        {
+            var spriteRenderer = entity.GetComponent<SpriteRenderer>();
+            if (spriteRenderer != null &&
+                string.Equals(AssetPathUtility.Normalize(spriteRenderer.Style.Path ?? string.Empty), normalizedRelativePath, StringComparison.OrdinalIgnoreCase))
+            {
+                spriteRenderer.Style = default;
+                changed = true;
+            }
+
+            var camera = entity.GetComponent<Camera>();
+            if (camera == null)
+                continue;
+
+            List<CustomPostProcessSettings> customs = camera.PostProcess.GetCustomEffects();
+            for (int i = customs.Count - 1; i >= 0; i--)
+            {
+                if (!string.Equals(AssetPathUtility.Normalize(customs[i].Style.Path ?? string.Empty), normalizedRelativePath, StringComparison.OrdinalIgnoreCase))
+                    continue;
+
+                customs.RemoveAt(i);
+                changed = true;
+            }
+        }
+
+        if (!changed)
+            return;
+
+        _app.MarkAsDirty();
+        SaveActiveWorldAsAsset();
     }
 
     private void DeleteSelectedSpriteAsset()
@@ -2174,6 +2222,9 @@ public unsafe class ProjectWindow : EditorWindow
     private void PublishBuild(PublishBuildMode mode)
     {
         if (_app.IsBuilding || _app.ProjectPath == null)
+            return;
+
+        if (!_app.SaveActiveAssetForBuild())
             return;
 
         Task.Run(() =>

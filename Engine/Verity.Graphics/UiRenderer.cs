@@ -26,6 +26,8 @@ public static class UiRenderer
             Matrix4x4.CreateTranslation(canvasRect.X, canvasRect.Y, 0f);
         foreach (var node in screen.Root.DescendantsAndSelf().Where(n => n.Active && n.Visible))
             RenderNode(pipeline, node, projection, view, targetFbo);
+
+        pipeline.FlushBrowserQuadBatch();
     }
 
     public static void Render(RenderPipeline pipeline, Canvas canvas, int viewportWidth, int viewportHeight, RenderTarget? targetFbo = null)
@@ -114,6 +116,8 @@ public static class UiRenderer
 
         if (string.IsNullOrWhiteSpace(text))
             return;
+
+        pipeline.FlushBrowserQuadBatch();
 
         var rect = GetNodeTextRect(node);
         if (rect.Width <= 0f || rect.Height <= 0f)

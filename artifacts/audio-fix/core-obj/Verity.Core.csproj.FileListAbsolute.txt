@@ -1,0 +1,6 @@
+D:\Verity\artifacts\audio-fix\core-obj\Verity.Core.csproj.AssemblyReference.cache
+D:\Verity\artifacts\audio-fix\core-obj\Verity.Core.GeneratedMSBuildEditorConfig.editorconfig
+D:\Verity\artifacts\audio-fix\core-obj\Verity.Core.AssemblyInfoInputs.cache
+D:\Verity\artifacts\audio-fix\core-obj\Verity.Core.AssemblyInfo.cs
+D:\Verity\artifacts\audio-fix\core-obj\Verity.Core.csproj.CoreCompileInputs.cache
+D:\Verity\artifacts\audio-fix\core-obj\Verity.Core.sourcelink.json

@@ -10,6 +10,9 @@ public static partial class BrowserEntry
     private static Verity.Game.Runtime.BrowserRuntimeSession? _runtimeSession;
     private static string? _lastError;
     private static string? _lastInputEvent;
+    private static readonly Queue<string> _recentLogs = new();
+    private static readonly object _logLock = new();
+    private static bool _browserLogHooked;
 
     [JSExport]
     public static void InitializeRuntime()
@@ -17,6 +20,7 @@ public static partial class BrowserEntry
         try
         {
             _lastError = null;
+            HookBrowserLogs();
             _runtimeSession?.Dispose();
             _runtimeSession = Verity.Game.Runtime.RuntimeBootstrap.CreateBrowserSession(new BrowserRuntimeHost(false));
         }
@@ -53,7 +57,24 @@ public static partial class BrowserEntry
         if (!string.IsNullOrWhiteSpace(_lastError))
             return $"error={_lastError}";
 
-        return _runtimeSession?.GetDebugState() ?? "session=<null>";
+        var builder = new StringBuilder();
+        builder.Append(_runtimeSession?.GetDebugState() ?? "session=<null>");
+
+        string[] logs;
+        lock (_logLock)
+            logs = _recentLogs.ToArray();
+
+        if (logs.Length > 0)
+        {
+            builder.Append("\n\nLogs:");
+            foreach (string log in logs)
+            {
+                builder.Append('\n');
+                builder.Append(log);
+            }
+        }
+
+        return builder.ToString();
     }
 
     [JSExport]
@@ -116,6 +137,24 @@ public static partial class BrowserEntry
     {
         _lastInputEvent = $"mouseWheel:{delta:0.##}";
         InputState.ProcessEvent(InputEvent.MouseWheel(delta));
+    }
+
+    private static void HookBrowserLogs()
+    {
+        if (_browserLogHooked)
+            return;
+
+        _browserLogHooked = true;
+        Verity.Core.Debug.OnLog += (message, level) =>
+        {
+            string line = $"[{level}] {message}";
+            lock (_logLock)
+            {
+                _recentLogs.Enqueue(line);
+                while (_recentLogs.Count > 8)
+                    _recentLogs.Dequeue();
+            }
+        };
     }
 
     private static bool TryMapMouseButton(int button, out MouseButton mappedButton)

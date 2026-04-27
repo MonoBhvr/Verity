@@ -51,6 +51,14 @@ public static class Time
     public static int PhysicsTickCount { get; internal set; }
 
     /// <summary>
+    /// Advances the rendered frame counter.
+    /// </summary>
+    public static void AdvanceFrame()
+    {
+        FrameCount++;
+    }
+
+    /// <summary>
     /// Resets all time values to their defaults.
     /// </summary>
     public static void Reset()

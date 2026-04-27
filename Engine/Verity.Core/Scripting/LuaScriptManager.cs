@@ -371,8 +371,6 @@ public static class LuaScriptManager
     }
 
     private const string BootstrapScript = """
-print('Hello Lua')
-
 function __verity_create_coroutine(fn)
     return coroutine.create(fn)
 end

@@ -35,6 +35,8 @@ public class AudioSource : Component
     public float MaxDistance { get; set; } = 10.0f;
 
     public int CurrentChannel { get; internal set; } = -1;
+    internal float RuntimeVolumeScale { get; set; } = 1.0f;
+    internal float RuntimePitchScale { get; set; } = 1.0f;
 
     protected override void OnEnable()
     {

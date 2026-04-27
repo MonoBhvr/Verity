@@ -3,6 +3,28 @@ const status = document.getElementById('verity-status');
 let lastOverlayUpdate = 0;
 canvas.focus();
 
+function toCanvasSpace(clientX, clientY) {
+  const rect = canvas.getBoundingClientRect();
+  const width = Math.max(1, rect.width);
+  const height = Math.max(1, rect.height);
+  const x = ((clientX - rect.left) / width) * Math.max(1, canvas.width || 1);
+  const y = ((clientY - rect.top) / height) * Math.max(1, canvas.height || 1);
+  return {
+    x: Math.max(0, Math.min(Math.max(1, canvas.width || 1), x)),
+    y: Math.max(0, Math.min(Math.max(1, canvas.height || 1), y))
+  };
+}
+
+function syncCanvasPresentation() {
+  const renderWidth = Math.max(1, canvas.width || 1);
+  const renderHeight = Math.max(1, canvas.height || 1);
+  const scale = Math.min(window.innerWidth / renderWidth, window.innerHeight / renderHeight);
+  canvas.style.width = `${Math.max(1, Math.floor(renderWidth * scale))}px`;
+  canvas.style.height = `${Math.max(1, Math.floor(renderHeight * scale))}px`;
+}
+
+window.addEventListener('resize', syncCanvasPresentation);
+
 function setStatus(text) {
   if (status) {
     status.style.display = 'block';
@@ -59,6 +81,7 @@ async function bootstrap() {
   try {
     browserEntry.InitializeRuntime();
     browserEntry.ResetInputState();
+    syncCanvasPresentation();
     setStatus(browserEntry.GetDebugState());
   } catch (error) {
     const message = error?.stack || error?.message || String(error);
@@ -67,7 +90,8 @@ async function bootstrap() {
   }
 
   const handleMouseMove = (event) => {
-    browserEntry.OnMouseMove(event.offsetX, event.offsetY);
+    const point = toCanvasSpace(event.clientX, event.clientY);
+    browserEntry.OnMouseMove(point.x, point.y);
   };
 
   const handleMouseDown = (event) => {

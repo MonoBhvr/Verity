@@ -40,7 +40,7 @@ export function createContext(canvasId, width, height) {
 
   canvas.width = width;
   canvas.height = height;
-  const gl = canvas.getContext('webgl2', { alpha: true, antialias: true });
+  const gl = canvas.getContext('webgl2', { alpha: true, antialias: false });
   if (!gl) {
     throw new Error('WebGL2 is not available in this browser.');
   }
@@ -100,8 +100,13 @@ function compileShader(gl, type, source) {
   gl.compileShader(shader);
   if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
     const info = gl.getShaderInfoLog(shader);
+    const shaderType = type === gl.VERTEX_SHADER ? 'vertex' : 'fragment';
+    const numberedSource = source
+      .split('\n')
+      .map((line, index) => `${index + 1}: ${line}`)
+      .join('\n');
     gl.deleteShader(shader);
-    throw new Error(info ?? 'Shader compile failed');
+    throw new Error(`${shaderType} shader compile failed\n${info ?? 'unknown error'}\n--- source ---\n${numberedSource}`);
   }
   return shader;
 }
@@ -119,7 +124,7 @@ export function createProgram(contextHandle, vertexSource, fragmentSource) {
   if (!gl.getProgramParameter(program, gl.LINK_STATUS)) {
     const info = gl.getProgramInfoLog(program);
     gl.deleteProgram(program);
-    throw new Error(info ?? 'Program link failed');
+    throw new Error(`program link failed\n${info ?? 'unknown error'}`);
   }
   return allocateHandle(programs, { gl, program, uniforms: new Map(), textureUnits: new Map() });
 }

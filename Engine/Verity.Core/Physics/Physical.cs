@@ -27,8 +27,38 @@ public class Physical : Component
         set { _inertia = value; }
     }
 
-    public Vector2 Velocity { get; set; } = Vector2.Zero;
-    public float AngularVelocity { get; set; } = 0.0f;
+    private Vector2 _velocity = Vector2.Zero;
+    private float _angularVelocity;
+
+    public Vector2 Velocity
+    {
+        get => _velocity;
+        set
+        {
+            if (_velocity == value)
+                return;
+
+            bool shouldWake = value.LengthSquared() > 0.000001f && (_velocity - value).LengthSquared() > 0.000001f;
+            _velocity = value;
+            if (shouldWake)
+                WakeUp();
+        }
+    }
+
+    public float AngularVelocity
+    {
+        get => _angularVelocity;
+        set
+        {
+            if (MathF.Abs(_angularVelocity - value) <= 0.000001f)
+                return;
+
+            bool shouldWake = MathF.Abs(value) > 0.000001f;
+            _angularVelocity = value;
+            if (shouldWake)
+                WakeUp();
+        }
+    }
 
     [HideInInspector]
     public float TorqueAccumulator { get; set; } = 0.0f;

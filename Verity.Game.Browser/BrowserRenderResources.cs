@@ -25,9 +25,6 @@ internal sealed class BrowserRenderProgram : RenderProgram
     public override void SetTexture(string name, RenderTexture texture)
     {
         int handle = ((BrowserRenderTexture)texture).TextureHandle;
-        if (_textureCache.TryGetValue(name, out int current) && current == handle)
-            return;
-
         _textureCache[name] = handle;
         BrowserGraphicsInterop.BindProgramTexture(_contextHandle, _programHandle, name, handle);
     }
@@ -104,6 +101,7 @@ internal sealed class BrowserRenderTexture : RenderTexture
 
     public override int Width { get; }
     public override int Height { get; }
+    public override nint ImGuiTextureId => 0;
 
     public override void Dispose() => BrowserGraphicsInterop.DeleteTexture(_contextHandle, TextureHandle);
 }

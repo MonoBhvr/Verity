@@ -4,9 +4,6 @@ using System.Linq;
 using System.IO;
 using System.Text.Json;
 using Hexa.NET.ImGui;
-using Irodori.Backend.OpenGL;
-using Irodori.Framebuffer;
-using Irodori.Texture;
 using Verity.Core;
 using Verity.Core.UI;
 using Verity.Graphics;
@@ -60,8 +57,8 @@ public sealed unsafe class UIEditorWindow : EditorWindow
     private readonly Dictionary<UiBinding, bool> _bindingAdvancedModes = new();
     private string _lastCommittedScreenJson = string.Empty;
     private UiEditorUndoSnapshot? _pendingContinuousUndoSnapshot;
-    private FramebufferObject.Uploaded? _previewFbo;
-    private TextureObjectUploaded? _previewColorTex;
+    private RenderTarget? _previewFbo;
+    private RenderTexture? _previewColorTex;
     private int _previewRenderWidth;
     private int _previewRenderHeight;
     private bool _restoringUndo;
@@ -480,12 +477,12 @@ public sealed unsafe class UIEditorWindow : EditorWindow
         UiRenderer.Render(_app.RenderPipeline, _screen, renderWidth, renderHeight, _previewFbo);
         _app.Profiler.RecordRenderStage("UI Preview Render", System.Diagnostics.Stopwatch.GetElapsedTime(renderStart).TotalMilliseconds);
 
-        if (_previewColorTex is not OpenGlTexture glTex)
+        if (_previewColorTex == null || _previewColorTex.ImGuiTextureId == 0)
             return;
 
         draw.PushClipRect(canvasPos, canvasPos + canvasSize, true);
         draw.AddImage(
-            new ImTextureRef(null, new ImTextureID((nint)glTex.Id)),
+            new ImTextureRef(null, new ImTextureID(_previewColorTex.ImGuiTextureId)),
             canvasPos,
             canvasPos + canvasSize,
             new Vector2(0f, 1f),
@@ -501,20 +498,15 @@ public sealed unsafe class UIEditorWindow : EditorWindow
         _previewFbo?.Dispose();
         _previewColorTex?.Dispose();
 
-        unsafe
-        {
-            _previewColorTex = _app.Device.CreateTexture()
-                .WithSize(width, height)
-                .WithTextureType(ETextureInternalType.Rgba8)
-                .WithFilter(ETextureFilter.Linear, ETextureFilter.Linear)
-                .Upload(TextureData.Create((void*)null))
-                .Unwrap();
-        }
+        _previewColorTex = _app.Device.CreateTexture()
+            .WithSize(width, height)
+            .WithRgba8()
+            .WithFilter(RenderTextureFilter.Linear)
+            .UploadEmpty();
 
         _previewFbo = _app.Device.CreateFramebuffer()
             .WithColorAttachment(_previewColorTex)
-            .Upload()
-            .Unwrap();
+            .Upload();
         _previewRenderWidth = width;
         _previewRenderHeight = height;
     }

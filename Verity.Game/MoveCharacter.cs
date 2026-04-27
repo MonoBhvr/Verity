@@ -17,6 +17,8 @@ public class MoveCharacter : Script
     {
         ps = Owner.GetComponent<Physical>();
         sr = Owner.GetComponent<SpriteRenderer>();
+        if (ps != null)
+            ps.Friction = 0f;
         Debug.Log($"[MoveCharacter.Start] entity={Owner.Name}, physical={(ps != null)}, sprite={(sr != null)}");
     }
 
@@ -32,8 +34,8 @@ public class MoveCharacter : Script
             return;
         }
 
-        bool left = Input.Down(KeyCode.LeftArrow) || Input.Pressed(KeyCode.LeftArrow);
-        bool right = Input.Down(KeyCode.RightArrow) || Input.Pressed(KeyCode.RightArrow);
+        bool left = Input.Down(KeyCode.A) || Input.Down(KeyCode.LeftArrow);
+        bool right = Input.Down(KeyCode.D) || Input.Down(KeyCode.RightArrow);
         float inpX = (left ? -1 : 0) + (right ? 1 : 0);
         inpX *= speed;
 
@@ -43,12 +45,13 @@ public class MoveCharacter : Script
             sr.FlipX = inpX < 0;
 
         PhysicsMath.RaycastHit hit = PhysicsManager.Raycast(Owner.Transform.Position, new Vector2(0, -1), 0.55f, Owner);
-        if (Input.Pressed(KeyCode.Space) && hit.IsHit)
+        bool jump = Input.Pressed(KeyCode.W) || Input.Pressed(KeyCode.Space) || Input.Pressed(KeyCode.UpArrow);
+        if (jump && hit.IsHit)
             ps.Velocity = new Vector2(ps.Velocity.X, jumpForce);
 
         if (debugFrames < 10)
         {
-            Debug.Log($"[MoveCharacter.Update] left={left}, right={right}, jump={Input.Pressed(KeyCode.Space)}, vel=({ps.Velocity.X:0.###},{ps.Velocity.Y:0.###}), pos=({Owner.Transform.Position.X:0.###},{Owner.Transform.Position.Y:0.###}), grounded={hit.IsHit}");
+            Debug.Log($"[MoveCharacter.Update] left={left}, right={right}, jump={jump}, vel=({ps.Velocity.X:0.###},{ps.Velocity.Y:0.###}), pos=({Owner.Transform.Position.X:0.###},{Owner.Transform.Position.Y:0.###}), grounded={hit.IsHit}");
             debugFrames++;
         }
     }

@@ -1,6 +1,5 @@
 using System.Numerics;
 using Hexa.NET.ImGui;
-using Irodori.Backend.OpenGL;
 using Verity.Core.ECS;
 using Verity.Core.World;
 using Verity.Core;
@@ -154,9 +153,9 @@ public unsafe class WorldViewWindow : EditorWindow
         }
 
         var colorTex = _app.RenderPipeline.WorldColorTexture;
-        if (colorTex is OpenGlTexture glTex) {
+        if (colorTex != null && colorTex.ImGuiTextureId != 0) {
             unsafe {
-                var texRef = new ImTextureRef(null, new ImTextureID((nint)glTex.Id));
+                var texRef = new ImTextureRef(null, new ImTextureID(colorTex.ImGuiTextureId));
                 ImGui.Image(texRef, contentSize, new Vector2(0, 1), new Vector2(1, 0));
             }
             var imgMin = ImGui.GetItemRectMin();
@@ -226,7 +225,7 @@ public unsafe class WorldViewWindow : EditorWindow
         foreach (var child in e.Transform.Children) SetAlphaRecursive(child.Owner, alpha);
     }
 
-    private void DrawGrid(Irodori.Framebuffer.FramebufferObject.Uploaded? fbo)
+    private void DrawGrid(RenderTarget? fbo)
     {
         var cam = _app.WorldCamera;
         float hH = cam.VisibleHalfHeight; float hW = cam.VisibleHalfWidth;
@@ -248,7 +247,7 @@ public unsafe class WorldViewWindow : EditorWindow
         _app.RenderPipeline.RenderGizmoLine(new Vector2(left, 0), new Vector2(right, 0), pixel * 2.0f, Verity.Core.Color.FromRgba(255, 100, 100, 160), cam, fbo);
     }
 
-    private void DrawSpatialGridLines(float step, float maxAlpha, float visibleRadius, Camera cam, Irodori.Framebuffer.FramebufferObject.Uploaded? fbo, float left, float right, float top, float bottom, float pixel)
+    private void DrawSpatialGridLines(float step, float maxAlpha, float visibleRadius, Camera cam, RenderTarget? fbo, float left, float right, float top, float bottom, float pixel)
     {
         float screenDist = step / pixel;
         if (screenDist < 10f) return;
@@ -462,7 +461,7 @@ public unsafe class WorldViewWindow : EditorWindow
         }
     }
 
-    private void RenderRectHandles(Vector2 center, Vector2 size, float rotation, Camera cam, Irodori.Framebuffer.FramebufferObject.Uploaded? fbo)
+    private void RenderRectHandles(Vector2 center, Vector2 size, float rotation, Camera cam, RenderTarget? fbo)
     {
         var handles = GetHandlePositions(center, size, rotation);
         float pixel = GetWorldPixelSize();
@@ -473,7 +472,7 @@ public unsafe class WorldViewWindow : EditorWindow
         }
     }
 
-    private void RenderScaleHandles(Vector2 center, Vector2 size, float rotation, Camera cam, Irodori.Framebuffer.FramebufferObject.Uploaded? fbo)
+    private void RenderScaleHandles(Vector2 center, Vector2 size, float rotation, Camera cam, RenderTarget? fbo)
     {
         var handles = GetHandlePositions(center, size, rotation);
         float pixel = GetWorldPixelSize();
@@ -485,7 +484,7 @@ public unsafe class WorldViewWindow : EditorWindow
         }
     }
 
-    private void RenderRotateHandle(Vector2 center, Vector2 size, float rotation, Camera cam, Irodori.Framebuffer.FramebufferObject.Uploaded? fbo)
+    private void RenderRotateHandle(Vector2 center, Vector2 size, float rotation, Camera cam, RenderTarget? fbo)
     {
         float pixel = GetWorldPixelSize();
         float rad = rotation * MathF.PI / 180f;

@@ -1102,8 +1102,30 @@ public static class SceneSerializer
     {
         // List of core engine namespaces to search in AppDomain
         string[] engineNamespaces = { "Verity.Core", "Verity.Graphics", "Verity.Input" };
+        string shortName = name.Contains('.') ? name[(name.LastIndexOf('.') + 1)..] : name;
 
-        // 1. If it looks like a user script (no engine namespace), check userAsm FIRST
+        // 1. Prefer built-in gameplay/runtime types already loaded in AppDomain.
+        // This avoids stale UserScripts.dll content overriding browser-safe built-in scripts.
+        foreach (var asm in AppDomain.CurrentDomain.GetAssemblies())
+        {
+            try
+            {
+                var exact = asm.GetType(name);
+                if (exact != null) return exact;
+
+                if (string.Equals(asm.GetName().Name, "Verity.Game", StringComparison.Ordinal))
+                {
+                    foreach (var type in asm.GetTypes())
+                    {
+                        if (type.Name == shortName || type.FullName == name)
+                            return type;
+                    }
+                }
+            }
+            catch { }
+        }
+
+        // 2. If it looks like a user script (no engine namespace), check userAsm.
         bool looksLikeUserScript = !engineNamespaces.Any(ns => name.StartsWith(ns));
 
         if (looksLikeUserScript && userAsm != null)
@@ -1112,14 +1134,13 @@ public static class SceneSerializer
             if (t != null) return t;
 
             // Fallback: search by short name in user assembly
-            string shortName = name.Contains('.') ? name.Substring(name.LastIndexOf('.') + 1) : name;
             foreach (var type in userAsm.GetTypes())
             {
                 if (type.Name == shortName || type.FullName == name) return type;
             }
         }
 
-        // 2. Search in AppDomain (Engine types)
+        // 3. Search in AppDomain (remaining loaded types)
         foreach (var asm in AppDomain.CurrentDomain.GetAssemblies())
         {
             try {
@@ -1128,10 +1149,9 @@ public static class SceneSerializer
             } catch { }
         }
 
-        // 3. Last resort: Global search by short name (only if userAsm didn't yield anything)
+        // 4. Last resort: Global search by short name (only if userAsm didn't yield anything)
         if (userAsm == null)
         {
-            string shortName = name.Contains('.') ? name.Substring(name.LastIndexOf('.') + 1) : name;
             foreach (var asm in AppDomain.CurrentDomain.GetAssemblies())
             {
                 try {
