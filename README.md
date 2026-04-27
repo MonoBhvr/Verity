@@ -1,6 +1,6 @@
 # Verity Engine
 
-## **Even Slow, Use Easier**
+## **Even Slow, Make Easier**
 Verity는 개발 입문자와 1인 개발자를 위해 설계된, 완전히 C#으로 작성된 쉽고 강력한 2D 게임 엔진입니다.
 
 Verity는 복잡한 네이티브 코드 대신 최신 .NET 환경을 기반으로 하며, 직관적인 에디터와 강력한 ECS 아키텍처를 결합하여 아이디어를 빠르게 프로토타입으로 구현할 수 있게 돕습니다.
@@ -9,7 +9,7 @@ Verity는 복잡한 네이티브 코드 대신 최신 .NET 환경을 기반으�
 
 ## 주요 특징
 
--   **간결한 C# 스크립팅**: 복잡한 설정 없이 C# 클래스를 상속받는 것만으로 게임 로직을 작성할 수 있습니다.
+-   **간결한 스크립팅**: 복잡한 설정 없이 C# 클래스를 상속받는 것만으로 게임 로직을 작성할 수 있으며, Lua를 이용한 빠른 스크립팅이 가능합니다.
 -   **통합 에디터**: 직관적인 계층 구조(Hierarchy), 인스펙터(Inspector), 프로젝트 관리 시스템을 포함합니다.
 -   **현대적인 ECS 아키텍처**: 엔티티-컴포넌트-시스템 구조를 통해 유연하고 확장성 있는 개발이 가능합니다.
 -   **멀티 인스턴스 런처**: 유니티 허브 스타일의 런처를 통해 여러 프로젝트를 동시에 관리하고 안전하게 열 수 있습니다.
@@ -17,11 +17,18 @@ Verity는 복잡한 네이티브 코드 대신 최신 .NET 환경을 기반으�
 -   **필터 시스템**: Tag, Sorting Layer, Physics Group, 여러 enum 타입을 화이트리스트와 블랙리스트로 관리하여 빠른 검색과 최적화된 시스템 업데이트를 제공합니다.
 
 ---
+## 지원 스크립팅 언어
+- **C#**(권장): 엔진 구현 언어이자 스크립팅 언어로 사용됩니다. 기본적인 권장 언어입니다. 
+- **Lua**: 빠른 스크립팅과 테스팅을 위한 스크립팅 언어입니다. 핫리로드를 지원합니다.
+
+
+- 앞으로 Python, JS 등을 지원할 예정입니다.
+---
 
 ## 기술 스택
 
 -   **Language**: C# 12 / .NET 9.0
--   **Graphics**: Irodori (OpenGL, via Silk.Net)
+-   **Graphics**: [Irodori (OpenGL, via Silk.Net)](https://github.com/R2turnTrue/irodori)
 -   **UI Framework**: Dear ImGui (Hexa.NET.ImGui)
 -   **Windowing**: SDL2
 
@@ -91,19 +98,10 @@ dotnet run --project Editor/Verity.Editor.App/Verity.Editor.App.csproj
 ## 상태
 
 Verity Engine은 현재 활발히 개발 중인 Alpha 단계 프로젝트입니다. 핵심 기능들이 지속적으로 추가 및 개선되고 있습니다.
+
+1인 개발 프로젝트이기 때문에 알려지지 않은 심각한 보안 문제나 엔진 결함이 존재할 수 있습니다. 사용시 주의 바랍니다.
 ### 진행 중
-- **UI** : 현재 개발 중이며, 편집기 UI와 런타임 UI 사용성이 지속적으로 개선되고 있습니다.
 - **Networking** : 구현되지 않았습니다.
 
-### 완료
-- **Sprite Setting** : 9-slice를 포함한 스프라이트 설정 기능이 구현되었습니다.
-- **Animation** : Discovery 테스트와 후속 수정이 완료되어 현재 동작이 검증되었습니다.
-- **Filter 시스템 독립 프로젝트** : 완료
-- **파티클 시스템** : 완료
-- **이벤트 버스** : 완료
-- **오브젝트 풀링** : 완료
-- **씬 전환 시스템** : 완료
-- **세이브/로드 시스템** : 완료
-- **9-slice 스프라이트** : 완료
-- **프로파일링 인게임 오버레이** : 완료
-- **DynamicArea 부분 갱신 최적화** : 완료
+## Special Thanks
+- R2trunTrue : 엔진의 그래픽 엔진으로 사용중인 오픈소스 그래픽 엔진인 [Irodori](https://github.com/R2turnTrue/irodori)를 개발하신 분입니다!
