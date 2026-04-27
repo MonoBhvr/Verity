@@ -1,6 +1,6 @@
 namespace Verity.Core.Audio;
 
-public sealed class SdlAudioRuntime : IAudioRuntime
+public sealed class MiniaudioAudioRuntime : IAudioRuntime
 {
     public void Initialize()
     {

@@ -2019,7 +2019,7 @@ public unsafe class InspectorWindow : EditorWindow
             });
             return;
         }
-        DrawValueEditor(name, type, value, wrappedUpdate);
+        DrawValueEditor(name, type, value, wrappedUpdate, target);
     }
 
     private bool HasAttribute(MemberInfo member, string attributeName)
@@ -2642,10 +2642,10 @@ public unsafe class InspectorWindow : EditorWindow
         return anyValue;
     }
 
-    private void DrawValueEditor(string name, Type type, object? value, Action<object?> onUpdate)
+    private void DrawValueEditor(string name, Type type, object? value, Action<object?> onUpdate, object? target = null)
     {
         if (type == typeof(PostProcessSettings)) { DrawPostProcessSettings(name, value as PostProcessSettings, onUpdate); return; }
-        if (type == typeof(AudioClip)) { DrawAudioClipField(name, value as AudioClip, onUpdate); return; }
+        if (type == typeof(AudioClip)) { DrawAudioClipField(name, value as AudioClip, onUpdate, target); return; }
         if (type == typeof(Sprite)) { DrawSpriteField(name, (Sprite?)value ?? default, onUpdate); return; }
         if (type == typeof(StyleAsset)) { DrawStyleField(name, (StyleAsset?)value ?? default, onUpdate); return; }
         if (type == typeof(ShaderAsset)) { DrawShaderField(name, (ShaderAsset?)value ?? default, onUpdate); return; }
@@ -3274,7 +3274,7 @@ public unsafe class InspectorWindow : EditorWindow
             _app.OpenWindow(hierarchy);
     }
 
-    private void DrawAudioClipField(string name, AudioClip? current, Action<object?> onUpdate)
+    private void DrawAudioClipField(string name, AudioClip? current, Action<object?> onUpdate, object? target = null)
     {
         current ??= new AudioClip();
 
@@ -3359,7 +3359,10 @@ public unsafe class InspectorWindow : EditorWindow
         {
             string resolved = ResolveAssetPath(current.Path);
             current.PostLoad(resolved);
-            current.Preview();
+            if (target is AudioSource audioSource)
+                audioSource.PlayOneShot(current);
+            else
+                current.Preview();
         }
 
         ImGui.PopID();

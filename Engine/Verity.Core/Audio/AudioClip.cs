@@ -1,5 +1,6 @@
 using System;
-using SDL2;
+using Verity.Core.ECS;
+using Verity.Core.Serialization;
 
 namespace Verity.Core.Audio;
 
@@ -9,24 +10,23 @@ public enum AudioType
     Music
 }
 
-/// <summary>
-/// 오디오 클립은 로드된 사운드 데이터를 나타냅니다.
-/// </summary>
 public class AudioClip : IDisposable, IPathAsset
 {
     public string Name { get; set; } = "New Audio Clip";
     public string Path { get; set; } = string.Empty;
     public string Guid { get; set; } = string.Empty;
     [System.Text.Json.Serialization.JsonIgnore]
-    public IntPtr Handle { get; private set; }
+    public IntPtr Handle => IntPtr.Zero;
+    [System.Text.Json.Serialization.JsonIgnore]
+    internal object? BackendState { get; set; }
     public AudioType Type { get; set; } = AudioType.Effect;
-
-    // [기획 보완] 클립별 기본 설정
     public float DefaultVolume { get; set; } = 1.0f;
     public float DefaultPitch { get; set; } = 1.0f;
     public bool IsLooping { get; set; } = false;
 
-    public AudioClip() { }
+    public AudioClip()
+    {
+    }
 
     public AudioClip(string name, string path, AudioType type)
     {
@@ -34,13 +34,7 @@ public class AudioClip : IDisposable, IPathAsset
         Path = AssetPathUtility.Normalize(path);
         Guid = System.IO.Path.IsPathRooted(path) ? AssetPathUtility.EnsureMetaAndGetGuid(path) : string.Empty;
         Type = type;
-        
         PostLoad();
-
-        if (Handle == IntPtr.Zero)
-        {
-            Verity.Core.Debug.LogError($"오디오 파일을 로드할 수 없습니다: {path}. 에러: {SDL.SDL_GetError()}");
-        }
     }
 
     public static AudioClip FromPath(string path, AudioType? type = null)
@@ -57,50 +51,74 @@ public class AudioClip : IDisposable, IPathAsset
 
     public void PostLoad(string? resolvedPath = null)
     {
-        Dispose();
-
-        string targetPath = resolvedPath ?? Path;
+        string targetPath = ResolveRuntimePath(resolvedPath);
         if (string.IsNullOrWhiteSpace(targetPath))
             return;
 
-        Handle = Type == AudioType.Music ? SDL_mixer.Mix_LoadMUS(targetPath) : SDL_mixer.Mix_LoadWAV(targetPath);
+        Dispose();
+        AudioSystem.LoadClip(this, targetPath);
 
-        if (Handle == IntPtr.Zero)
-        {
-            Verity.Core.Debug.LogError($"[AudioClip] Failed to load audio file: {targetPath}. Error: {SDL.SDL_GetError()}");
-        }
+        if (!AudioSystem.IsClipLoaded(this))
+            Verity.Core.Debug.LogError($"[AudioClip] Failed to prepare audio file: {targetPath}.");
     }
 
     public void Preview()
     {
-        if (Handle == IntPtr.Zero)
+        if (!AudioSystem.IsClipLoaded(this))
             PostLoad();
 
-        if (Handle == IntPtr.Zero) return;
+        if (!AudioSystem.IsClipLoaded(this))
+            return;
 
-        if (Type == AudioType.Effect)
+        AudioManager? manager = Entity.FindObjectOfType<AudioManager>();
+        if (manager != null)
         {
-            SDL_mixer.Mix_PlayChannel(-1, Handle, 0);
+            manager.Preview(this);
+            return;
         }
-        else
-        {
-            SDL_mixer.Mix_PlayMusic(Handle, 0);
-        }
+
+        AudioSystem.PreviewClip(this);
     }
 
     public void Dispose()
     {
-        if (Handle == IntPtr.Zero) return;
+        AudioSystem.UnloadClip(this);
+    }
 
-        if (Type == AudioType.Music)
+    internal string GetRuntimePath()
+    {
+        string? loadedPath = BackendState as string;
+        string resolved = ResolveRuntimePath(loadedPath);
+        if (!string.IsNullOrWhiteSpace(resolved))
+            BackendState = resolved;
+
+        return resolved;
+    }
+
+    private string ResolveRuntimePath(string? resolvedPath)
+    {
+        if (!string.IsNullOrWhiteSpace(resolvedPath))
         {
-            SDL_mixer.Mix_FreeMusic(Handle);
+            if (System.IO.Path.IsPathRooted(resolvedPath))
+                return System.IO.Path.GetFullPath(resolvedPath);
+
+            string? assetRootFromResolved = SceneSerializer.AssetRootPath;
+            if (!string.IsNullOrWhiteSpace(assetRootFromResolved))
+                return AssetPathUtility.ResolvePath(assetRootFromResolved, resolvedPath, Guid);
+
+            return resolvedPath;
         }
-        else
-        {
-            SDL_mixer.Mix_FreeChunk(Handle);
-        }
-        Handle = IntPtr.Zero;
+
+        if (string.IsNullOrWhiteSpace(Path))
+            return string.Empty;
+
+        if (System.IO.Path.IsPathRooted(Path))
+            return System.IO.Path.GetFullPath(Path);
+
+        string? assetRoot = SceneSerializer.AssetRootPath;
+        return string.IsNullOrWhiteSpace(assetRoot)
+            ? Path
+            : AssetPathUtility.ResolvePath(assetRoot, Path, Guid);
     }
 
     public override string ToString() => string.IsNullOrWhiteSpace(Path) ? Name : $"{Name} ({Path})";

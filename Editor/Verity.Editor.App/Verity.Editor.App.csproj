@@ -9,16 +9,6 @@
 
   <ItemGroup>
     <ProjectReference Include="..\Verity.Editor\Verity.Editor.csproj" />
-    <PackageReference Include="sdl2_mixer.nuget.redist" Version="2.8.1" GeneratePathProperty="true" />
-  </ItemGroup>
-
-  <ItemGroup>
-    <Content Include="$(Pkgsdl2_mixer_nuget_redist)\build\native\bin\x64\SDL2_mixer.dll"
-             Condition="Exists('$(Pkgsdl2_mixer_nuget_redist)\build\native\bin\x64\SDL2_mixer.dll')">
-      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-      <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
-      <Link>SDL2_mixer.dll</Link>
-    </Content>
   </ItemGroup>
 
   <Target Name="ConvertPngToIco" BeforeTargets="BeforeBuild;PrepareForBuild">
