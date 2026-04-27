@@ -31,6 +31,7 @@ Verity는 복잡한 네이티브 코드 대신 최신 .NET 환경을 기반으�
 -   **Graphics**: [Irodori (OpenGL, via Silk.Net)](https://github.com/R2turnTrue/irodori)
 -   **UI Framework**: Dear ImGui (Hexa.NET.ImGui)
 -   **Windowing**: SDL2
+-   **Audio**: miniaudio (via Miniaudio-CS)
 
 ---
 

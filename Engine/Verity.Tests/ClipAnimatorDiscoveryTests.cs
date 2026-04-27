@@ -1,6 +1,8 @@
 using Verity.Core.Animation;
 using Verity.Core.ECS;
 
+#pragma warning disable CS0618 // ClipAnimator is intentionally exercised here while deprecated.
+
 namespace Verity.Tests;
 
 public sealed class ClipAnimatorDiscoveryTests
@@ -207,3 +209,5 @@ public sealed class ClipAnimatorDiscoveryTests
         return track;
     }
 }
+
+#pragma warning restore CS0618

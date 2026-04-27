@@ -8,7 +8,7 @@ public sealed class NativeRuntimeHost : IRuntimeHost
     private readonly IGraphicsDeviceFactory _graphicsDeviceFactory;
 
     public NativeRuntimeHost()
-        : this(new SdlOpenGlGraphicsDeviceFactory(), new SdlAudioRuntime())
+        : this(new SdlOpenGlGraphicsDeviceFactory(), new MiniaudioAudioRuntime())
     {
     }
 

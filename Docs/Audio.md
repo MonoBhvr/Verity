@@ -15,7 +15,7 @@
 
 ## 1. 오디오 시스템 개요
 
-현재 오디오 시스템은 SDL_mixer 기반이며, 월드당 하나의 `AudioManager`가 그룹과 공간 음향 갱신을 담당합니다.
+현재 오디오 시스템은 데스크톱에서 miniaudio 백엔드를 사용하며, 월드당 하나의 `AudioManager`가 그룹과 공간 음향 갱신을 담당합니다.
 
 ### 존재 이유
 
@@ -44,7 +44,7 @@
 | `Name` | `string` | 표시 이름 |
 | `Path` | `string` | 에셋 경로 |
 | `Guid` | `string` | 에셋 GUID |
-| `Handle` | `IntPtr` | SDL 로드 핸들 |
+| `Handle` | `IntPtr` | 런타임 호환용 핸들 값 |
 | `Type` | `AudioType` | 음악/효과음 구분 |
 | `DefaultVolume` | `float` | 기본 볼륨 |
 | `DefaultPitch` | `float` | 기본 피치 |
@@ -138,7 +138,7 @@
 
 ## 7. `AudioSystem`
 
-`AudioSystem`은 SDL 오디오 서브시스템 초기화와 종료를 담당합니다.
+`AudioSystem`은 오디오 백엔드 초기화와 종료를 담당합니다.
 
 ### 메서드
 
@@ -181,4 +181,3 @@
 ### 존재 이유
 
 - 그룹별 볼륨, active listener, 공간 음향 보정을 중앙에서 관리해야 하기 때문입니다.
-

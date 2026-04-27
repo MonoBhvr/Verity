@@ -1,3 +1,4 @@
+using System.Runtime.Versioning;
 using System.Runtime.InteropServices.JavaScript;
 using System.Text;
 using Verity.Input;
@@ -5,6 +6,7 @@ using InputState = Verity.Input.Input;
 
 namespace Verity.Game.Browser;
 
+[SupportedOSPlatform("browser")]
 public static partial class BrowserEntry
 {
     private static Verity.Game.Runtime.BrowserRuntimeSession? _runtimeSession;

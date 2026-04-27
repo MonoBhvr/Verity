@@ -69,7 +69,7 @@ public class AudioSource : Component
     public void PlayOneShot(AudioClip clip, float volumeScale = 1.0f)
     {
         if (clip == null) return;
-        AudioManager.Instance?.PlayOneShot(clip, GroupName, volumeScale, IsSpatial ? Transform.WorldPosition : null, MinDistance, MaxDistance);
+        AudioManager.Instance?.PlayOneShot(this, clip, volumeScale);
     }
 
     public override void OnDestroy()
