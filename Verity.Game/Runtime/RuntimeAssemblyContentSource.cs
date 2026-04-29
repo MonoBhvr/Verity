@@ -1,4 +1,6 @@
 using System.Reflection;
+using System.Security.Cryptography;
+using System.Text;
 
 namespace Verity.Game.Runtime;
 
@@ -124,20 +126,43 @@ public sealed class RuntimeAssemblyContentSource : IRuntimeContentSource
 
     private string GetRuntimeContentVersion()
     {
+        string? processVersion = null;
         try
         {
             string? processPath = Environment.ProcessPath;
             if (!string.IsNullOrWhiteSpace(processPath) && File.Exists(processPath))
             {
                 var info = new FileInfo(processPath);
-                return $"{info.Length}_{info.LastWriteTimeUtc.Ticks}";
+                processVersion = $"{info.Length}_{info.LastWriteTimeUtc.Ticks}";
             }
         }
         catch
         {
         }
 
-        return _assembly.ManifestModule.ModuleVersionId.ToString("N");
+        try
+        {
+            string[] resourceNames = _assembly.GetManifestResourceNames()
+                .Where(name =>
+                    name.StartsWith($"{_assemblyName}.{RuntimeContentDirectoryName}.", StringComparison.Ordinal) ||
+                    name.StartsWith($"{_assemblyName}.Assets.", StringComparison.Ordinal))
+                .Order(StringComparer.Ordinal)
+                .ToArray();
+            if (resourceNames.Length > 0)
+            {
+                using var sha = SHA256.Create();
+                byte[] bytes = Encoding.UTF8.GetBytes(string.Join('\n', resourceNames));
+                string hash = Convert.ToHexString(sha.ComputeHash(bytes))[..16];
+                return string.IsNullOrWhiteSpace(processVersion)
+                    ? $"{_assembly.ManifestModule.ModuleVersionId:N}_{hash}"
+                    : $"{processVersion}_{hash}";
+            }
+        }
+        catch
+        {
+        }
+
+        return processVersion ?? _assembly.ManifestModule.ModuleVersionId.ToString("N");
     }
 
     private bool TryMapResourceToRelativePath(string resourceName, out string relativePath)

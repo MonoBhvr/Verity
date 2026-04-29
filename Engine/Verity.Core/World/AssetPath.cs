@@ -207,6 +207,7 @@ public static class AssetPathUtility
         string fullPath = Path.GetFullPath(normalizedPath);
         MetaCache.Remove(NormalizeCacheKey(fullPath));
         InvalidateSpriteSliceCacheForAsset(fullPath);
+        RemoveGuidCacheEntriesForAsset(fullPath);
     }
 
     public static AssetMeta LoadMeta(string? assetPath)
@@ -347,14 +348,19 @@ public static class AssetPathUtility
             return null;
 
         string normalizedRoot = NormalizeCacheKey(Path.GetFullPath(assetsRoot));
+        bool cacheWasBuilt = false;
         if (!GuidCache.TryGetValue(normalizedRoot, out var cache))
         {
             cache = BuildGuidCache(assetsRoot);
             GuidCache.Set(normalizedRoot, cache);
+            cacheWasBuilt = true;
         }
 
         if (cache.TryGetValue(guid, out string? cachedPath) && File.Exists(cachedPath))
             return cachedPath;
+
+        if (cacheWasBuilt)
+            return null;
 
         cache = BuildGuidCache(assetsRoot);
         GuidCache.Set(normalizedRoot, cache);
@@ -379,6 +385,18 @@ public static class AssetPathUtility
         }
 
         return cache;
+    }
+
+    private static void RemoveGuidCacheEntriesForAsset(string fullPath)
+    {
+        foreach (var rootCache in GuidCache.Values)
+        {
+            foreach (var pair in rootCache)
+            {
+                if (string.Equals(pair.Value, fullPath, StringComparison.OrdinalIgnoreCase))
+                    rootCache.TryRemove(pair.Key, out _);
+            }
+        }
     }
 
     private static string? GetAssetsRoot(string? projectRootOrAssetsPath)

@@ -73,6 +73,29 @@ public class RenderPipeline : IDisposable
     private readonly record struct RendererSortItem(Component Renderer, int HierarchyOrder, int LayerIndex, int OrderInLayer, float SortAxisValue);
     private readonly record struct OccluderCandidate(ShadowOccluder Occluder, float DistanceSquared);
     private readonly record struct ResolvedAssetInfo(string Path, bool Exists);
+    private sealed class CameraOutputTargetHandle : IDisposable
+    {
+        public CameraOutputTargetHandle(RenderTexture texture, RenderTarget target, int width, int height, RenderTextureFilter filter)
+        {
+            Texture = texture;
+            Target = target;
+            Width = width;
+            Height = height;
+            Filter = filter;
+        }
+
+        public RenderTexture Texture { get; }
+        public RenderTarget Target { get; }
+        public int Width { get; }
+        public int Height { get; }
+        public RenderTextureFilter Filter { get; }
+
+        public void Dispose()
+        {
+            Target.Dispose();
+            Texture.Dispose();
+        }
+    }
 
     private readonly IRenderDevice _device;
     private readonly Shader2D _shader;
@@ -99,6 +122,7 @@ public class RenderPipeline : IDisposable
     private RenderTarget? _worldFbo, _screenFbo;
     private RenderTexture? _worldColorTex, _screenColorTex;
     private int _worldFboWidth, _worldFboHeight, _screenFboWidth, _screenFboHeight;
+    private readonly Dictionary<string, CameraOutputTargetHandle> _cameraOutputTargets = new(StringComparer.OrdinalIgnoreCase);
 
     // Post-processing
     private Shader2D? _copyShader, _brightExtractShader, _blurShader, _bloomCombineShader, _vignetteShader, _colorAdjustShader, _motionBlurShader, _distortionShader, _pixelateShader, _chromaticAberrationShader;
@@ -185,6 +209,92 @@ public class RenderPipeline : IDisposable
         _screenFboWidth = w; _screenFboHeight = h;
     }
 
+    public void RenderCameraOutputs(World world, bool includeWindowOutputs = false)
+    {
+        foreach (var output in CameraSelection.EnumerateActiveOutputs(world)
+                     .Where(output => output.Target == CameraOutputTarget.RenderTexture ||
+                                      (includeWindowOutputs && output.Target == CameraOutputTarget.Window))
+                     .OrderBy(static output => output.Order))
+        {
+            var camera = output.Camera;
+            if (camera == null || !camera.Enabled)
+                continue;
+
+            string outputName = output.ResolveOutputName();
+            if (string.IsNullOrWhiteSpace(outputName))
+                continue;
+
+            var target = EnsureCameraOutputTarget(outputName, output);
+            RenderWorld(world, camera, target.Target);
+        }
+    }
+
+    public bool TryGetCameraOutputTexture(string outputName, out RenderTexture texture)
+    {
+        texture = null!;
+        if (string.IsNullOrWhiteSpace(outputName))
+            return false;
+
+        string key = AssetPathUtility.Normalize(outputName.Trim());
+        if (!_cameraOutputTargets.TryGetValue(key, out var target) &&
+            !_cameraOutputTargets.TryGetValue(Path.GetFileNameWithoutExtension(key), out target))
+        {
+            return false;
+        }
+
+        texture = target.Texture;
+        return true;
+    }
+
+    public bool TryGetTextureAsset(TextureAsset asset, out RenderTexture texture)
+    {
+        texture = null!;
+        if (asset == null || string.IsNullOrWhiteSpace(asset.Path))
+            return false;
+
+        string path = AssetPathUtility.Normalize(asset.Path);
+        if (Path.GetExtension(path).Equals(".rendertexture", StringComparison.OrdinalIgnoreCase))
+            return TryGetCameraOutputTexture(path, out texture);
+
+        var loaded = LoadTexture(asset.Path, asset.Guid);
+        if (loaded == null)
+            return false;
+
+        texture = loaded;
+        return true;
+    }
+
+    private CameraOutputTargetHandle EnsureCameraOutputTarget(string outputName, CameraOutput output)
+    {
+        var settings = output.GetRenderTextureSettings();
+        int width = Math.Max(1, settings.Width);
+        int height = Math.Max(1, settings.Height);
+        var filter = output.SamplingMode == CameraOutputSamplingMode.Linear
+            ? RenderTextureFilter.Linear
+            : RenderTextureFilter.Nearest;
+
+        if (_cameraOutputTargets.TryGetValue(outputName, out var existing) &&
+            existing.Width == width &&
+            existing.Height == height &&
+            existing.Filter == filter)
+        {
+            return existing;
+        }
+
+        if (existing != null)
+            existing.Dispose();
+
+        var texture = _device.CreateTexture()
+            .WithSize(width, height)
+            .WithRgba8()
+            .WithFilter(filter)
+            .UploadEmpty();
+        var target = _device.CreateFramebuffer().WithColorAttachment(texture).Upload();
+        var handle = new CameraOutputTargetHandle(texture, target, width, height, filter);
+        _cameraOutputTargets[outputName] = handle;
+        return handle;
+    }
+
     private unsafe void EnsurePostProcessFbos(int w, int h, int bloomDownsample)
     {
         bloomDownsample = Math.Max(1, bloomDownsample);
@@ -221,14 +331,15 @@ public class RenderPipeline : IDisposable
         _ppHistoryValid = false;
     }
 
-    public void RenderWorld(World world, Camera camera, RenderTarget? targetFbo = null)
+    public void RenderWorld(World world, Camera camera, RenderTarget? targetFbo = null, bool clearTarget = true)
     {
         bool browserFastPath = OperatingSystem.IsBrowser();
         bool isWorldFbo = (_worldFbo != null && targetFbo == _worldFbo);
         bool isScreenFbo = (_screenFbo != null && targetFbo == _screenFbo);
 
-        int targetW = isWorldFbo ? _worldFboWidth : (isScreenFbo ? _screenFboWidth : (int)_device.Width);
-        int targetH = isWorldFbo ? _worldFboHeight : (isScreenFbo ? _screenFboHeight : (int)_device.Height);
+        bool isCameraOutputFbo = TryGetCameraOutputTargetSize(targetFbo, out int cameraOutputW, out int cameraOutputH);
+        int targetW = isWorldFbo ? _worldFboWidth : (isScreenFbo ? _screenFboWidth : (isCameraOutputFbo ? cameraOutputW : (int)_device.Width));
+        int targetH = isWorldFbo ? _worldFboHeight : (isScreenFbo ? _screenFboHeight : (isCameraOutputFbo ? cameraOutputH : (int)_device.Height));
         if (targetW <= 0 || targetH <= 0) return;
 
         bool renderOutlineOnly = camera.RenderDetail == CameraRenderDetail.Outline;
@@ -258,22 +369,47 @@ public class RenderPipeline : IDisposable
             ? ResolveCameraBackgroundColor(camera.BackgroundColor)
             : camera.BackgroundColor;
 
-        _device.DisableScissorTest();
-        _device.SetViewport(0, 0, (uint)targetW, (uint)targetH);
-        _device.Clear(camera.LetterboxColor, actualTargetFbo);
+        var mainWindowOutput = camera.Owner?.GetComponent<CameraOutput>();
+        bool usesMainWindowViewport = !isWorldFbo && !isCameraOutputFbo &&
+                                      mainWindowOutput is { Enabled: true, Target: CameraOutputTarget.MainWindow };
 
-        int vx = 0, vy = 0, vw = targetW, vh = targetH;
-        float windowAspect = targetH > 0 ? (float)targetW / targetH : 1f;
+        int targetViewportX = 0;
+        int targetViewportY = 0;
+        int targetViewportW = targetW;
+        int targetViewportH = targetH;
+        if (usesMainWindowViewport)
+        {
+            float normalizedX = Math.Clamp(camera.NormalizedViewportX, 0.0f, 1.0f);
+            float normalizedY = Math.Clamp(camera.NormalizedViewportY, 0.0f, 1.0f);
+            float normalizedW = Math.Clamp(camera.NormalizedViewportWidth, 0.0f, 1.0f - normalizedX);
+            float normalizedH = Math.Clamp(camera.NormalizedViewportHeight, 0.0f, 1.0f - normalizedY);
+
+            targetViewportX = (int)MathF.Round(targetW * normalizedX);
+            targetViewportY = (int)MathF.Round(targetH * normalizedY);
+            targetViewportW = Math.Max(1, (int)MathF.Round(targetW * normalizedW));
+            targetViewportH = Math.Max(1, (int)MathF.Round(targetH * normalizedH));
+        }
+
+        _device.DisableScissorTest();
+        if (clearTarget)
+        {
+            _device.SetViewport(0, 0, (uint)targetW, (uint)targetH);
+            _device.Clear(camera.LetterboxColor, actualTargetFbo);
+        }
+
+        int vx = targetViewportX, vy = targetViewportY, vw = targetViewportW, vh = targetViewportH;
+        float windowAspect = targetViewportH > 0 ? (float)targetViewportW / targetViewportH : 1f;
         float shotAspect = MathF.Max(0.01f, camera.TargetAspectRatio);
 
-        if (!isWorldFbo && camera.FixedAspectRatio)
+        if (camera.FixedAspectRatio)
         {
-            if (windowAspect > shotAspect) { vw = (int)MathF.Round(targetH * shotAspect); vx = (targetW - vw) / 2; }
-            else { vh = (int)MathF.Round(targetW / shotAspect); vy = (targetH - vh) / 2; }
+            if (windowAspect > shotAspect) { vw = (int)MathF.Round(targetViewportH * shotAspect); vx = targetViewportX + (targetViewportW - vw) / 2; }
+            else { vh = (int)MathF.Round(targetViewportW / shotAspect); vy = targetViewportY + (targetViewportH - vh) / 2; }
         }
 
         int fVw = Math.Max(1, vw), fVh = Math.Max(1, vh);
-        if (isScreenFbo) {
+        bool usesSubViewport = isScreenFbo || usesMainWindowViewport;
+        if (usesSubViewport) {
             _device.SetViewport(vx, vy, (uint)fVw, (uint)fVh);
             camera.SetViewportRect(vx, targetH - (vy + fVh), fVw, fVh);
             _device.EnableScissorTest();
@@ -286,12 +422,12 @@ public class RenderPipeline : IDisposable
             _device.Clear(resolvedBackgroundColor, actualTargetFbo);
         }
 
-        var projection = camera.GetProjectionMatrix(isScreenFbo ? (fVw / (float)fVh) : windowAspect);
+        var projection = camera.GetProjectionMatrix(usesSubViewport ? (fVw / (float)fVh) : windowAspect);
         var view = camera.GetViewMatrix();
 
         if (renderOutlineOnly)
         {
-            RenderWorldOutline(world, camera, actualTargetFbo, isScreenFbo ? (vx, vy, fVw, fVh) : null, targetW, targetH);
+            RenderWorldOutline(world, camera, actualTargetFbo, usesSubViewport ? (vx, vy, fVw, fVh) : null, targetW, targetH);
         }
         else
         {
@@ -301,14 +437,17 @@ public class RenderPipeline : IDisposable
         {
             if (r is SpriteRenderer sr)
             {
-                if (sr.Texture == null && !string.IsNullOrWhiteSpace(sr.Sprite.Path))
+                bool usesTextureAsset = TryGetTextureAsset(sr.TextureAsset, out var assetTexture);
+                RenderTexture outputTexture = null!;
+                bool usesCameraOutput = !usesTextureAsset && TryGetCameraOutputTexture(sr.CameraOutputName, out outputTexture);
+                if (!usesTextureAsset && !usesCameraOutput && sr.Texture == null && !string.IsNullOrWhiteSpace(sr.Sprite.Path))
                     sr.Texture = LoadTexture(sr.Sprite);
 
-                var tex = sr.Texture ?? DefaultSprites.Square;
+                var tex = usesTextureAsset ? assetTexture : (usesCameraOutput ? outputTexture : (sr.Texture ?? DefaultSprites.Square));
                 if (tex == null) continue;
 
                 SpriteSlice spriteSlice = SpriteImportUtility.CreateDefaultSlice(tex.Width, tex.Height, new Vector2(0.5f, 0.5f));
-                if (TryResolveSpriteSlice(sr.Sprite, tex.Width, tex.Height, out _, out var resolvedSlice))
+                if (!usesTextureAsset && !usesCameraOutput && TryResolveSpriteSlice(sr.Sprite, tex.Width, tex.Height, out _, out var resolvedSlice))
                     spriteSlice = resolvedSlice;
 
                 Vector2 resolvedPivot = sr.UseSpritePivot ? spriteSlice.Pivot : sr.Pivot;
@@ -319,7 +458,7 @@ public class RenderPipeline : IDisposable
                     (spriteSlice.X + spriteSlice.Width) / (float)Math.Max(1, tex.Width),
                     (spriteSlice.Y + spriteSlice.Height) / (float)Math.Max(1, tex.Height));
 
-                if (isScreenFbo) _device.SetViewport(vx, vy, (uint)fVw, (uint)fVh);
+                if (usesSubViewport) _device.SetViewport(vx, vy, (uint)fVw, (uint)fVh);
                 else _device.SetViewport(0, 0, (uint)targetW, (uint)targetH);
 
                 var styleRuntime = ResolveStyle(sr.Style);
@@ -340,7 +479,7 @@ public class RenderPipeline : IDisposable
             }
             else if (r is TilemapRenderer tr)
             {
-                if (isScreenFbo) _device.SetViewport(vx, vy, (uint)fVw, (uint)fVh);
+                if (usesSubViewport) _device.SetViewport(vx, vy, (uint)fVw, (uint)fVh);
                 else _device.SetViewport(0, 0, (uint)targetW, (uint)targetH);
                 
                 tr.Render(this, camera, projection, view, actualTargetFbo);
@@ -351,7 +490,7 @@ public class RenderPipeline : IDisposable
                 var vertices = pr.GetWorldVertices();
                 if (vertices.Length < 3) continue;
 
-                if (isScreenFbo) _device.SetViewport(vx, vy, (uint)fVw, (uint)fVh);
+                if (usesSubViewport) _device.SetViewport(vx, vy, (uint)fVw, (uint)fVh);
                 else _device.SetViewport(0, 0, (uint)targetW, (uint)targetH);
 
                 // 내부 채우기 (Fill) - 테두리는 그리지 않고 채우기만 수행
@@ -379,15 +518,35 @@ public class RenderPipeline : IDisposable
         }
         else
         {
-            DrawLetterboxBars(camera, targetW, targetH, windowAspect, shotAspect, actualTargetFbo, isWorldFbo, isScreenFbo);
+            DrawLetterboxBars(camera, targetW, targetH, windowAspect, shotAspect, actualTargetFbo, isWorldFbo, usesSubViewport);
         }
 
         if (usePostProcess)
         {
-            DrawLetterboxBars(camera, targetW, targetH, windowAspect, shotAspect, targetFbo, isWorldFbo, isScreenFbo);
+            DrawLetterboxBars(camera, targetW, targetH, windowAspect, shotAspect, targetFbo, isWorldFbo, usesSubViewport);
         }
 
         _device.SetViewport(0, 0, (uint)targetW, (uint)targetH);
+    }
+
+    private bool TryGetCameraOutputTargetSize(RenderTarget? targetFbo, out int width, out int height)
+    {
+        width = 0;
+        height = 0;
+        if (targetFbo == null)
+            return false;
+
+        foreach (var target in _cameraOutputTargets.Values)
+        {
+            if (target.Target != targetFbo)
+                continue;
+
+            width = target.Width;
+            height = target.Height;
+            return true;
+        }
+
+        return false;
     }
 
     private Verity.Core.Color ResolveCameraBackgroundColor(Verity.Core.Color baseColor)
@@ -698,7 +857,7 @@ public class RenderPipeline : IDisposable
         shader.Draw(_quadBuffer, destFbo);
     }
 
-    private void BlitTexture(RenderTexture source, RenderTarget? targetFbo, int w, int h)
+    public void BlitTexture(RenderTexture source, RenderTarget? targetFbo, int w, int h)
     {
         if (_copyShader == null)
             return;
@@ -2001,6 +2160,9 @@ public class RenderPipeline : IDisposable
     { 
         _worldFbo?.Dispose(); _worldColorTex?.Dispose(); 
         _screenFbo?.Dispose(); _screenColorTex?.Dispose(); 
+        foreach (var target in _cameraOutputTargets.Values)
+            target.Dispose();
+        _cameraOutputTargets.Clear();
         
         _ppSceneFbo?.Dispose(); _ppSceneTex?.Dispose();
         _ppTempFbo1?.Dispose(); _ppTempTex1?.Dispose();

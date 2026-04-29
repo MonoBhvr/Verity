@@ -26,7 +26,6 @@ public sealed class UiDocument : Script
 
     public override void Awake()
     {
-        RegisterBindings();
         if (AutoShow)
             Show();
     }
@@ -58,6 +57,7 @@ public sealed class UiDocument : Script
             return;
 
         UiSystem.HideCanvas(Canvas);
+        UnregisterBindings();
         Canvas = null;
         Screen = null;
     }

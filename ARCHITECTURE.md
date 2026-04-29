@@ -322,3 +322,63 @@ UI는 렌더링 파이프라인과 완전히 분리된 독립 앱이 아니라, 
 
 - [Graphics 문서](./Docs/Graphics.md): 렌더링 기능과 브라우저 렌더 백엔드 보강
 - [Build 문서](./Docs/Build.md): 웹 빌드, 퍼블리시, 브라우저 런타임, 셰이더 변환, 트리밍 보강
+
+---
+
+## 10. 멀티 카메라와 멀티 윈도우
+
+현재 아키텍처는 단일 카메라 렌더링뿐 아니라, 다중 카메라 출력과 별도 네이티브 윈도우 표시까지 지원합니다.
+
+### 10.1 카메라 출력 계층
+
+멀티 카메라 출력은 다음 계층으로 구성됩니다.
+
+| 계층 | 타입 | 역할 |
+| :--- | :--- | :--- |
+| 출력 설정 | `CameraOutput` | 카메라의 렌더 대상(MainWindow / RenderTexture / Window)을 제어 |
+| 카메라 선택 | `CameraSelection` | 월드에서 기본 카메라와 활성 출력을 탐색 |
+| 렌더 실행 | `RenderPipeline.RenderCameraOutputs` | 활성 출력별 카메라 렌더를 수행하고 텍스처에 저장 |
+| 텍스처 에셋 | `CameraTextureAsset` | 렌더 텍스처의 크기/필터 설정을 에셋 파일로 관리 |
+| 윈도우 렌더 | `NativeMultiWindowRenderer` | 별도 SDL2 윈도우에 렌더 텍스처를 블릿 |
+
+### 10.2 카메라 선택 우선순위
+
+`CameraSelection.GetDefaultCamera`는 다음 우선순위로 기본 카메라를 결정합니다.
+
+1. `CameraOutputTarget.MainWindow`이고 `Primary = true`인 카메라
+2. `CameraOutputTarget.MainWindow`인 첫 카메라
+3. `MainCamera` 태그를 가진 활성 카메라
+4. `CameraOutput`이 없거나 `MainWindow`인 첫 활성 카메라
+5. 비 MainWindow 출력 카메라 (최후 fallback)
+
+이 구조 덕분에 대부분의 프로젝트는 아무 설정 없이 첫 카메라가 기본이 되지만, 명시적으로 제어할 수도 있습니다.
+
+### 10.3 멀티 윈도우 렌더링 흐름
+
+데스크톱 런타임에서 `CameraOutputTarget.Window`를 사용하면:
+
+1. `NativeMultiWindowRenderer.Render`가 매 프레임 호출됩니다.
+2. `CameraSelection`에서 Window 대상 출력을 수집합니다.
+3. `RenderPipeline`에서 이미 렌더된 텍스처를 조회합니다.
+4. 각 출력에 대해 SDL2 보조 윈도우를 생성하거나 풀에서 획득합니다.
+5. OpenGL 컨텍스트를 보조 윈도우로 전환하고 텍스처를 블릿합니다.
+6. 메인 윈도우 컨텍스트를 복원합니다.
+7. 더 이상 사용하지 않는 윈도우는 풀로 반환됩니다.
+
+### 10.4 윈도우 풀링과 예열
+
+윈도우 생성 비용을 줄이기 위해 `MultiWindowPrewarmMode` 설정을 제공합니다.
+
+| 모드 | 동작 |
+| :--- | :--- |
+| `None` | 필요할 때마다 생성 |
+| `Startup` | 엔진 시작 시 `MultiWindowPrewarmCount`만큼 미리 생성 |
+| `LazyBackground` | 매 프레임마다 하나씩 점진적으로 풀을 채움 |
+
+풀에서 반환된 윈도우는 숨김 상태로 유지되며, 새 출력이 필요할 때 즉시 재사용됩니다.
+
+### 10.5 플랫폼 제약
+
+- `CameraOutputTarget.RenderTexture`는 모든 플랫폼에서 사용할 수 있습니다.
+- `CameraOutputTarget.Window`는 데스크톱 네이티브 런타임에서만 동작합니다. 브라우저 백엔드는 별도 윈도우 생성이 불가능합니다.
+- `CameraOutputTarget.MainWindow`는 기존 단일 카메라 동작과 동일합니다.

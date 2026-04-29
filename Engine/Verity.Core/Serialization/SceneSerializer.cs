@@ -125,6 +125,7 @@ public static class SceneSerializer
         {
             ["Id"] = entity.Id.ToString(),
             ["Name"] = entity.Name,
+            ["Tag"] = entity.Tag,
             ["Active"] = entity.Active,
             ["ParentIndex"] = parentIndex,
             ["Position"] = SerializeVector2(entity.Transform.Position),
@@ -764,6 +765,7 @@ public static class SceneSerializer
                 entityIdMap[guid] = entity;
             }
 
+            entity.Tag = (string?)node["Tag"] ?? "Untagged";
             entity.Active = (bool?)node["Active"] ?? true;
             entities.Add(entity);
             nodeEntities.Add(entity);
@@ -1103,8 +1105,21 @@ public static class SceneSerializer
         // List of core engine namespaces to search in AppDomain
         string[] engineNamespaces = { "Verity.Core", "Verity.Graphics", "Verity.Input" };
         string shortName = name.Contains('.') ? name[(name.LastIndexOf('.') + 1)..] : name;
+        bool looksLikeUserScript = !engineNamespaces.Any(ns => name.StartsWith(ns));
 
-        // 1. Prefer built-in gameplay/runtime types already loaded in AppDomain.
+        // 1. For user scripts, prefer the freshly compiled user assembly first.
+        if (looksLikeUserScript && userAsm != null)
+        {
+            var t = userAsm.GetType(name);
+            if (t != null) return t;
+
+            foreach (var type in userAsm.GetTypes())
+            {
+                if (type.Name == shortName || type.FullName == name) return type;
+            }
+        }
+
+        // 2. Prefer built-in gameplay/runtime types already loaded in AppDomain.
         // This avoids stale UserScripts.dll content overriding browser-safe built-in scripts.
         foreach (var asm in AppDomain.CurrentDomain.GetAssemblies())
         {
@@ -1123,21 +1138,6 @@ public static class SceneSerializer
                 }
             }
             catch { }
-        }
-
-        // 2. If it looks like a user script (no engine namespace), check userAsm.
-        bool looksLikeUserScript = !engineNamespaces.Any(ns => name.StartsWith(ns));
-
-        if (looksLikeUserScript && userAsm != null)
-        {
-            var t = userAsm.GetType(name);
-            if (t != null) return t;
-
-            // Fallback: search by short name in user assembly
-            foreach (var type in userAsm.GetTypes())
-            {
-                if (type.Name == shortName || type.FullName == name) return type;
-            }
         }
 
         // 3. Search in AppDomain (remaining loaded types)

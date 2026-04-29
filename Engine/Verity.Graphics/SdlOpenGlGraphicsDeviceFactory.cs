@@ -7,10 +7,10 @@ namespace Verity.Graphics;
 
 public sealed class SdlOpenGlGraphicsDeviceFactory : IGraphicsDeviceFactory
 {
-    public IRenderDevice Create(string title = "Verity Engine", int width = 1280, int height = 720, bool resizable = true)
+    public IRenderDevice Create(string title = "Verity Engine", int width = 1280, int height = 720, bool resizable = true, bool visible = true)
     {
         var backend = new OpenGlBackend();
-        var windowing = new VeritySdl2Windowing();
+        var windowing = new VeritySdl2Windowing(visible);
 
         var windowConfig = new Window.InitConfig
         {

@@ -3,6 +3,7 @@ using Irodori.Error;
 using Irodori.Type;
 using Irodori.Windowing;
 using SDL2;
+using System.Runtime.InteropServices;
 
 namespace Verity.Graphics;
 
@@ -10,19 +11,28 @@ public class VeritySdl2Window : Window
 {
     private readonly IntPtr _sdlWindow;
     private readonly IntPtr _glContext;
+    private readonly bool _ownsGlContext;
 
     public IntPtr SdlWindowHandle => _sdlWindow;
     public IntPtr GlContextHandle => _glContext;
+    public uint WindowId { get; }
 
-    internal VeritySdl2Window(IntPtr sdlWindow, IntPtr glContext)
+    internal VeritySdl2Window(IntPtr sdlWindow, IntPtr glContext, bool ownsGlContext = true)
     {
         _sdlWindow = sdlWindow;
         _glContext = glContext;
+        _ownsGlContext = ownsGlContext;
+        WindowId = SDL.SDL_GetWindowID(sdlWindow);
     }
 
     public override bool ShouldClose { get; protected set; }
 
     public void Close()
+    {
+        ShouldClose = true;
+    }
+
+    public void RequestClose()
     {
         ShouldClose = true;
     }
@@ -120,6 +130,16 @@ public class VeritySdl2Window : Window
         SDL.SDL_SetWindowSize(_sdlWindow, w, h);
     }
 
+    public void SetResizable(bool resizable)
+    {
+        SDL.SDL_SetWindowResizable(_sdlWindow, resizable ? SDL.SDL_bool.SDL_TRUE : SDL.SDL_bool.SDL_FALSE);
+    }
+
+    public void SetBordered(bool bordered)
+    {
+        SDL.SDL_SetWindowBordered(_sdlWindow, bordered ? SDL.SDL_bool.SDL_TRUE : SDL.SDL_bool.SDL_FALSE);
+    }
+
     public (int X, int Y) GetPosition()
     {
         SDL.SDL_GetWindowPosition(_sdlWindow, out int x, out int y);
@@ -131,9 +151,90 @@ public class VeritySdl2Window : Window
         SDL.SDL_SetWindowPosition(_sdlWindow, x, y);
     }
 
+    public void Show()
+    {
+        SDL.SDL_ShowWindow(_sdlWindow);
+    }
+
+    public void Hide()
+    {
+        SDL.SDL_HideWindow(_sdlWindow);
+    }
+
+    public void SetOpacity(float opacity)
+    {
+        SDL.SDL_SetWindowOpacity(_sdlWindow, Math.Clamp(opacity, 0.0f, 1.0f));
+    }
+
+    public void Raise()
+    {
+        SDL.SDL_RaiseWindow(_sdlWindow);
+    }
+
+    public void PlaceAfter(VeritySdl2Window? insertAfter)
+    {
+        SDL.SDL_SysWMinfo info = default;
+        SDL.SDL_GetVersion(out info.version);
+        IntPtr hwnd = SDL.SDL_GetWindowWMInfo(_sdlWindow, ref info) == SDL.SDL_bool.SDL_TRUE
+            ? info.info.win.window
+            : IntPtr.Zero;
+
+        if (hwnd == IntPtr.Zero)
+        {
+            Raise();
+            return;
+        }
+
+        IntPtr insertAfterHwnd = HWND_TOP;
+        if (insertAfter != null)
+        {
+            SDL.SDL_SysWMinfo afterInfo = default;
+            SDL.SDL_GetVersion(out afterInfo.version);
+            if (SDL.SDL_GetWindowWMInfo(insertAfter._sdlWindow, ref afterInfo) == SDL.SDL_bool.SDL_TRUE)
+                insertAfterHwnd = afterInfo.info.win.window;
+        }
+
+        if (!SetWindowPos(hwnd, insertAfterHwnd, 0, 0, 0, 0,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_NOOWNERZORDER))
+        {
+            Raise();
+        }
+    }
+
+    public (int X, int Y, int Width, int Height) GetPrimaryDisplayBounds()
+    {
+        if (SDL.SDL_GetDisplayBounds(0, out SDL.SDL_Rect bounds) != 0)
+            return (0, 0, (int)GetWidth(), (int)GetHeight());
+
+        return (bounds.x, bounds.y, bounds.w, bounds.h);
+    }
+
     public void SetTitle(string title)
     {
         SDL.SDL_SetWindowTitle(_sdlWindow, title);
+    }
+
+    public VeritySdl2Window CreateAuxiliaryWindow(string title, int width, int height, int x, int y, bool resizable, bool visible = true, bool bordered = true)
+    {
+        var flags = SDL.SDL_WindowFlags.SDL_WINDOW_OPENGL |
+                    (visible ? SDL.SDL_WindowFlags.SDL_WINDOW_SHOWN : SDL.SDL_WindowFlags.SDL_WINDOW_HIDDEN);
+        if (resizable)
+            flags |= SDL.SDL_WindowFlags.SDL_WINDOW_RESIZABLE;
+        if (!bordered)
+            flags |= SDL.SDL_WindowFlags.SDL_WINDOW_BORDERLESS;
+
+        IntPtr sdlWindow = SDL.SDL_CreateWindow(
+            title,
+            x,
+            y,
+            Math.Max(1, width),
+            Math.Max(1, height),
+            flags);
+
+        if (sdlWindow == IntPtr.Zero)
+            throw new VeritySdl2Exception($"SDL_CreateWindow failed: {SDL.SDL_GetError()}");
+
+        return new VeritySdl2Window(sdlWindow, _glContext, ownsGlContext: false);
     }
 
     public unsafe void SetIcon(byte[] rgbaPixels, int width, int height)
@@ -161,11 +262,22 @@ public class VeritySdl2Window : Window
 
     public override void Dispose()
     {
-        SDL.SDL_GL_DeleteContext(_glContext);
+        if (_ownsGlContext)
+            SDL.SDL_GL_DeleteContext(_glContext);
+
         SDL.SDL_DestroyWindow(_sdlWindow);
     }
 
     public event Action<SDL.SDL_Event>? OnSdlEvent;
+
+    private static readonly IntPtr HWND_TOP = IntPtr.Zero;
+    private const uint SWP_NOSIZE = 0x0001;
+    private const uint SWP_NOMOVE = 0x0002;
+    private const uint SWP_NOACTIVATE = 0x0010;
+    private const uint SWP_NOOWNERZORDER = 0x0200;
+
+    [DllImport("user32.dll", SetLastError = true)]
+    private static extern bool SetWindowPos(IntPtr hWnd, IntPtr hWndInsertAfter, int x, int y, int cx, int cy, uint uFlags);
 }
 
 public class VeritySdl2Exception : Exception, IError

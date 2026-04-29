@@ -35,6 +35,7 @@ Verity 에디터는 크게 두 단계로 동작합니다.
 - `AnimationWindow`
 - `TilePaletteWindow`
 - `UIEditorWindow`
+- `CameraOutputsWindow`
 
 즉, Verity의 에디터는 “하나의 큰 창”이라기보다, 편집 대상별 전용 도구를 묶은 작업 공간에 가깝습니다.
 
@@ -719,7 +720,49 @@ Release는 단일 파일, Debug는 디버깅 친화 설정으로 배포됩니다
 
 ---
 
-## 21. 정리
+## 21. 카메라 출력(Camera Outputs)
+
+`CameraOutputsWindow`는 멀티 윈도우 카메라 출력을 확인하는 전용 창입니다. `ProjectSettings.MultiWindowEnabled`가 활성화되어 있어야 사용할 수 있습니다.
+
+### 21.1 표시 내용
+
+- 활성 월드에서 `CameraOutputTarget.Window`를 사용하는 `CameraOutput` 목록
+- 각 출력의 렌더 텍스처 미리보기
+- 출력 이름과 해상도 정보
+
+### 21.2 동작 방식
+
+1. `CameraSelection.EnumerateActiveOutputs`로 Window 대상 출력을 수집
+2. `RenderPipeline.RenderCameraOutputs(world, includeWindowOutputs: true)`로 렌더 수행
+3. `TryGetCameraOutputTexture`로 각 출력의 텍스처를 ImGui 이미지로 표시
+
+### 21.3 제약
+
+- 멀티 윈도우가 비활성화되어 있으면 비활성 메시지가 표시됩니다.
+- 활성 월드가 없으면 비활성 메시지가 표시됩니다.
+- Window 대상 CameraOutput이 없으면 빈 상태 메시지가 표시됩니다.
+
+### 21.4 멀티 윈도우 프로젝트 설정
+
+`ProjectSettings`에 멀티 윈도우 관련 설정이 추가되었습니다.
+
+| 프로퍼티 | 형식 | 기본값 | 설명 |
+| :--- | :--- | :--- | :--- |
+| `MultiWindowEnabled` | `bool` | false | 멀티 윈도우 기능 활성화 여부 |
+| `MultiWindowPrewarmMode` | `MultiWindowPrewarmMode` | None | 윈도우 풀 예열 모드 |
+| `MultiWindowPrewarmCount` | `int` | 0 | 예열할 윈도우 수 |
+
+`MultiWindowPrewarmMode` 값:
+
+| 값 | 의미 |
+| :--- | :--- |
+| `None` | 필요할 때마다 윈도우 생성 |
+| `Startup` | 엔진 시작 시 지정 수만큼 미리 생성 |
+| `LazyBackground` | 백그라운드에서 점진적으로 풀을 채움 |
+
+---
+
+## 22. 정리
 
 Verity 에디터는 다음 특징으로 요약할 수 있습니다.
 

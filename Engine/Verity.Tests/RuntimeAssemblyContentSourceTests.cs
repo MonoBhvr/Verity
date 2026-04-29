@@ -36,6 +36,8 @@ public sealed class RuntimeAssemblyContentSourceTests : IDisposable
     [Theory]
     [InlineData("NewLuaScript.lua", "NewLuaScript.lua")]
     [InlineData("NewLuaScript.lua.meta", "NewLuaScript.lua.meta")]
+    [InlineData("NewRenderTexture.rendertexture", "NewRenderTexture.rendertexture")]
+    [InlineData("NewRenderTexture.rendertexture.meta", "NewRenderTexture.rendertexture.meta")]
     [InlineData("Script.ChangeColor.cs", "Script\\ChangeColor.cs")]
     public void TryConvertManifestSuffixToAssetPath_PreservesKnownExtensions(string suffix, string expectedPath)
     {

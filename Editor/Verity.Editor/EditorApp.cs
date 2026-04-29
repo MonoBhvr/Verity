@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Collections.Concurrent;
 using System.IO;
 using System.Numerics;
 using System.Reflection;
@@ -92,9 +93,11 @@ public class EditorApp : IDisposable
     private readonly Dictionary<string, long> _processedTileRefreshSignatures = new(StringComparer.OrdinalIgnoreCase);
     private readonly HashSet<string> _pendingLuaHotReloadPaths = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, long> _pendingLuaHotReloadDeadlines = new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentQueue<Action> _pendingMainThreadActions = new();
 
     private readonly List<(string text, float duration)> _overlayMessages = new();
     private readonly List<LauncherProjectInfo> _launcherProjectCache = [];
+    private readonly List<string> _worldAssetCache = [];
     private FilterType? _filterToDelete;
     private bool _triggerDeletePopup;
 
@@ -105,6 +108,7 @@ public class EditorApp : IDisposable
     public int LastPlayLogicTicksThisFrame { get; private set; }
     public bool IsBuilding { get; set; }
     public string BuildStatus { get; set; } = "";
+    public bool HasScriptCompilationErrors => _scriptCompiler?.HasCompilationErrors == true;
 
     public string? CurrentProjectName { get; private set; }
     public string ProjectsRoot { get; private set; }
@@ -118,6 +122,7 @@ public class EditorApp : IDisposable
     private string? _cachedEditorLogoPath;
     private bool _launcherProjectCacheDirty = true;
     private long _launcherProjectCacheNextRefreshMs;
+    private bool _worldAssetCacheDirty = true;
 
     public string EditorLogoPath {
         get {
@@ -167,6 +172,29 @@ public class EditorApp : IDisposable
     {
         _launcherProjectCacheDirty = true;
         _launcherProjectCacheNextRefreshMs = 0;
+    }
+
+    private void InvalidateWorldAssetCache()
+    {
+        _worldAssetCacheDirty = true;
+    }
+
+    private IReadOnlyList<string> GetWorldAssetPaths()
+    {
+        if (!_worldAssetCacheDirty)
+            return _worldAssetCache;
+
+        _worldAssetCache.Clear();
+        if (AssetsPath != null && Directory.Exists(AssetsPath))
+        {
+            foreach (string path in Directory.EnumerateFiles(AssetsPath, "*.verity", SearchOption.AllDirectories))
+                _worldAssetCache.Add(path);
+
+            _worldAssetCache.Sort(StringComparer.OrdinalIgnoreCase);
+        }
+
+        _worldAssetCacheDirty = false;
+        return _worldAssetCache;
     }
 
     private IReadOnlyList<LauncherProjectInfo> GetLauncherProjectInfos()
@@ -265,6 +293,13 @@ public class EditorApp : IDisposable
         if (!File.Exists(normalized))
             return false;
 
+        if (!CanDeserializeScriptedAssets())
+        {
+            ShowOverlayMessage(L10n.Tr("msg_cannot_load_script_asset_compilation_errors"), 3.0f);
+            CoreDebug.LogError("[Editor] Cannot open blueprint asset while user script compilation errors exist and no valid compiled assembly is available.");
+            return false;
+        }
+
         if (IsPlaying)
             ExitPlayMode();
 
@@ -316,8 +351,86 @@ public class EditorApp : IDisposable
         if (IsEditingBlueprint)
             return SaveActiveBlueprint();
 
+        NormalizeCameraOutputsForProjectSettings(WorldManager.ActiveWorld);
         GetWindow<ProjectWindow>()?.SaveActiveWorldAsAsset();
         return WorldManager.ActiveWorld != null;
+    }
+
+    public void NormalizeCameraOutputsForProjectSettings(World? world)
+    {
+        _ = world;
+    }
+
+    public bool EnsureStartupWorldForBuild()
+    {
+        if (AssetsPath == null)
+            return false;
+
+        if (BuildSettings.Worlds.Count > 0)
+        {
+            bool changed = false;
+            if (BuildSettings.StartWorldIndex < 0 || BuildSettings.StartWorldIndex >= BuildSettings.Worlds.Count)
+            {
+                BuildSettings.StartWorldIndex = 0;
+                changed = true;
+            }
+
+            string startupPath = Path.Combine(AssetsPath, BuildSettings.Worlds[BuildSettings.StartWorldIndex]);
+            if (File.Exists(startupPath))
+            {
+                if (changed)
+                    SaveBuildSettings();
+
+                return true;
+            }
+
+            CoreDebug.Log($"[Build] Startup world is missing: {BuildSettings.Worlds[BuildSettings.StartWorldIndex]}. Falling back to the active world.");
+        }
+
+        var active = WorldManager.ActiveWorld;
+        if (active == null)
+        {
+            CoreDebug.LogError("[Build] No active world. Open or create a world before building.");
+            return false;
+        }
+
+        string? worldPath = null;
+        if (ActiveAssetKind == EditorAssetKind.World &&
+            !string.IsNullOrWhiteSpace(ActiveAssetPath) &&
+            ActiveAssetPath.EndsWith(".verity", StringComparison.OrdinalIgnoreCase) &&
+            File.Exists(ActiveAssetPath))
+        {
+            worldPath = ActiveAssetPath;
+        }
+
+        worldPath ??= Directory.GetFiles(AssetsPath, $"{active.Name}.verity", SearchOption.AllDirectories).FirstOrDefault();
+        if (worldPath == null)
+        {
+            GetWindow<ProjectWindow>()?.SaveActiveWorldAsAsset();
+            string fallbackPath = Path.Combine(AssetsPath, $"{active.Name}.verity");
+            if (File.Exists(fallbackPath))
+                worldPath = fallbackPath;
+        }
+
+        if (worldPath == null)
+        {
+            CoreDebug.LogError($"[Build] Could not find saved world asset for '{active.Name}'.");
+            return false;
+        }
+
+        string rel = Path.GetRelativePath(AssetsPath, worldPath).Replace("\\", "/");
+        int existingIndex = BuildSettings.Worlds.FindIndex(path => string.Equals(path, rel, StringComparison.OrdinalIgnoreCase));
+        bool added = existingIndex < 0;
+        if (added)
+        {
+            BuildSettings.Worlds.Insert(0, rel);
+            existingIndex = 0;
+        }
+
+        BuildSettings.StartWorldIndex = existingIndex;
+        SaveBuildSettings();
+        CoreDebug.Log(added ? $"[Build] Added startup world: {rel}" : $"[Build] Selected startup world: {rel}");
+        return true;
     }
 
     public Entity? GetBlueprintDefaultParent()
@@ -410,6 +523,9 @@ public class EditorApp : IDisposable
         AutoSaveEditorState();
         _projectLock?.Dispose();
         _projectLock = null;
+        BuildManagerWindow.ShutdownPreviewServer();
+        ClearAssetRefreshTracking();
+        InvalidateWorldAssetCache();
         CurrentProjectName = null;
         LastWorldAssetPath = null;
         InvalidateLauncherProjectCache();
@@ -588,6 +704,13 @@ public class EditorApp : IDisposable
         if (!File.Exists(lastWorldPath))
             return false;
 
+        if (!CanDeserializeScriptedAssets())
+        {
+            ShowOverlayMessage(L10n.Tr("msg_cannot_load_script_asset_compilation_errors"), 3.0f);
+            CoreDebug.LogError("[Editor] Skipping last world restore because user script compilation errors exist and no valid compiled assembly is available.");
+            return false;
+        }
+
         GetWindow<ProjectWindow>()?.LoadWorldByPath(lastWorldPath);
         return WorldManager.ActiveWorld != null;
     }
@@ -613,8 +736,20 @@ public class EditorApp : IDisposable
         if (string.IsNullOrWhiteSpace(newestWorldPath))
             return false;
 
+        if (!CanDeserializeScriptedAssets())
+        {
+            ShowOverlayMessage(L10n.Tr("msg_cannot_load_script_asset_compilation_errors"), 3.0f);
+            CoreDebug.LogError("[Editor] Skipping world auto-load because user script compilation errors exist and no valid compiled assembly is available.");
+            return false;
+        }
+
         GetWindow<ProjectWindow>()?.LoadWorldByPath(newestWorldPath);
         return WorldManager.ActiveWorld != null;
+    }
+
+    public bool CanDeserializeScriptedAssets()
+    {
+        return !HasScriptCompilationErrors || _scriptCompiler?.CompiledAssembly != null;
     }
 
     private void CreateDefaultStartupWorld()
@@ -624,7 +759,9 @@ public class EditorApp : IDisposable
 
         var world = WorldManager.CreateOrReplaceWorld("Main");
         var cam = world.CreateEntity(L10n.Tr("creation_default_main_camera"));
+        cam.Tag = CameraSelection.MainCameraTag;
         cam.AddComponent<Camera>();
+        cam.AddComponent<CameraOutput>();
         WorldManager.SetActiveWorld(world);
 
         string mainWorldPath = Path.Combine(AssetsPath, "Main.verity");
@@ -1361,7 +1498,12 @@ public class EditorApp : IDisposable
     }
 
     private void OnScriptsCompiled() 
-    { 
+    {
+        _pendingMainThreadActions.Enqueue(HandleScriptsCompiledOnMainThread);
+    }
+
+    private void HandleScriptsCompiledOnMainThread()
+    {
         var world = WorldManager.ActiveWorld; 
 
         LuaScriptManager.RefreshBindings(_scriptCompiler?.CompiledAssembly, ProjectPath);
@@ -1432,13 +1574,26 @@ public class EditorApp : IDisposable
     public void EnterPlayMode() 
     { 
         if (WorldManager.ActiveWorld == null || IsPlaying) return; 
+
+        if (_scriptCompiler != null && !_scriptCompiler.Compile())
+        {
+            ShowOverlayMessage(L10n.Tr("msg_cannot_play_compilation_errors"), 3.0f);
+            CoreDebug.LogError("[Editor] Cannot enter Play Mode because user script compilation failed.");
+            return;
+        }
+
+        if (HasScriptCompilationErrors)
+        {
+            ShowOverlayMessage(L10n.Tr("msg_cannot_play_compilation_errors"), 3.0f);
+            CoreDebug.LogError("[Editor] Cannot enter Play Mode while user script compilation errors exist.");
+            return;
+        }
         
         // Pause compiler during play mode
         if (_scriptCompiler != null) _scriptCompiler.IsPaused = true;
 
         _snapshot = WorldSnapshot.Capture(WorldManager.ActiveWorld); 
         Time.Reset(); 
-        LuaScriptManager.SuspendHotReloadEvents = true;
         LuaScriptManager.Dispose();
         LuaScriptManager.Initialize(ProjectPath, _scriptCompiler?.CompiledAssembly);
         BindWorldAssets(WorldManager.ActiveWorld);
@@ -1465,7 +1620,13 @@ public class EditorApp : IDisposable
         if (_scriptCompiler != null) _scriptCompiler.IsPaused = false;
 
         if (_pendingLuaHotReloadPaths.Count > 0)
-            OnLuaScriptsHotReloadRequested(_pendingLuaHotReloadPaths.ToArray());
+        {
+            lock (_assetInvalidationLock)
+            {
+                foreach (string path in _pendingLuaHotReloadPaths.ToArray())
+                    _pendingLuaHotReloadDeadlines[path] = Environment.TickCount64;
+            }
+        }
     }
 
     public void Run()
@@ -1492,6 +1653,10 @@ public class EditorApp : IDisposable
             stageStart = Stopwatch.GetTimestamp();
             ProcessPendingAssetInvalidations();
             _profiler.RecordFrameStage("Asset Refresh", Stopwatch.GetElapsedTime(stageStart).TotalMilliseconds);
+
+            stageStart = Stopwatch.GetTimestamp();
+            ProcessPendingMainThreadActions();
+            _profiler.RecordFrameStage("Main Thread Actions", Stopwatch.GetElapsedTime(stageStart).TotalMilliseconds);
 
             // Handle window close button
             if (_device.Window.ShouldClose && _hasUnsavedChanges && !_showExitConfirmPopup)
@@ -1829,7 +1994,7 @@ public class EditorApp : IDisposable
                 if (ImGui.MenuItem(L10n.Tr("menu_new_world"))) assetWindow?.CreateWorldInProject();
                 if (ImGui.BeginMenu(L10n.Tr("menu_open_world"))) {
                     if (AssetsPath != null && Directory.Exists(AssetsPath)) {
-                        foreach (var f in Directory.GetFiles(AssetsPath, "*.verity", SearchOption.AllDirectories))
+                        foreach (var f in GetWorldAssetPaths())
                             if (ImGui.MenuItem(Path.GetRelativePath(AssetsPath, f))) assetWindow?.LoadWorldByPath(f);
                     }
                     ImGui.EndMenu();
@@ -1863,7 +2028,11 @@ public class EditorApp : IDisposable
             }
             float mid = ImGui.GetWindowWidth() * 0.5f; ImGui.SetCursorPosX(mid - 30);
             if (IsPlaying) { if (ImGui.Button(L10n.Tr("btn_stop"), new Vector2(60, 0))) ExitPlayMode(); }
-            else { if (ImGui.Button(L10n.Tr("btn_play"), new Vector2(60, 0))) EnterPlayMode(); }
+            else {
+                if (HasScriptCompilationErrors) ImGui.BeginDisabled();
+                if (ImGui.Button(L10n.Tr("btn_play"), new Vector2(60, 0))) EnterPlayMode();
+                if (HasScriptCompilationErrors) ImGui.EndDisabled();
+            }
             ImGui.EndMenuBar();
         }
 
@@ -1967,7 +2136,9 @@ public class EditorApp : IDisposable
                     ResetEditorLayout();
             }
 
-            if (window is ScreenWindow && ImGui.IsWindowFocused(ImGuiFocusedFlags.RootAndChildWindows))
+            if (window is ScreenWindow &&
+                (ImGui.IsWindowFocused(ImGuiFocusedFlags.RootAndChildWindows) ||
+                 ImGui.IsWindowHovered(ImGuiHoveredFlags.RootAndChildWindows)))
                 _isScreenFocused = true;
 
             if (isFullscreen)
@@ -2042,6 +2213,13 @@ public class EditorApp : IDisposable
 
     private void DetectFullscreenToggle(EditorWindow window)
     {
+        // The fullscreen overlay is rendered in the main viewport.
+        // Triggering it from a floating platform window leaves that source
+        // window alive underneath, which breaks input and makes the original
+        // contents appear "blank". Limit the toggle to docked panels only.
+        if (!ImGui.IsWindowDocked())
+            return;
+
         Vector2 windowPos = ImGui.GetWindowPos();
         Vector2 mousePos = ImGui.GetMousePos();
         float titleHeight = ImGui.GetFrameHeight();
@@ -2057,44 +2235,29 @@ public class EditorApp : IDisposable
             ToggleFullscreen(window);
             return;
         }
+    }
 
-        if (ImGui.IsWindowDocked())
+    private void ProcessPendingMainThreadActions()
+    {
+        while (_pendingMainThreadActions.TryDequeue(out var action))
+        {
+            try
+            {
+                action();
+            }
+            catch (Exception ex)
+            {
+                CoreDebug.LogError($"[Editor] Main-thread action failed: {ex.Message}");
+            }
+        }
+    }
+
+    internal void EnqueueMainThreadAction(Action action)
+    {
+        if (action == null)
             return;
 
-        float buttonSize = MathF.Max(10f, titleHeight - 6f);
-        Vector2 buttonMin = new(
-            windowPos.X + windowWidth - buttonSize * 2f - 28f,
-            windowPos.Y + 3f);
-        Vector2 buttonMax = new(buttonMin.X + buttonSize, buttonMin.Y + buttonSize);
-        bool hovered = ImGui.IsMouseHoveringRect(buttonMin, buttonMax);
-
-        var drawList = ImGui.GetWindowDrawList();
-        if (hovered)
-            drawList.AddRectFilled(buttonMin, buttonMax, ImGui.GetColorU32(new Vector4(1f, 1f, 1f, 0.15f)), 2f);
-
-        float pad = buttonSize * 0.25f;
-        float inner = buttonSize * 0.15f;
-        uint color = ImGui.GetColorU32(hovered ? new Vector4(1f, 1f, 1f, 0.8f) : new Vector4(1f, 1f, 1f, 0.55f));
-        drawList.AddRect(
-            new Vector2(buttonMin.X + pad, buttonMin.Y + pad),
-            new Vector2(buttonMax.X - pad, buttonMax.Y - pad),
-            color,
-            1f);
-        drawList.AddRect(
-            new Vector2(buttonMin.X + pad + inner, buttonMin.Y + pad + inner),
-            new Vector2(buttonMax.X - pad + inner, buttonMax.Y - pad + inner),
-            color,
-            1f);
-
-        if (hovered)
-        {
-            if (ImGui.IsMouseClicked(ImGuiMouseButton.Left))
-                ToggleFullscreen(window);
-
-            ImGui.BeginTooltip();
-            ImGui.TextUnformatted(L10n.Tr("tooltip_fullscreen"));
-            ImGui.EndTooltip();
-        }
+        _pendingMainThreadActions.Enqueue(action);
     }
 
     private void ToggleFullscreen(EditorWindow window)
@@ -2328,7 +2491,7 @@ public class EditorApp : IDisposable
             {
                 if (AssetsPath != null && Directory.Exists(AssetsPath))
                 {
-                    foreach (var f in Directory.GetFiles(AssetsPath, "*.verity", SearchOption.AllDirectories))
+                    foreach (var f in GetWorldAssetPaths())
                     {
                         if (ImGui.MenuItem(Path.GetRelativePath(AssetsPath, f)))
                             assetWindow?.LoadWorldByPath(f);
@@ -2480,8 +2643,12 @@ public class EditorApp : IDisposable
         }
         else
         {
+            if (HasScriptCompilationErrors)
+                ImGui.BeginDisabled();
             if (ImGui.Button(L10n.Tr("btn_play"), new Vector2(60, 0)))
                 EnterPlayMode();
+            if (HasScriptCompilationErrors)
+                ImGui.EndDisabled();
         }
 
         ImGui.EndMenuBar();
@@ -2526,6 +2693,11 @@ public class EditorApp : IDisposable
 
     public Entity? InstantiateBlueprint(string path, Vector2? position = null, Entity? parent = null) {
         var world = WorldManager.ActiveWorld; if (world == null || !File.Exists(path) || AssetsPath == null) return null;
+        if (!CanDeserializeScriptedAssets()) {
+            ShowOverlayMessage(L10n.Tr("msg_cannot_load_script_asset_compilation_errors"), 3.0f);
+            CoreDebug.LogError("[Editor] Cannot instantiate blueprint while user script compilation errors exist and no valid compiled assembly is available.");
+            return null;
+        }
         try { var entity = Verity.Core.Serialization.SceneSerializer.InstantiateBlueprintInstance(world, path, ScriptCompiler?.CompiledAssembly); if (entity != null) { if (position.HasValue) entity.Transform.Position = position.Value; if (parent != null) entity.Transform.SetParent(parent.Transform, false); else AttachToBlueprintDefaultParent(entity); BindEntityAssetsRecursive(entity); return entity; } } catch { } return null;
     }
 
@@ -2728,26 +2900,11 @@ public class EditorApp : IDisposable
 
         if (luas.Count > 0)
         {
-            if (IsPlaying)
+            string changedSummary = string.Join(", ", luas.Select(Path.GetFileName).OrderBy(static name => name));
+            if (ReloadActiveLuaScripts(luas))
             {
-                CoreDebug.Log("[Editor] Lua scripts changed during Play Mode. Reload is deferred until Play Mode exits.");
-                lock (_assetInvalidationLock)
-                {
-                    foreach (var path in luas)
-                    {
-                        _pendingLuaHotReloadPaths.Add(path);
-                        _pendingLuaHotReloadDeadlines[path] = long.MaxValue;
-                    }
-                }
-            }
-            else
-            {
-                string changedSummary = string.Join(", ", luas.Select(Path.GetFileName).OrderBy(static name => name));
-                if (ReloadActiveWorldPreservingState($"Lua hot reload ({changedSummary})", autoSaveAfterReload: false))
-                {
-                    CoreDebug.Log($"[Editor] Lua hot reload successful: {changedSummary}");
-                    ShowOverlayMessage(L10n.Tr("msg_scripts_reloaded"));
-                }
+                CoreDebug.Log($"[Editor] Lua hot reload successful{(IsPlaying ? " during Play Mode" : string.Empty)}: {changedSummary}");
+                ShowOverlayMessage(L10n.Tr("msg_scripts_reloaded"));
             }
         }
 
@@ -2768,6 +2925,52 @@ public class EditorApp : IDisposable
                 tilePalette?.InvalidateTileAsset(path);
             }
         }
+    }
+
+    private bool ReloadActiveLuaScripts(IReadOnlyList<string> changedPaths)
+    {
+        var world = WorldManager.ActiveWorld;
+        if (world == null || changedPaths.Count == 0)
+            return false;
+
+        HashSet<string> changed = changedPaths
+            .Where(static path => !string.IsNullOrWhiteSpace(path))
+            .Select(Path.GetFullPath)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        bool reloadedAny = false;
+        foreach (Entity entity in world.GetAllEntities())
+        {
+            foreach (var luaScript in entity.GetComponents<LuaScriptComponent>())
+            {
+                if (string.IsNullOrWhiteSpace(luaScript.ScriptPath))
+                    continue;
+
+                string resolvedPath = ResolveAssetPath(luaScript.ScriptPath, luaScript.ScriptGuid);
+                if (!changed.Contains(Path.GetFullPath(resolvedPath)))
+                    continue;
+
+                if (File.Exists(resolvedPath))
+                {
+                    string normalizedScriptPath = AssetPathUtility.Normalize(resolvedPath);
+                    bool pathChanged = !string.Equals(luaScript.ScriptPath, normalizedScriptPath, StringComparison.OrdinalIgnoreCase);
+                    if (string.IsNullOrWhiteSpace(luaScript.ScriptGuid))
+                        luaScript.ScriptGuid = AssetPathUtility.TryGetGuid(resolvedPath) ?? string.Empty;
+
+                    luaScript.ScriptPath = normalizedScriptPath;
+                    if (!pathChanged)
+                        luaScript.ReloadScript();
+                }
+                else
+                {
+                    luaScript.ReloadScript();
+                }
+
+                reloadedAny = true;
+            }
+        }
+
+        return reloadedAny;
     }
 
     private bool TryMarkTextureRefresh(string fullPath)
@@ -2801,6 +3004,21 @@ public class EditorApp : IDisposable
         string metaPath = AssetPathUtility.GetMetaPath(fullPath);
         long metaTicks = File.Exists(metaPath) ? File.GetLastWriteTimeUtc(metaPath).Ticks : -1;
         return unchecked((assetTicks * 397L) ^ metaTicks);
+    }
+
+    private void ClearAssetRefreshTracking()
+    {
+        lock (_assetInvalidationLock)
+        {
+            _pendingTextureRefreshes.Clear();
+            _pendingTileRefreshes.Clear();
+            _pendingTextureRefreshDeadlines.Clear();
+            _pendingTileRefreshDeadlines.Clear();
+            _processedTextureRefreshSignatures.Clear();
+            _processedTileRefreshSignatures.Clear();
+            _pendingLuaHotReloadPaths.Clear();
+            _pendingLuaHotReloadDeadlines.Clear();
+        }
     }
 
     private void RefreshTextureAsset(string fullPath)
@@ -2867,15 +3085,33 @@ public class EditorApp : IDisposable
         _assetWatcher.Renamed += OnAssetWatcherRenamed;
     }
 
-    private void OnAssetWatcherChanged(object sender, FileSystemEventArgs e)
+    private void HandleAssetWatcherChange(string changedPath)
     {
-        string changedPath = e.FullPath;
         if (AssetPathUtility.IsMetaFile(changedPath))
             changedPath = changedPath[..^5];
 
         AssetPathUtility.InvalidateAssetCache(changedPath);
 
+        if (!File.Exists(changedPath))
+        {
+            string normalizedMissingPath = Path.GetFullPath(changedPath);
+            lock (_assetInvalidationLock)
+            {
+                _processedTextureRefreshSignatures.Remove(normalizedMissingPath);
+                _processedTileRefreshSignatures.Remove(normalizedMissingPath);
+                _pendingTextureRefreshes.Remove(normalizedMissingPath);
+                _pendingTileRefreshes.Remove(normalizedMissingPath);
+                _pendingTextureRefreshDeadlines.Remove(normalizedMissingPath);
+                _pendingTileRefreshDeadlines.Remove(normalizedMissingPath);
+                _pendingLuaHotReloadPaths.Remove(normalizedMissingPath);
+                _pendingLuaHotReloadDeadlines.Remove(normalizedMissingPath);
+            }
+        }
+
         string ext = Path.GetExtension(changedPath).ToLower();
+        if (ext == ".verity")
+            InvalidateWorldAssetCache();
+
         if (ext == ".style") {
             if (ProjectPath != null) {
                 string relPath = Path.GetRelativePath(ProjectPath, changedPath).Replace("\\", "/");
@@ -2902,9 +3138,15 @@ public class EditorApp : IDisposable
         }
     }
 
+    private void OnAssetWatcherChanged(object sender, FileSystemEventArgs e)
+    {
+        HandleAssetWatcherChange(e.FullPath);
+    }
+
     private void OnAssetWatcherRenamed(object sender, RenamedEventArgs e)
     {
-        OnAssetWatcherChanged(sender, e);
+        HandleAssetWatcherChange(e.OldFullPath);
+        HandleAssetWatcherChange(e.FullPath);
     }
 
     private string? SelectFolderNative(string initial)
@@ -2933,6 +3175,8 @@ public class EditorApp : IDisposable
         AutoSaveEditorState();
         CoreDebug.OnLog -= OnCoreLog;
         _device.Window.OnSdlEvent -= Verity.Input.Input.ProcessEvent;
+        BuildManagerWindow.ShutdownPreviewServer();
+        ClearAssetRefreshTracking();
 
         if (_assetWatcher != null)
         {

@@ -175,6 +175,15 @@ public static class LuaScriptManager
             return new(context.Return(LuaValue.FromObject(new LuaVector3Value(x, y, z))));
         });
 
+        state.Environment["Color"] = new LuaFunction((context, cancellationToken) =>
+        {
+            float r = context.ArgumentCount > 0 ? (float)context.GetArgument<double>(0) : 0f;
+            float g = context.ArgumentCount > 1 ? (float)context.GetArgument<double>(1) : 0f;
+            float b = context.ArgumentCount > 2 ? (float)context.GetArgument<double>(2) : 0f;
+            float a = context.ArgumentCount > 3 ? (float)context.GetArgument<double>(3) : 1f;
+            return new(context.Return(LuaValue.FromObject(new LuaColorValue(r, g, b, a))));
+        });
+
         state.Environment["Time"] = LuaValue.FromObject(new LuaTimeApi());
         state.Environment["__verity_input"] = LuaValue.FromObject(new LuaInputApi());
         state.Environment["Keys"] = LuaValue.FromObject(new LuaKeysApi());
@@ -402,13 +411,16 @@ function __verity_wrap_component(component)
 end
 
 Input = {
-    IsKeyDown = function(key)
+    IsKeyDown = function(selfOrKey, maybeKey)
+        local key = maybeKey ~= nil and maybeKey or selfOrKey
         return __verity_input:IsKeyDown(key)
     end,
-    IsKeyPressed = function(key)
+    IsKeyPressed = function(selfOrKey, maybeKey)
+        local key = maybeKey ~= nil and maybeKey or selfOrKey
         return __verity_input:IsKeyPressed(key)
     end,
-    IsKeyReleased = function(key)
+    IsKeyReleased = function(selfOrKey, maybeKey)
+        local key = maybeKey ~= nil and maybeKey or selfOrKey
         return __verity_input:IsKeyReleased(key)
     end
 }
@@ -428,6 +440,7 @@ Input = {
             KeyCode keyCode => (int)keyCode,
             Vector2 vector2 => LuaValue.FromObject(new LuaVector2Value(vector2.X, vector2.Y)),
             Vector3 vector3 => LuaValue.FromObject(new LuaVector3Value(vector3.X, vector3.Y, vector3.Z)),
+            Color color => LuaValue.FromObject(LuaColorValue.FromColor(color)),
             Transform transform => LuaValue.FromObject(new LuaTransformHandle(transform)),
             Entity entity => LuaValue.FromObject(new LuaEntityHandle(state, entity)),
             Component component => WrapComponent(state, component),
@@ -450,6 +463,8 @@ Input = {
             return wrappedVector2.ToVector2();
         if (targetType == typeof(Vector3) && value.TryRead<LuaVector3Value>(out var wrappedVector3))
             return wrappedVector3.ToVector3();
+        if (targetType == typeof(Color) && value.TryRead<LuaColorValue>(out var wrappedColor))
+            return wrappedColor.ToColor();
 
         return value.TryRead<object>(out var obj) ? obj : null;
     }
@@ -473,6 +488,7 @@ Input = {
         if (targetType == typeof(KeyCode)) return value is string name ? Enum.Parse<KeyCode>(name, true) : (KeyCode)Convert.ToInt32(value);
         if (targetType == typeof(Vector2) && value is LuaVector2Value vector2Value) return vector2Value.ToVector2();
         if (targetType == typeof(Vector3) && value is LuaVector3Value vector3Value) return vector3Value.ToVector3();
+        if (targetType == typeof(Color) && value is LuaColorValue colorValue) return colorValue.ToColor();
 
         return value;
     }
@@ -581,6 +597,44 @@ public partial class LuaVector3Value
     public Vector3 ToVector3() => new(X, Y, Z);
     public static LuaVector3Value FromVector3(Vector3 value) => new(value.X, value.Y, value.Z);
     public override string ToString() => $"Vector3({X}, {Y}, {Z})";
+}
+
+[LuaObject]
+public partial class LuaColorValue
+{
+    public LuaColorValue()
+    {
+    }
+
+    public LuaColorValue(float r, float g, float b, float a = 1f)
+    {
+        R = r;
+        G = g;
+        B = b;
+        A = a;
+    }
+
+    [LuaMember("R")]
+    public float R { get; set; }
+
+    [LuaMember("G")]
+    public float G { get; set; }
+
+    [LuaMember("B")]
+    public float B { get; set; }
+
+    [LuaMember("A")]
+    public float A { get; set; }
+
+    [LuaMember("create")]
+    public static LuaColorValue Create(float r, float g, float b, float a = 1f) => new(r, g, b, a);
+
+    [LuaMember("FromRgba")]
+    public static LuaColorValue FromRgba(int r, int g, int b, int a = 255) => FromColor(Color.FromRgba(r, g, b, a));
+
+    public Color ToColor() => new(R, G, B, A);
+    public static LuaColorValue FromColor(Color color) => new(color.R, color.G, color.B, color.A);
+    public override string ToString() => $"Color({R}, {G}, {B}, {A})";
 }
 
 [LuaObject]

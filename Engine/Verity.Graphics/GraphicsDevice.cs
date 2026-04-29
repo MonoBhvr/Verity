@@ -31,9 +31,10 @@ public class GraphicsDevice : IRenderDevice
         string title = "Verity Engine",
         int width = 1280,
         int height = 720,
-        bool resizable = true)
+        bool resizable = true,
+        bool visible = true)
     {
-        return (GraphicsDevice)DefaultFactory.Create(title, width, height, resizable);
+        return (GraphicsDevice)DefaultFactory.Create(title, width, height, resizable, visible);
     }
 
     public void Clear(System.Drawing.Color color, RenderTarget? framebuffer = null)

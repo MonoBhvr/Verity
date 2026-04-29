@@ -1,4 +1,5 @@
 using System.Reflection;
+using System.Runtime.Loader;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Verity.Core.ECS;
@@ -20,6 +21,7 @@ global using Color = Verity.Core.Color;
 
     private readonly string _assetsPath;
     private Assembly? _compiledAssembly;
+    private AssemblyLoadContext? _compiledAssemblyLoadContext;
     private readonly List<Type> _componentTypes = [];
     private readonly object _lock = new();
     private FileSystemWatcher? _watcher;
@@ -30,6 +32,7 @@ global using Color = Verity.Core.Color;
 
     private bool _isPaused;
     private bool _needsCompile;
+    private bool _hasCompilationErrors;
 
     public bool IsPaused
     {
@@ -54,6 +57,11 @@ global using Color = Verity.Core.Color;
     public Assembly? CompiledAssembly
     {
         get { lock (_lock) return _compiledAssembly; }
+    }
+
+    public bool HasCompilationErrors
+    {
+        get { lock (_lock) return _hasCompilationErrors; }
     }
 
     public ScriptCompiler(string assetsPath)
@@ -98,12 +106,22 @@ global using Color = Verity.Core.Color;
     public bool Compile()
     {
         if (IsPaused) { _needsCompile = true; return false; }
-        if (!Directory.Exists(_assetsPath)) return false;
+        if (!Directory.Exists(_assetsPath))
+        {
+            lock (_lock)
+                _hasCompilationErrors = false;
+            return false;
+        }
 
         var csFiles = Directory.GetFiles(_assetsPath, "*.cs", SearchOption.AllDirectories);
         if (csFiles.Length == 0)
         {
-            lock (_lock) { _componentTypes.Clear(); _compiledAssembly = null; }
+            lock (_lock)
+            {
+                UnloadCompiledAssembly();
+                _componentTypes.Clear();
+                _hasCompilationErrors = false;
+            }
             OnCompilationFinished?.Invoke();
             return true;
         }
@@ -133,15 +151,33 @@ global using Color = Verity.Core.Color;
                 var fileName = Path.GetFileName(lineSpan.Path);
                 Verity.Core.Debug.LogError($"  - {fileName}({lineSpan.StartLinePosition.Line + 1},{lineSpan.StartLinePosition.Character + 1}): {diag.GetMessage()}");
             }
+
+            lock (_lock)
+                _hasCompilationErrors = true;
+
             return false;
         }
 
         ms.Seek(0, SeekOrigin.Begin);
-        var assembly = Assembly.Load(ms.ToArray());
+        var loadContext = new AssemblyLoadContext($"Verity.UserScripts_{Guid.NewGuid():N}", isCollectible: true);
+        Assembly assembly;
+        ms.Seek(0, SeekOrigin.Begin);
+        try
+        {
+            assembly = loadContext.LoadFromStream(ms);
+        }
+        catch
+        {
+            loadContext.Unload();
+            throw;
+        }
 
         lock (_lock)
         {
+            UnloadCompiledAssembly();
+            _compiledAssemblyLoadContext = loadContext;
             _compiledAssembly = assembly;
+            _hasCompilationErrors = false;
             _componentTypes.Clear();
             foreach (var type in assembly.GetTypes())
             {
@@ -159,9 +195,19 @@ global using Color = Verity.Core.Color;
 
     public bool CompileToFile(string outputPath)
     {
-        if (!Directory.Exists(_assetsPath)) return false;
+        if (!Directory.Exists(_assetsPath))
+        {
+            lock (_lock)
+                _hasCompilationErrors = false;
+            return false;
+        }
         var csFiles = Directory.GetFiles(_assetsPath, "*.cs", SearchOption.AllDirectories);
-        if (csFiles.Length == 0) return false;
+        if (csFiles.Length == 0)
+        {
+            lock (_lock)
+                _hasCompilationErrors = false;
+            return true;
+        }
 
         var fileContents = csFiles.ToDictionary(f => f, f => File.ReadAllText(f));
         var syntaxTrees = fileContents.Select(kvp => CSharpSyntaxTree.ParseText(kvp.Value, path: kvp.Key)).ToList();
@@ -175,8 +221,16 @@ global using Color = Verity.Core.Color;
         {
             foreach (var diag in result.Diagnostics.Where(d => d.Severity == DiagnosticSeverity.Error))
                 Verity.Core.Debug.LogError($"[ScriptCompiler] Export Error: {diag.GetMessage()}");
+
+            lock (_lock)
+                _hasCompilationErrors = true;
+
             return false;
         }
+
+        lock (_lock)
+            _hasCompilationErrors = false;
+
         return true;
     }
 
@@ -204,6 +258,13 @@ global using Color = Verity.Core.Color;
         }
 
         return references;
+    }
+
+    private void UnloadCompiledAssembly()
+    {
+        _compiledAssembly = null;
+        _compiledAssemblyLoadContext?.Unload();
+        _compiledAssemblyLoadContext = null;
     }
 
     public List<Type> GetAllAddableComponentTypes()
@@ -288,5 +349,14 @@ global using Color = Verity.Core.Color;
         return types.OrderBy(t => t.FullName).ToList();
     }
 
-    public void Dispose() { _watcher?.Dispose(); _debounceTimer?.Dispose(); }
+    public void Dispose()
+    {
+        _watcher?.Dispose();
+        _debounceTimer?.Dispose();
+        lock (_lock)
+        {
+            _componentTypes.Clear();
+            UnloadCompiledAssembly();
+        }
+    }
 }

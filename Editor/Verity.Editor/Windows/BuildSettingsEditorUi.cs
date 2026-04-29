@@ -142,6 +142,11 @@ internal static class BuildSettingsEditorUi
 
         string rel = Path.GetRelativePath(app.AssetsPath, fullPath).Replace("\\", "/");
         if (!app.BuildSettings.Worlds.Contains(rel))
+        {
+            bool wasEmpty = app.BuildSettings.Worlds.Count == 0;
             app.BuildSettings.Worlds.Add(rel);
+            if (wasEmpty)
+                app.BuildSettings.StartWorldIndex = app.BuildSettings.Worlds.Count - 1;
+        }
     }
 }

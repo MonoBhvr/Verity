@@ -16,6 +16,12 @@ function toCanvasSpace(clientX, clientY) {
 }
 
 function syncCanvasPresentation() {
+  if (document.body.classList.contains('multi-window-mode')) {
+    canvas.style.width = '100vw';
+    canvas.style.height = '100vh';
+    return;
+  }
+
   const renderWidth = Math.max(1, canvas.width || 1);
   const renderHeight = Math.max(1, canvas.height || 1);
   const scale = Math.min(window.innerWidth / renderWidth, window.innerHeight / renderHeight);

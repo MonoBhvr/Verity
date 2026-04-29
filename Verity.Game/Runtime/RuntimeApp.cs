@@ -17,6 +17,69 @@ namespace Verity.Game.Runtime;
 
 internal sealed class RuntimeApp : IDisposable
 {
+    private sealed class BrowserWindowOutputPresenter
+    {
+        public static readonly BrowserWindowOutputPresenter Instance = new();
+
+        private readonly MethodInfo? _beginMethod;
+        private readonly MethodInfo? _presentMethod;
+        private readonly MethodInfo? _endMethod;
+
+        private BrowserWindowOutputPresenter()
+        {
+            Type? deviceType = Type.GetType("Verity.Game.Browser.BrowserRenderDevice, Verity.Game.Browser");
+            if (deviceType == null)
+                return;
+
+            _beginMethod = deviceType.GetMethod("BeginWindowOutputs", BindingFlags.Instance | BindingFlags.Public);
+            _presentMethod = deviceType.GetMethod("PresentWindowOutput", BindingFlags.Instance | BindingFlags.Public);
+            _endMethod = deviceType.GetMethod("EndWindowOutputs", BindingFlags.Instance | BindingFlags.Public);
+        }
+
+        public bool IsAvailable => _beginMethod != null && _presentMethod != null && _endMethod != null;
+
+        public void Begin(IRenderDevice device)
+        {
+            _beginMethod?.Invoke(device, null);
+        }
+
+        public void Present(
+            IRenderDevice device,
+            string key,
+            string title,
+            int x,
+            int y,
+            int width,
+            int height,
+            int order,
+            string group,
+            bool decorated,
+            bool lockPosition,
+            bool lockSize,
+            RenderTexture texture)
+        {
+            _presentMethod?.Invoke(device, [
+                key,
+                title,
+                x,
+                y,
+                width,
+                height,
+                order,
+                group,
+                decorated,
+                lockPosition,
+                lockSize,
+                texture
+            ]);
+        }
+
+        public void End(IRenderDevice device)
+        {
+            _endMethod?.Invoke(device, null);
+        }
+    }
+
     private readonly IRuntimeHost _runtimeHost;
     private readonly IRuntimeContentSource _contentSource;
     private readonly string _baseDir;
@@ -28,6 +91,7 @@ internal sealed class RuntimeApp : IDisposable
     private readonly Shader2D _shader;
     private readonly TextureManager _textureManager;
     private readonly RenderPipeline _renderPipeline;
+    private readonly NativeMultiWindowRenderer? _multiWindowRenderer;
     private readonly ProfilerOverlay _profilerOverlay;
     private readonly GameLoop _gameLoop;
     private readonly Stopwatch _stopwatch;
@@ -64,17 +128,22 @@ internal sealed class RuntimeApp : IDisposable
         _minimalBrowserMode = minimalBrowserMode;
 
         _buildSettings = LoadBuildSettings();
+        _projectSettings = _minimalBrowserMode ? new ProjectSettings() : LoadProjectSettings();
 
         string appTitle = string.IsNullOrWhiteSpace(_buildSettings.AppName) ? "Verity Game" : _buildSettings.AppName;
         int windowWidth = Math.Max(320, _buildSettings.WindowWidth);
         int windowHeight = Math.Max(180, _buildSettings.WindowHeight);
+        bool showHostWindow = !_projectSettings.MultiWindowEnabled || OperatingSystem.IsBrowser();
 
-        _device = _runtimeHost.CreateGraphicsDevice(appTitle, windowWidth, windowHeight, _buildSettings.WindowResizable);
+        _device = _runtimeHost.CreateGraphicsDevice(appTitle, windowWidth, windowHeight, _buildSettings.WindowResizable, showHostWindow);
         _writeRuntimeLog("Runtime", $"GraphicsDevice created: {_device.Width}x{_device.Height}");
 
         _shader = Shader2D.Create(_device);
         _textureManager = new TextureManager(_device);
         _renderPipeline = new RenderPipeline(_device, _shader, _textureManager);
+        if (_device is GraphicsDevice graphicsDevice && !OperatingSystem.IsBrowser())
+            _multiWindowRenderer = new NativeMultiWindowRenderer(graphicsDevice, _renderPipeline, _projectSettings, _writeRuntimeLog);
+
         _profilerOverlay = new ProfilerOverlay();
 
         RenderPipeline.BaseAssetsPath = _baseDir;
@@ -88,7 +157,6 @@ internal sealed class RuntimeApp : IDisposable
 
         if (_minimalBrowserMode)
         {
-            _projectSettings = new ProjectSettings();
             _gameLoop = new GameLoop { ProjectSettings = _projectSettings };
             _stopwatch = Stopwatch.StartNew();
             _lastTicks = _stopwatch.ElapsedTicks;
@@ -99,16 +167,16 @@ internal sealed class RuntimeApp : IDisposable
         }
 
         _userAssembly = LoadUserAssembly();
-        _projectSettings = LoadProjectSettings();
 
         _writeRuntimeLog("Build", $"WorldCount={_buildSettings.Worlds.Count}, StartWorldIndex={_buildSettings.StartWorldIndex}");
 
         InitializeFilters();
         InitializeProjectSettings();
         LoadStartupWorld();
+        NormalizeCameraOutputsForProjectSettings();
         BindWorldAssets();
 
-        LuaScriptManager.Initialize(_baseDir);
+        LuaScriptManager.Initialize(_baseDir, _userAssembly);
 
         Time.Reset();
         _gameLoop = new GameLoop { ProjectSettings = _projectSettings };
@@ -156,23 +224,34 @@ internal sealed class RuntimeApp : IDisposable
         RuntimeProfiler.Enabled = ProfilerOverlay.ShowProfiler;
         _device.PollEvents();
         int logicTicksThisFrame = _gameLoop.TickLogic(deltaTime);
-        if (logicTicksThisFrame <= 0)
-            return;
 
-        _profilerOverlay.TickFrame();
+        if (logicTicksThisFrame > 0)
+            _profilerOverlay.TickFrame();
         uint viewportWidth = _device.Width;
         uint viewportHeight = _device.Height;
         if (UiSystem.ActiveCanvases.Count > 0)
             UiSystem.Update(viewportWidth, viewportHeight);
 
         var world = WorldManager.ActiveWorld;
-        Camera? mainCam = world != null ? FindCameraRecursiveInWorld(world) : null;
+        bool windowOutputsActive = HasVisibleWindowOutputs(world);
+        List<Camera> mainWindowCameras = world == null || windowOutputsActive
+            ? new List<Camera>()
+            : CameraSelection.EnumerateActiveOutputs(world)
+                .Where(static output => output.Target == CameraOutputTarget.MainWindow)
+                .OrderBy(static output => output.Order)
+                .Select(static output => output.Camera)
+                .Where(static camera => camera is { Enabled: true })
+                .Cast<Camera>()
+                .ToList();
+        Camera? mainCam = mainWindowCameras.Count > 0 ? mainWindowCameras[0] : (windowOutputsActive ? null : CameraSelection.GetDefaultCamera(world));
         Time.AdvanceFrame();
         _frameCount++;
         _framesSinceLastFpsSample++;
         UpdateBrowserDebugState(world);
 
         long renderStart = Stopwatch.GetTimestamp();
+        if (world != null)
+            _renderPipeline.RenderCameraOutputs(world, includeWindowOutputs: _projectSettings.MultiWindowEnabled);
 
         if (mainCam != null && world != null)
         {
@@ -184,7 +263,20 @@ internal sealed class RuntimeApp : IDisposable
             if (_frameCount % 300 == 0)
                 _writeRuntimeLog("Render", $"frame={_frameCount}, world={world.Name}, camera={mainCam.Owner?.Name ?? "<unnamed>"}, canvases={UiSystem.ActiveCanvases.Count}");
 
-            _renderPipeline.RenderWorld(world, mainCam);
+            if (mainWindowCameras.Count > 0)
+            {
+                for (int i = 0; i < mainWindowCameras.Count; i++)
+                    _renderPipeline.RenderWorld(world, mainWindowCameras[i], clearTarget: i == 0);
+            }
+            else
+            {
+                _renderPipeline.RenderWorld(world, mainCam);
+            }
+        }
+        else if (windowOutputsActive)
+        {
+            _device.SetViewport(0, 0, viewportWidth, viewportHeight);
+            _device.Clear(new Verity.Core.Color(0.05f, 0.05f, 0.06f, 1.0f));
         }
         else
         {
@@ -204,7 +296,60 @@ internal sealed class RuntimeApp : IDisposable
         _profilerOverlay.Render(_renderPipeline, world, (int)viewportWidth, (int)viewportHeight);
 
         _device.SwapBuffers();
+        if (_projectSettings.MultiWindowEnabled && world != null)
+            PresentWindowOutputs(world);
+
         Verity.Core.Debug.ClearDrawCommands();
+    }
+
+    private void PresentWindowOutputs(World world)
+    {
+        if (OperatingSystem.IsBrowser() && TryGetBrowserWindowOutputPresenter(out var webPresenter))
+        {
+            webPresenter.Begin(_device);
+            foreach (var output in CameraSelection.EnumerateActiveOutputs(world)
+                         .Where(static output => output.Target == CameraOutputTarget.Window && output.WindowVisible)
+                         .OrderBy(static output => output.Order))
+            {
+                string key = output.ResolveOutputName();
+                if (string.IsNullOrWhiteSpace(key) || !_renderPipeline.TryGetCameraOutputTexture(key, out var texture))
+                    continue;
+
+                int width = Math.Max(1, (int)MathF.Round(output.WindowSize.X));
+                int height = Math.Max(1, (int)MathF.Round(output.WindowSize.Y));
+                if (width <= 1 || height <= 1)
+                {
+                    width = texture.Width;
+                    height = texture.Height;
+                }
+
+                webPresenter.Present(
+                    _device,
+                    key,
+                    string.IsNullOrWhiteSpace(output.OutputName) ? output.Owner.Name : output.OutputName.Trim(),
+                    (int)MathF.Round(output.WindowPosition.X),
+                    (int)MathF.Round(output.WindowPosition.Y),
+                    width,
+                    height,
+                    output.Order,
+                    output.WindowGroup.Trim(),
+                    output.WindowDecorated,
+                    output.WindowLockPosition,
+                    output.WindowLockSize,
+                    texture);
+            }
+            webPresenter.End(_device);
+            return;
+        }
+
+        if (_multiWindowRenderer != null)
+            _multiWindowRenderer?.Render(world);
+    }
+
+    private static bool TryGetBrowserWindowOutputPresenter(out BrowserWindowOutputPresenter presenter)
+    {
+        presenter = BrowserWindowOutputPresenter.Instance;
+        return presenter.IsAvailable;
     }
 
     private void UpdateBrowserDebugState(World? world)
@@ -249,6 +394,7 @@ internal sealed class RuntimeApp : IDisposable
     {
         _runtimeHost.AudioRuntime.Shutdown();
         LuaScriptManager.Dispose();
+        _multiWindowRenderer?.Dispose();
         _renderPipeline.Dispose();
         _shader.Dispose();
         _textureManager.Dispose();
@@ -415,6 +561,7 @@ internal sealed class RuntimeApp : IDisposable
             return;
 
         LoadWorldFromRelativePath(worldFile);
+        NormalizeCameraOutputsForProjectSettings();
         BindWorldAssets();
     }
 
@@ -449,6 +596,27 @@ internal sealed class RuntimeApp : IDisposable
         _writeRuntimeLog("World", $"ActiveWorld={WorldManager.ActiveWorld.Name}, RootEntities={WorldManager.ActiveWorld.RootEntities.Count}");
         foreach (var root in WorldManager.ActiveWorld.RootEntities)
             BindAssetsRecursive(root);
+    }
+
+    private void NormalizeCameraOutputsForProjectSettings()
+    {
+        var world = WorldManager.ActiveWorld;
+        if (world == null || !_projectSettings.MultiWindowEnabled)
+            return;
+
+        foreach (var output in CameraSelection.EnumerateActiveOutputs(world))
+        {
+            if (output.Target == CameraOutputTarget.MainWindow)
+                output.Target = CameraOutputTarget.Window;
+        }
+    }
+
+    private bool HasVisibleWindowOutputs(World? world)
+    {
+        return _projectSettings.MultiWindowEnabled &&
+               world != null &&
+               CameraSelection.EnumerateActiveOutputs(world)
+                   .Any(static output => output.Target == CameraOutputTarget.Window && output.WindowVisible);
     }
 
     private void OpenStartupUiRoles(World? world)
@@ -533,34 +701,4 @@ internal sealed class RuntimeApp : IDisposable
             BindAssetsRecursive(child.Owner);
     }
 
-    private static Camera? FindCameraRecursiveInWorld(World world)
-    {
-        foreach (var root in world.RootEntities)
-        {
-            var cam = FindCameraRecursive(root);
-            if (cam != null)
-                return cam;
-        }
-
-        return null;
-    }
-
-    private static Camera? FindCameraRecursive(Entity entity)
-    {
-        if (!entity.Active)
-            return null;
-
-        var cam = entity.GetComponent<Camera>();
-        if (cam != null && cam.Enabled)
-            return cam;
-
-        foreach (var child in entity.Transform.Children)
-        {
-            cam = FindCameraRecursive(child.Owner);
-            if (cam != null)
-                return cam;
-        }
-
-        return null;
-    }
 }

@@ -16,6 +16,11 @@
       justify-content: center;
     }
 
+    body.multi-window-mode {
+      display: block;
+      background: transparent;
+    }
+
     canvas {
       display: block;
       width: auto;
@@ -25,6 +30,16 @@
       image-rendering: pixelated;
       outline: none;
       background: #000;
+    }
+
+    body.multi-window-mode canvas {
+      position: fixed;
+      inset: 0;
+      width: 100vw !important;
+      height: 100vh !important;
+      max-width: none;
+      max-height: none;
+      background: transparent;
     }
   </style>
 </head>

@@ -587,6 +587,10 @@ public class VisualNode : UiNode
     [JsonConverter(typeof(SpriteConverter))]
     public Sprite Sprite { get; set; }
 
+    public string CameraOutputName { get; set; } = string.Empty;
+
+    public Verity.Core.TextureAsset TextureAsset { get; set; } = new();
+
     public bool PreserveAspect { get; set; } = true;
 }
 

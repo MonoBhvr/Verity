@@ -91,4 +91,26 @@ internal static partial class BrowserGraphicsInterop
 
     [JSImport("globalThis.deleteMesh")]
     internal static partial void DeleteMesh(int contextHandle, int meshHandle);
+
+    [JSImport("globalThis.presentWindowOutputsBegin")]
+    internal static partial void PresentWindowOutputsBegin(int contextHandle);
+
+    [JSImport("globalThis.presentWindowOutput")]
+    internal static partial void PresentWindowOutput(
+        int contextHandle,
+        string key,
+        string title,
+        int x,
+        int y,
+        int width,
+        int height,
+        int order,
+        string group,
+        bool decorated,
+        bool lockPosition,
+        bool lockSize,
+        int textureHandle);
+
+    [JSImport("globalThis.presentWindowOutputsEnd")]
+    internal static partial void PresentWindowOutputsEnd(int contextHandle);
 }
