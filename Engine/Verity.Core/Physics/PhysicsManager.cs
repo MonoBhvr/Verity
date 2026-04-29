@@ -39,6 +39,27 @@ public static class PhysicsManager
     public static Vector2 Gravity { get; set; } = Vector2.Zero;
     public static ulong[] CollisionMatrix { get => _collisionMatrix; set => _collisionMatrix = value; }
 
+    public static void Reset()
+    {
+        _grid.Clear();
+        _activePhysicals.Clear();
+        _staticShapes.Clear();
+        _physicalShapes.Clear();
+        _nearestPhysicalCache.Clear();
+        _subStepContacts.Clear();
+        _checkedPairs.Clear();
+        _potentialCollisions.Clear();
+        ClearContactMap(_currentContacts);
+        ClearContactMap(_previousContacts);
+        ClearContactMap(_contactsByPair);
+        _contactListPool.Clear();
+        _overlapQueryResult.Clear();
+        _collisionMatrix = Enumerable.Repeat(ulong.MaxValue, 64).ToArray();
+        _cachedWorld = null;
+        _cachedWorldVersion = -1;
+        Gravity = Vector2.Zero;
+    }
+
     private static void EnsureQueryCache()
     {
         var world = WorldManager.ActiveWorld;

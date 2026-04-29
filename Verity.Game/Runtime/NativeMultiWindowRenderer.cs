@@ -89,6 +89,7 @@ internal sealed class NativeMultiWindowRenderer : IDisposable
 
         foreach (var entry in createdThisFrame)
         {
+            entry.Window.SetTaskSwitcherVisible(true);
             entry.Window.Show();
             entry.Window.SetOpacity(1.0f);
             entry.Window.Raise();
@@ -190,6 +191,7 @@ internal sealed class NativeMultiWindowRenderer : IDisposable
     {
         var screen = _device.Window.GetPrimaryDisplayBounds();
         var window = _device.Window.CreateAuxiliaryWindow("Verity Window", 64, 64, screen.X + screen.Width + 256, screen.Y, resizable: true, visible: true);
+        window.SetTaskSwitcherVisible(false);
         window.SetOpacity(0.0f);
         return window;
     }
@@ -203,6 +205,7 @@ internal sealed class NativeMultiWindowRenderer : IDisposable
         window.SetSize(width, height);
         window.SetPosition(x, y);
         window.SetResizable(true);
+        window.SetTaskSwitcherVisible(true);
         window.SetOpacity(0.0f);
         return window;
     }
@@ -211,6 +214,7 @@ internal sealed class NativeMultiWindowRenderer : IDisposable
     {
         var screen = _device.Window.GetPrimaryDisplayBounds();
         entry.Window.SetOpacity(0.0f);
+        entry.Window.SetTaskSwitcherVisible(false);
         entry.Window.SetPosition(screen.X + screen.Width + 256, screen.Y);
         if (!entry.Resizable)
         {

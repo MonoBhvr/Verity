@@ -73,6 +73,14 @@ public static class ParticleSystem
         States.Clear();
     }
 
+    public static void RemoveEmitter(ParticleEmitter emitter)
+    {
+        if (emitter == null)
+            return;
+
+        States.Remove(emitter);
+    }
+
     private static EmitterState GetOrCreateState(ParticleEmitter emitter)
     {
         if (States.TryGetValue(emitter, out EmitterState? state))

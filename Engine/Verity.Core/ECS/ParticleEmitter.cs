@@ -44,4 +44,10 @@ public class ParticleEmitter : Component
 
     [SerializeField]
     public int RandomSeed { get; set; } = Environment.TickCount;
+
+    public override void OnDestroy()
+    {
+        ParticleSystem.RemoveEmitter(this);
+        base.OnDestroy();
+    }
 }

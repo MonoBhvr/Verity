@@ -55,7 +55,9 @@ public static class WorldManager
 
     internal static void Reset()
     {
-        _loadedWorlds.Clear();
+        while (_loadedWorlds.Count > 0)
+            UnloadWorld(_loadedWorlds[^1]);
+
         ActiveWorld = null;
     }
 }

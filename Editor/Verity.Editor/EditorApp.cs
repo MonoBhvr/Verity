@@ -520,12 +520,13 @@ public class EditorApp : IDisposable
 
     private void ActualCloseProject()
     {
+        if (IsPlaying)
+            ExitPlayMode();
+
         AutoSaveEditorState();
         _projectLock?.Dispose();
         _projectLock = null;
-        BuildManagerWindow.ShutdownPreviewServer();
-        ClearAssetRefreshTracking();
-        InvalidateWorldAssetCache();
+        ResetProjectScopedState();
         CurrentProjectName = null;
         LastWorldAssetPath = null;
         InvalidateLauncherProjectCache();
@@ -1504,6 +1505,8 @@ public class EditorApp : IDisposable
 
     private void HandleScriptsCompiledOnMainThread()
     {
+        InspectorWindow.ClearReflectionCaches();
+        GetWindow<InspectorWindow>()?.ClearCachedState();
         var world = WorldManager.ActiveWorld; 
 
         LuaScriptManager.RefreshBindings(_scriptCompiler?.CompiledAssembly, ProjectPath);
@@ -2258,6 +2261,41 @@ public class EditorApp : IDisposable
             return;
 
         _pendingMainThreadActions.Enqueue(action);
+    }
+
+    private void ResetProjectScopedState()
+    {
+        BuildManagerWindow.ShutdownPreviewServer();
+        _pendingMainThreadActions.Clear();
+        ClearAssetRefreshTracking();
+        InvalidateWorldAssetCache();
+        _undoSystem.Clear();
+        EditorSelection.Reset();
+        GetWindow<InspectorWindow>()?.ClearCachedState();
+        InspectorWindow.ClearReflectionCaches();
+        if (_assetWatcher != null)
+        {
+            _assetWatcher.Changed -= OnAssetWatcherChanged;
+            _assetWatcher.Created -= OnAssetWatcherChanged;
+            _assetWatcher.Deleted -= OnAssetWatcherChanged;
+            _assetWatcher.Renamed -= OnAssetWatcherRenamed;
+            _assetWatcher.Dispose();
+            _assetWatcher = null;
+        }
+
+        if (_scriptCompiler != null)
+        {
+            _scriptCompiler.OnCompilationFinished -= OnScriptsCompiled;
+            _scriptCompiler.Dispose();
+            _scriptCompiler = null;
+        }
+
+        LuaScriptManager.HotReloadRequested -= OnLuaScriptsHotReloadRequested;
+        LuaScriptManager.SuspendHotReloadEvents = false;
+        LuaScriptManager.Dispose();
+        VerityCore.ResetRuntime();
+        Verity.Input.Input.Reset();
+        Verity.Filter.FilterRegistry.Clear();
     }
 
     private void ToggleFullscreen(EditorWindow window)
@@ -3175,27 +3213,7 @@ public class EditorApp : IDisposable
         AutoSaveEditorState();
         CoreDebug.OnLog -= OnCoreLog;
         _device.Window.OnSdlEvent -= Verity.Input.Input.ProcessEvent;
-        BuildManagerWindow.ShutdownPreviewServer();
-        ClearAssetRefreshTracking();
-
-        if (_assetWatcher != null)
-        {
-            _assetWatcher.Changed -= OnAssetWatcherChanged;
-            _assetWatcher.Created -= OnAssetWatcherChanged;
-            _assetWatcher.Deleted -= OnAssetWatcherChanged;
-            _assetWatcher.Renamed -= OnAssetWatcherRenamed;
-            _assetWatcher.Dispose();
-        }
-
-        if (_scriptCompiler != null)
-        {
-            _scriptCompiler.OnCompilationFinished -= OnScriptsCompiled;
-            _scriptCompiler.Dispose();
-        }
-
-        LuaScriptManager.HotReloadRequested -= OnLuaScriptsHotReloadRequested;
-        LuaScriptManager.SuspendHotReloadEvents = false;
-        LuaScriptManager.Dispose();
+        ResetProjectScopedState();
 
         _renderPipeline.Dispose(); 
         _shader.Dispose(); 

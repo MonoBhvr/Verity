@@ -180,8 +180,8 @@ public class World
         foreach (var child in entity.Transform.Children.ToArray())
             DestroyEntityRecursive(child.Owner);
 
-        foreach (var script in entity.GetScripts())
-            script.OnDestroy();
+        foreach (var component in entity.GetAllComponents().ToArray())
+            component.OnDestroy();
 
         entity.World = null;
     }

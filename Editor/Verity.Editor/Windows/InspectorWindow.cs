@@ -71,6 +71,35 @@ public unsafe class InspectorWindow : EditorWindow
 
     public InspectorWindow(EditorApp app) : base(L10n.Tr("window_inspector")) { _app = app; }
 
+    internal static void ClearReflectionCaches()
+    {
+        GenericInspectorMembersCache.Clear();
+        MultiInspectorMembersCache.Clear();
+        NestedInspectorMembersCache.Clear();
+        MemberAttributeCache.Clear();
+        ButtonMetadataCache.Clear();
+        AssetReferenceAttributeCache.Clear();
+    }
+
+    internal void ClearCachedState()
+    {
+        _scaleLocks.Clear();
+        _selectedSliceIds.Clear();
+        _cachedUiScreenPath = null;
+        _cachedUiScreenWriteTimeUtc = default;
+        _cachedUiScreen = null;
+        _cachedUiPrefabPath = null;
+        _cachedUiPrefabWriteTimeUtc = default;
+        _cachedUiPrefab = null;
+        _cachedTextFiles.Clear();
+        _cachedStyleData.Clear();
+        _cachedBlueprintPath = null;
+        _cachedBlueprintWriteTimeUtc = default;
+        _cachedBlueprintPreview = null;
+        _assetPickerCache.Clear();
+        _assetPickerCacheRoot = null;
+    }
+
     private sealed class BlueprintPreviewData
     {
         public List<BlueprintEntityPreview> Entities { get; init; } = [];

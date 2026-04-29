@@ -82,4 +82,18 @@ public static class EditorSelection
     // Polygon Editing state
     public static Component? EditingPolygonComponent { get; set; }
     public static bool IsEditingPolygon => EditingPolygonComponent != null;
+
+    public static void Reset()
+    {
+        ClearSelection();
+        ClearAssetSelection();
+        DraggedAssetPath = null;
+        DraggedSpriteAsset = null;
+        DraggedEntity = null;
+        SelectedTile = null;
+        SelectedTool = Verity.Core.World.TilemapEditor.Tool.Brush;
+        TileBrushSize = 1;
+        TileBrushShape = Verity.Core.World.TilemapEditor.BrushShape.Rectangle;
+        EditingPolygonComponent = null;
+    }
 }

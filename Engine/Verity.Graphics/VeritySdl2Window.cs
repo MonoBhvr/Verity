@@ -166,6 +166,28 @@ public class VeritySdl2Window : Window
         SDL.SDL_SetWindowOpacity(_sdlWindow, Math.Clamp(opacity, 0.0f, 1.0f));
     }
 
+    public void SetTaskSwitcherVisible(bool visible)
+    {
+        if (!OperatingSystem.IsWindows())
+            return;
+
+        IntPtr hwnd = GetWin32Hwnd();
+        if (hwnd == IntPtr.Zero)
+            return;
+
+        nint exStyle = GetWindowLongPtr(hwnd, GwlExStyle);
+        nint newExStyle = visible
+            ? (exStyle | WsExAppWindow) & ~WsExToolWindow
+            : (exStyle | WsExToolWindow) & ~WsExAppWindow;
+
+        if (newExStyle == exStyle)
+            return;
+
+        SetWindowLongPtr(hwnd, GwlExStyle, newExStyle);
+        SetWindowPos(hwnd, IntPtr.Zero, 0, 0, 0, 0,
+            SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_NOOWNERZORDER | SWP_FRAMECHANGED);
+    }
+
     public void Raise()
     {
         SDL.SDL_RaiseWindow(_sdlWindow);
@@ -173,11 +195,7 @@ public class VeritySdl2Window : Window
 
     public void PlaceAfter(VeritySdl2Window? insertAfter)
     {
-        SDL.SDL_SysWMinfo info = default;
-        SDL.SDL_GetVersion(out info.version);
-        IntPtr hwnd = SDL.SDL_GetWindowWMInfo(_sdlWindow, ref info) == SDL.SDL_bool.SDL_TRUE
-            ? info.info.win.window
-            : IntPtr.Zero;
+        IntPtr hwnd = GetWin32Hwnd();
 
         if (hwnd == IntPtr.Zero)
         {
@@ -271,13 +289,35 @@ public class VeritySdl2Window : Window
     public event Action<SDL.SDL_Event>? OnSdlEvent;
 
     private static readonly IntPtr HWND_TOP = IntPtr.Zero;
+    private const int GwlExStyle = -20;
+    private static readonly nint WsExToolWindow = 0x00000080;
+    private static readonly nint WsExAppWindow = 0x00040000;
     private const uint SWP_NOSIZE = 0x0001;
     private const uint SWP_NOMOVE = 0x0002;
     private const uint SWP_NOACTIVATE = 0x0010;
     private const uint SWP_NOOWNERZORDER = 0x0200;
+    private const uint SWP_FRAMECHANGED = 0x0020;
+
+    private IntPtr GetWin32Hwnd()
+    {
+        if (!OperatingSystem.IsWindows())
+            return IntPtr.Zero;
+
+        SDL.SDL_SysWMinfo info = default;
+        SDL.SDL_GetVersion(out info.version);
+        return SDL.SDL_GetWindowWMInfo(_sdlWindow, ref info) == SDL.SDL_bool.SDL_TRUE
+            ? info.info.win.window
+            : IntPtr.Zero;
+    }
 
     [DllImport("user32.dll", SetLastError = true)]
     private static extern bool SetWindowPos(IntPtr hWnd, IntPtr hWndInsertAfter, int x, int y, int cx, int cy, uint uFlags);
+
+    [DllImport("user32.dll", EntryPoint = "GetWindowLongPtrW")]
+    private static extern nint GetWindowLongPtr(IntPtr hWnd, int nIndex);
+
+    [DllImport("user32.dll", EntryPoint = "SetWindowLongPtrW")]
+    private static extern nint SetWindowLongPtr(IntPtr hWnd, int nIndex, nint dwNewLong);
 }
 
 public class VeritySdl2Exception : Exception, IError
