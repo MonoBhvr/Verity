@@ -1700,6 +1700,24 @@ public class EditorApp : IDisposable
         }
     }
 
+    private int TickPlayLogicSafely(float deltaTime)
+    {
+        if (!IsPlaying || _gameLoop == null)
+            return 0;
+
+        try
+        {
+            return _gameLoop.TickLogic(deltaTime);
+        }
+        catch (Exception ex)
+        {
+            CoreDebug.LogError($"[Editor] Play Mode aborted due to runtime error: {ex}");
+            ShowOverlayMessage(L10n.Tr("msg_play_mode_runtime_error"), 3.0f);
+            ExitPlayMode();
+            return 0;
+        }
+    }
+
     public void Run()
     {
         _stopwatch.Start();
@@ -1737,9 +1755,7 @@ public class EditorApp : IDisposable
             }
 
             stageStart = Stopwatch.GetTimestamp();
-            LastPlayLogicTicksThisFrame = IsPlaying && _gameLoop != null
-                ? _gameLoop.TickLogic(deltaTime)
-                : 0;
+            LastPlayLogicTicksThisFrame = TickPlayLogicSafely(deltaTime);
             _profiler.RecordFrameStage("Play Logic", Stopwatch.GetElapsedTime(stageStart).TotalMilliseconds);
 
             HandleGlobalShortcuts();

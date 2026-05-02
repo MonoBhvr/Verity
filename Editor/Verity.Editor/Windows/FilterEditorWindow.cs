@@ -3,6 +3,7 @@ using Hexa.NET.ImGui;
 using Verity.Filter;
 using FilterType = Verity.Filter.Filter;
 using Verity.Core.Engine;
+using Verity.Input;
 
 namespace Verity.Editor.Windows;
 
@@ -210,10 +211,7 @@ public unsafe class FilterEditorWindow : EditorWindow
             ImGui.TextDisabled(L10n.Tr("ui_filter_select_value"));
             if (resolvedType.IsEnum)
             {
-                string[] names = Enum.GetNames(resolvedType);
-                int currentIdx = Array.IndexOf(names, _editValueBuffer);
-                ImGui.SetNextItemWidth(-1);
-                if (ImGui.Combo("##ValueEnumCombo", ref currentIdx, names, names.Length)) _editValueBuffer = names[currentIdx];
+                DrawEnumValueCombo("##ValueEnumCombo", resolvedType, ref _editValueBuffer);
             }
             else if (resolvedType.Name == "Tag") DrawSimpleStringCombo("##ValueTagCombo", _app.ProjectSettings.Tags, ref _editValueBuffer);
             else if (resolvedType.Name == "PhysicsGroup") DrawSimpleStringCombo("##ValuePhysicsCombo", _app.ProjectSettings.PhysicsGroups, ref _editValueBuffer);
@@ -251,6 +249,8 @@ public unsafe class FilterEditorWindow : EditorWindow
             if (ImGui.Selectable(L10n.Tr("ui_filter_system_tag"), currentType == "Verity.Core.Tag, Verity.Core")) { currentType = "Verity.Core.Tag, Verity.Core"; _editValueBuffer = ""; }
             if (ImGui.Selectable(L10n.Tr("ui_filter_system_physics_group"), currentType == "Verity.Core.PhysicsGroup, Verity.Core")) { currentType = "Verity.Core.PhysicsGroup, Verity.Core"; _editValueBuffer = ""; }
             if (ImGui.Selectable(L10n.Tr("ui_filter_system_sorting_layer"), currentType == "Verity.Core.SortingLayer, Verity.Core")) { currentType = "Verity.Core.SortingLayer, Verity.Core"; _editValueBuffer = ""; }
+            if (ImGui.Selectable("System: Key Code", currentType == typeof(KeyCode).AssemblyQualifiedName)) { currentType = typeof(KeyCode).AssemblyQualifiedName ?? typeof(KeyCode).FullName!; _editValueBuffer = ""; }
+            if (ImGui.Selectable("System: Mouse Button", currentType == typeof(MouseButton).AssemblyQualifiedName)) { currentType = typeof(MouseButton).AssemblyQualifiedName ?? typeof(MouseButton).FullName!; _editValueBuffer = ""; }
             
             ImGui.Separator();
             ImGui.TextDisabled(L10n.Tr("ui_filter_search_enums"));
@@ -284,6 +284,28 @@ public unsafe class FilterEditorWindow : EditorWindow
             foreach (var item in items) if (ImGui.Selectable(item, item == current)) current = item;
             ImGui.EndCombo();
         }
+    }
+
+    private void DrawEnumValueCombo(string id, Type enumType, ref string current)
+    {
+        string[] names = Enum.GetNames(enumType);
+        string preview = string.IsNullOrEmpty(current) ? L10n.Tr("ui_filter_select_value_combo") : current;
+
+        ImGui.SetNextItemWidth(-1);
+        if (!ImGui.BeginCombo(id, preview))
+            return;
+
+        foreach (string name in names)
+        {
+            bool isSelected = string.Equals(name, current, StringComparison.Ordinal);
+            if (ImGui.Selectable(name, isSelected))
+                current = name;
+
+            if (isSelected)
+                ImGui.SetItemDefaultFocus();
+        }
+
+        ImGui.EndCombo();
     }
 
     private void DrawCreateFilter()

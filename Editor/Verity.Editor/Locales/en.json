@@ -81,6 +81,7 @@
     "msg_close_project_confirm": "Close project without saving?",
     "msg_scripts_reloaded": "Script loaded.",
     "msg_cannot_play_compilation_errors": "Cannot enter Play Mode until script compilation errors are fixed.",
+    "msg_play_mode_runtime_error": "Play Mode stopped due to a runtime error. Check the console for details.",
     "msg_cannot_build_compilation_errors": "Cannot build until script compilation errors are fixed.",
     "msg_cannot_load_script_asset_compilation_errors": "Cannot load scripted world or blueprint safely until script compilation errors are fixed.",
     "btn_save_and_exit": "Save and Exit",

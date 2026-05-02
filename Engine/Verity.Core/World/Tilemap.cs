@@ -137,6 +137,24 @@ public class Tilemap : Component
         return true;
     }
 
+    public bool GetBounds(out Vector2 min, out Vector2 max)
+    {
+        if (!TryGetTileBounds(out int minX, out int minY, out int maxX, out int maxY))
+        {
+            min = max = Vector2.Zero;
+            return false;
+        }
+
+        Vector2 bottomLeft = CellToWorld(minX, minY);
+        Vector2 bottomRight = CellToWorld(maxX + 1, minY);
+        Vector2 topRight = CellToWorld(maxX + 1, maxY + 1);
+        Vector2 topLeft = CellToWorld(minX, maxY + 1);
+
+        min = Vector2.Min(Vector2.Min(bottomLeft, bottomRight), Vector2.Min(topRight, topLeft));
+        max = Vector2.Max(Vector2.Max(bottomLeft, bottomRight), Vector2.Max(topRight, topLeft));
+        return true;
+    }
+
     // --- Coordinate Transformations ---
 
     /// <summary>
