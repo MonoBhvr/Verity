@@ -22,6 +22,7 @@ app.AddWindow(new BuildManagerWindow(app));
 app.AddWindow(new BuildSettingsWindow(app));
 app.AddWindow(new ProfilerWindow(app));
 app.AddWindow(new FilterEditorWindow(app));
+app.AddWindow(new CameraOutputsWindow(app) { IsOpen = false });
 app.AddWindow(new AnimationWindow(app) { IsOpen = false });
 app.AddWindow(new TilePaletteWindow(app) { IsOpen = false });
 app.AddWindow(new UIEditorWindow(app) { IsOpen = false });

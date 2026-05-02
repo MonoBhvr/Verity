@@ -51,7 +51,7 @@ internal static class LuaLanguageServerSupport
         completion["keywordSnippet"] = "Replace";
 
         JsonObject diagnostics = EnsureObject(root, "diagnostics");
-        foreach (string global in new[] { "self", "Owner", "Time", "Input", "Keys", "Entity", "Vector2", "Vector3", "Wait", "WaitForSeconds", "WaitForTicks", "WaitForPhysicalTicks", "WaitUntil", "WaitWhile" })
+        foreach (string global in new[] { "self", "Owner", "Time", "Input", "Keys", "Entity", "Vector2", "Vector3", "Color", "Wait", "WaitForSeconds", "WaitForTicks", "WaitForPhysicalTicks", "WaitUntil", "WaitWhile" })
             EnsureStringArrayContains(diagnostics, "globals", global);
 
         File.WriteAllText(luaRcPath, root.ToJsonString(JsonOptions));
@@ -145,6 +145,21 @@ internal static class LuaLanguageServerSupport
         sb.AppendLine("function Vector3(x, y, z) end");
         sb.AppendLine();
 
+        AppendClass(sb, "VerityColor", new[] { ("R", "number"), ("G", "number"), ("B", "number"), ("A", "number") });
+        sb.AppendLine("---@param r number?");
+        sb.AppendLine("---@param g number?");
+        sb.AppendLine("---@param b number?");
+        sb.AppendLine("---@param a number?");
+        sb.AppendLine("---@return VerityColor");
+        sb.AppendLine("function Color(r, g, b, a) end");
+        sb.AppendLine("---@param r integer");
+        sb.AppendLine("---@param g integer");
+        sb.AppendLine("---@param b integer");
+        sb.AppendLine("---@param a integer?");
+        sb.AppendLine("---@return VerityColor");
+        sb.AppendLine("function VerityColor.FromRgba(r, g, b, a) end");
+        sb.AppendLine();
+
         AppendClass(sb, "VerityTransform", new[] { ("Position", "VerityVector2"), ("Rotation", "number"), ("Scale", "VerityVector2") });
         AppendClass(sb, "VerityComponentProxy");
         sb.AppendLine("---@param memberName string");
@@ -191,16 +206,12 @@ internal static class LuaLanguageServerSupport
         sb.AppendLine();
 
         AppendClass(sb, "VerityTime", new[] { ("DeltaTime", "number"), ("TotalTime", "number"), ("LogicTickCount", "integer"), ("PhysicsTickCount", "integer") });
-        AppendClass(sb, "VerityInput");
-        sb.AppendLine("---@param key integer|string");
-        sb.AppendLine("---@return boolean");
-        sb.AppendLine("function VerityInput:IsKeyDown(key) end");
-        sb.AppendLine("---@param key integer|string");
-        sb.AppendLine("---@return boolean");
-        sb.AppendLine("function VerityInput:IsKeyPressed(key) end");
-        sb.AppendLine("---@param key integer|string");
-        sb.AppendLine("---@return boolean");
-        sb.AppendLine("function VerityInput:IsKeyReleased(key) end");
+        AppendClass(sb, "VerityInput", new[]
+        {
+            ("IsKeyDown", "fun(key: integer|string): boolean"),
+            ("IsKeyPressed", "fun(key: integer|string): boolean"),
+            ("IsKeyReleased", "fun(key: integer|string): boolean")
+        });
         sb.AppendLine();
 
         AppendKeysClass(sb);
@@ -226,6 +237,8 @@ internal static class LuaLanguageServerSupport
         sb.AppendLine("Keys = nil");
         sb.AppendLine("---@type VerityEntityApi");
         sb.AppendLine("Entity = nil");
+        sb.AppendLine("---@type fun(r:number?, g:number?, b:number?, a:number?): VerityColor");
+        sb.AppendLine("Color = nil");
         sb.AppendLine();
 
         sb.AppendLine("---@param seconds number");

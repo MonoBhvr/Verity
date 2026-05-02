@@ -695,7 +695,34 @@ Verity의 Blueprint는 “엔티티 트리를 재사용 가능한 에셋으로 �
 
 ---
 
-## 7.3 `StyleData`
+## 7.3 `TextureAsset`
+
+`TextureAsset`은 텍스처 에셋 참조를 위한 기본 클래스입니다. `IPathAsset`을 구현합니다.
+
+| 프로퍼티 | 형식 | 설명 |
+| :--- | :--- | :--- |
+| `Path` | `string` | 에셋 파일 경로 |
+| `Guid` | `string` | 에셋 GUID |
+
+생성자:
+
+- `TextureAsset()`
+- `TextureAsset(string path)` — 경로를 정규화하고, 절대 경로면 .meta 파일을 자동 생성
+- `TextureAsset(string path, string guid)`
+
+암시적 변환:
+
+- `implicit operator TextureAsset(string path)`
+- `implicit operator string(TextureAsset asset)`
+
+존재 이유:
+
+- 카메라 출력 텍스처, 스프라이트 등 다양한 텍스처 에셋 참조의 공통 기반을 제공하기 위해
+- 경로와 GUID를 묶어서 관리하기 위해
+
+---
+
+## 7.4 `StyleData`
 
 `StyleData`는 셰이더 경로와 uniform 성격의 값들을 직렬화 가능한 형태로 보관하는 데이터 타입입니다.
 
@@ -720,7 +747,7 @@ Verity의 Blueprint는 “엔티티 트리를 재사용 가능한 에셋으로 �
 
 ---
 
-## 7.4 `AssetPathUtility`
+## 7.5 `AssetPathUtility`
 
 `AssetPathUtility`는 Verity의 경로/GUID/meta/sprite import 관련 작업을 담당하는 핵심 유틸리티입니다.
 
@@ -912,7 +939,7 @@ runtime은 `Sprite` 자체를 “이미 잘린 텍스처 조각”으로 들고 
 
 ---
 
-## 7.5 `TileBase`, `Tile`, `AnimatedTile`, `RuleTile`
+## 7.6 `TileBase`, `Tile`, `AnimatedTile`, `RuleTile`
 
 이 타입들은 타일맵 셀 하나가 어떤 시각/충돌 데이터를 가질지를 정의합니다.
 
@@ -969,7 +996,7 @@ runtime은 `Sprite` 자체를 “이미 잘린 텍스처 조각”으로 들고 
 
 ---
 
-## 7.6 `Tilemap`
+## 7.7 `Tilemap`
 
 `Tilemap`은 셀 좌표와 `TileBase`를 매핑하는 월드 데이터 컴포넌트입니다.
 
@@ -1158,6 +1185,22 @@ runtime은 `Sprite` 자체를 “이미 잘린 텍스처 조각”으로 들고 
 | 이름 | 형식 | 설명 |
 | :--- | :--- | :--- |
 | `ProjectSettings.Default` | `ProjectSettings` | 새 기본 설정 인스턴스를 반환하는 convenience 프로퍼티입니다. |
+
+### 9.9 멀티 윈도우 설정
+
+| 이름 | 형식 | 기본값 | 설명 |
+| :--- | :--- | :--- | :--- |
+| `MultiWindowEnabled` | `bool` | `false` | 멀티 윈도우 기능 활성화 여부 |
+| `MultiWindowPrewarmMode` | `MultiWindowPrewarmMode` | `None` | 윈도우 풀 예열 모드 |
+| `MultiWindowPrewarmCount` | `int` | `0` | 예열할 윈도우 수 |
+
+### `MultiWindowPrewarmMode`
+
+| 값 | 의미 |
+| :--- | :--- |
+| `None` | 필요할 때마다 윈도우 생성 |
+| `Startup` | 엔진 시작 시 지정 수만큼 미리 생성 |
+| `LazyBackground` | 백그라운드에서 점진적으로 풀을 채움 |
 
 ---
 

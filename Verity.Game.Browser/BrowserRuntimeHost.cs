@@ -29,9 +29,9 @@ public sealed class BrowserRuntimeHost : IRuntimeHost
 
     public bool MinimalMode { get; }
 
-    public IRenderDevice CreateGraphicsDevice(string title, int width, int height, bool resizable)
+    public IRenderDevice CreateGraphicsDevice(string title, int width, int height, bool resizable, bool visible = true)
     {
-        return _graphicsDeviceFactory.Create(title, width, height, resizable);
+        return _graphicsDeviceFactory.Create(title, width, height, resizable, visible);
     }
 
     public void AttachInput(IRenderDevice device)

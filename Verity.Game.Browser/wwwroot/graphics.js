@@ -7,6 +7,13 @@ let nextHandle = 1;
 let currentProgramRecord = null;
 let currentFramebuffer = undefined;
 let currentViewport = null;
+let windowOutputBlitter = null;
+const windowOutputUv = new Float32Array([
+  -1, -1, 0, 0,
+   1, -1, 1, 0,
+   1,  1, 1, 1,
+  -1,  1, 0, 1
+]);
 
 function getContextRecord(handle) {
   const record = contexts.get(handle);
@@ -284,6 +291,196 @@ export function drawMesh(contextHandle, meshHandle, programHandle, framebufferHa
   gl.bindVertexArray(null);
 }
 
+function ensureScreenCanvasSize(canvas) {
+  const width = Math.max(1, Math.floor(window.innerWidth || canvas.clientWidth || canvas.width || 1));
+  const height = Math.max(1, Math.floor(window.innerHeight || canvas.clientHeight || canvas.height || 1));
+  if (canvas.width !== width) {
+    canvas.width = width;
+  }
+  if (canvas.height !== height) {
+    canvas.height = height;
+  }
+}
+
+function ensureWindowOutputBlitter(gl) {
+  if (windowOutputBlitter && windowOutputBlitter.gl === gl) {
+    return windowOutputBlitter;
+  }
+
+  const vertexSource = `#version 300 es
+layout(location = 0) in vec2 aPosition;
+layout(location = 1) in vec2 aTexCoord;
+out vec2 vTexCoord;
+void main() {
+  vTexCoord = aTexCoord;
+  gl_Position = vec4(aPosition, 0.0, 1.0);
+}`;
+  const fragmentSource = `#version 300 es
+precision mediump float;
+in vec2 vTexCoord;
+uniform sampler2D uTexture;
+out vec4 outColor;
+void main() {
+  outColor = texture(uTexture, vTexCoord);
+}`;
+
+  const vs = compileShader(gl, gl.VERTEX_SHADER, vertexSource);
+  const fs = compileShader(gl, gl.FRAGMENT_SHADER, fragmentSource);
+  const program = gl.createProgram();
+  gl.attachShader(program, vs);
+  gl.attachShader(program, fs);
+  gl.linkProgram(program);
+  gl.deleteShader(vs);
+  gl.deleteShader(fs);
+  if (!gl.getProgramParameter(program, gl.LINK_STATUS)) {
+    const info = gl.getProgramInfoLog(program);
+    gl.deleteProgram(program);
+    throw new Error(`window output program link failed\n${info ?? 'unknown error'}`);
+  }
+
+  const vao = gl.createVertexArray();
+  const vbo = gl.createBuffer();
+  const ebo = gl.createBuffer();
+  const vertices = windowOutputUv;
+  const indices = new Uint16Array([0, 1, 2, 0, 2, 3]);
+  gl.bindVertexArray(vao);
+  gl.bindBuffer(gl.ARRAY_BUFFER, vbo);
+  gl.bufferData(gl.ARRAY_BUFFER, vertices, gl.STATIC_DRAW);
+  gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, ebo);
+  gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, indices, gl.STATIC_DRAW);
+  gl.enableVertexAttribArray(0);
+  gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 16, 0);
+  gl.enableVertexAttribArray(1);
+  gl.vertexAttribPointer(1, 2, gl.FLOAT, false, 16, 8);
+  gl.bindVertexArray(null);
+
+  windowOutputBlitter = {
+    gl,
+    program,
+    vao,
+    vbo,
+    textureUniform: gl.getUniformLocation(program, 'uTexture')
+  };
+  return windowOutputBlitter;
+}
+
+function clearRectTopLeft(gl, canvas, x, y, width, height, color) {
+  const left = Math.max(0, Math.floor(x));
+  const top = Math.max(0, Math.floor(y));
+  const right = Math.min(canvas.width, Math.floor(x + width));
+  const bottom = Math.min(canvas.height, Math.floor(y + height));
+  const clippedWidth = right - left;
+  const clippedHeight = bottom - top;
+  if (clippedWidth <= 0 || clippedHeight <= 0) {
+    return;
+  }
+
+  gl.enable(gl.SCISSOR_TEST);
+  gl.scissor(left, canvas.height - bottom, clippedWidth, clippedHeight);
+  gl.clearColor(color[0], color[1], color[2], color[3]);
+  gl.clear(gl.COLOR_BUFFER_BIT);
+}
+
+export function presentWindowOutputsBegin(contextHandle) {
+  const { canvas, gl } = getContextRecord(contextHandle);
+  document.body.classList.add('multi-window-mode');
+  ensureScreenCanvasSize(canvas);
+  currentProgramRecord = null;
+  currentFramebuffer = null;
+  currentViewport = null;
+  gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+  gl.disable(gl.SCISSOR_TEST);
+  gl.viewport(0, 0, canvas.width, canvas.height);
+  gl.clearColor(0, 0, 0, 0);
+  gl.clear(gl.COLOR_BUFFER_BIT);
+}
+
+export function presentWindowOutput(
+  contextHandle,
+  key,
+  title,
+  x,
+  y,
+  width,
+  height,
+  order,
+  group,
+  decorated,
+  lockPosition,
+  lockSize,
+  textureHandle) {
+  const { canvas, gl } = getContextRecord(contextHandle);
+  const textureRecord = textures.get(textureHandle);
+  if (!textureRecord) {
+    return;
+  }
+
+  const left = Math.floor(x);
+  const top = Math.floor(y);
+  const requestedContentWidth = Math.max(1, Math.floor(width));
+  const requestedContentHeight = Math.max(1, Math.floor(height));
+  const titleHeight = decorated ? 22 : 0;
+  const border = decorated ? 2 : 0;
+  const frameWidth = requestedContentWidth + border * 2;
+  const frameHeight = requestedContentHeight + titleHeight + border * 2;
+
+  if (decorated) {
+    clearRectTopLeft(gl, canvas, left, top, frameWidth, frameHeight, [0.02, 0.022, 0.026, 1]);
+    clearRectTopLeft(gl, canvas, left + border, top + border, requestedContentWidth, titleHeight, [0.12, 0.14, 0.16, 1]);
+  }
+
+  const contentX = left + border;
+  const contentY = top + titleHeight + border;
+  const clipLeft = Math.max(0, contentX);
+  const clipTop = Math.max(0, contentY);
+  const clipRight = Math.min(canvas.width, contentX + requestedContentWidth);
+  const clipBottom = Math.min(canvas.height, contentY + requestedContentHeight);
+  const contentWidth = clipRight - clipLeft;
+  const contentHeight = clipBottom - clipTop;
+  if (contentWidth <= 0 || contentHeight <= 0) {
+    return;
+  }
+
+  const u0 = (clipLeft - contentX) / requestedContentWidth;
+  const v0 = (clipTop - contentY) / requestedContentHeight;
+  const u1 = (clipRight - contentX) / requestedContentWidth;
+  const v1 = (clipBottom - contentY) / requestedContentHeight;
+
+  const blitter = ensureWindowOutputBlitter(gl);
+  windowOutputUv[2] = u0;
+  windowOutputUv[3] = v0;
+  windowOutputUv[6] = u1;
+  windowOutputUv[7] = v0;
+  windowOutputUv[10] = u1;
+  windowOutputUv[11] = v1;
+  windowOutputUv[14] = u0;
+  windowOutputUv[15] = v1;
+  gl.disable(gl.SCISSOR_TEST);
+  gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+  gl.viewport(clipLeft, canvas.height - clipBottom, contentWidth, contentHeight);
+  gl.useProgram(blitter.program);
+  gl.bindBuffer(gl.ARRAY_BUFFER, blitter.vbo);
+  gl.bufferSubData(gl.ARRAY_BUFFER, 0, windowOutputUv);
+  gl.activeTexture(gl.TEXTURE0);
+  gl.bindTexture(gl.TEXTURE_2D, textureRecord.texture);
+  gl.uniform1i(blitter.textureUniform, 0);
+  gl.bindVertexArray(blitter.vao);
+  gl.drawElements(gl.TRIANGLES, 6, gl.UNSIGNED_SHORT, 0);
+  gl.bindVertexArray(null);
+
+  currentProgramRecord = null;
+  currentFramebuffer = null;
+  currentViewport = null;
+}
+
+export function presentWindowOutputsEnd(contextHandle) {
+  const { gl } = getContextRecord(contextHandle);
+  gl.disable(gl.SCISSOR_TEST);
+  currentProgramRecord = null;
+  currentFramebuffer = null;
+  currentViewport = null;
+}
+
 
 export function deleteMesh(contextHandle, meshHandle) {
   const mesh = meshes.get(meshHandle);
@@ -317,5 +514,8 @@ Object.assign(globalThis, {
   deleteFramebuffer,
   createMesh,
   drawMesh,
-  deleteMesh
+  deleteMesh,
+  presentWindowOutputsBegin,
+  presentWindowOutput,
+  presentWindowOutputsEnd
 });

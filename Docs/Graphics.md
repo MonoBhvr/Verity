@@ -1049,3 +1049,177 @@ overlay.Render(renderPipeline, WorldManager.ActiveWorld, viewportWidth, viewport
 
 브라우저 구현에서는 텍스처 바인딩을 프로그램 내부 캐시로 조기 생략하지 않습니다.  
 즉 스타일 셰이더를 포함한 draw 경로는 매 draw마다 실제 텍스처 바인딩을 다시 수행한다고 보는 것이 맞습니다.
+
+---
+
+## 20. `CameraOutputTarget` enum
+
+| 값 | 의미 |
+| :--- | :--- |
+| `MainWindow` | 메인 윈도우에 렌더 (기본값) |
+| `RenderTexture` | `RenderTexture`에 렌더 |
+| `Window` | 별도 네이티브 윈도우에 렌더 |
+
+---
+
+## 21. `CameraOutput`
+
+`CameraOutput`은 카메라의 렌더 대상을 제어하는 컴포넌트입니다. `[RequireComponent(typeof(Camera))]`가 부여되어 있어 `Camera` 컴포넌트와 함께 사용해야 합니다.
+
+### 프로퍼티
+
+| 이름 | 형식 | 설명 |
+| :--- | :--- | :--- |
+| `Target` | `CameraOutputTarget` | 렌더 출력 대상 |
+| `Primary` | `bool` | 해당 대상에서 기본 카메라로 사용할지 여부 |
+| `Order` | `int` | 출력 정렬 순서 |
+| `OutputName` | `string` | 출력 식별 이름 (비어있으면 자동 생성) |
+| `TargetTexture` | `CameraTextureAsset` | 출력 대상 텍스처 에셋 참조 |
+| `TextureWidth` | `int` | 인라인 텍스처 너비 (기본값 512) |
+| `TextureHeight` | `int` | 인라인 텍스처 높이 (기본값 512) |
+| `TextureFilter` | `RenderTextureFilter` | 텍스처 필터 모드 (기본값 Linear) |
+| `WindowVisible` | `bool` | 별도 윈도우 표시 여부 |
+| `WindowDecorated` | `bool` | 윈도우 테두리 표시 여부 |
+| `WindowGroup` | `string` | 윈도우 그룹 이름 (같은 그룹은 함께 정렬됨) |
+| `WindowPosition` | `Vector2` | 윈도우 초기 위치 |
+| `WindowSize` | `Vector2` | 윈도우 크기 |
+| `WindowLockPosition` | `bool` | 윈도우 위치 잠금 |
+| `WindowLockSize` | `bool` | 윈도우 크기 잠금 |
+| `WindowLockAspect` | `bool` | 윈도우 비율 잠금 (기본값 true) |
+
+### 메서드
+
+| 시그니처 | 설명 |
+| :--- | :--- |
+| `Camera? Camera` | 연결된 `Camera` 컴포넌트 반환 |
+| `string ResolveOutputName()` | 출력 이름 해석 (OutputName → TargetTexture.Path → Owner.Id 순) |
+| `CameraTextureAssetData GetRenderTextureSettings()` | 렌더 텍스처 설정 로드 |
+| `void SaveRenderTextureSettings(CameraTextureAssetData)` | 렌더 텍스처 설정 저장 |
+| `void ResizeRenderTexture(int width, int height)` | 렌더 텍스처 크기 변경 |
+
+### 존재 이유
+
+- 카메라의 렌더 결과를 메인 윈도우, 텍스처, 별도 윈도우 등 다양한 대상으로 출력하기 위해
+- 멀티 카메라 렌더링과 멀티 윈도우 디스플레이를 하나의 컴포넌트로 제어하기 위해
+
+---
+
+## 22. `CameraSelection`
+
+`CameraSelection`은 월드에서 활성 카메라와 `CameraOutput`을 탐색하는 정적 유틸리티입니다.
+
+### 상수
+
+- `MainCameraTag = "MainCamera"` — 기본 카메라 태그
+
+### 메서드
+
+| 시그니처 | 설명 |
+| :--- | :--- |
+| `Camera? GetDefaultCamera(World?)` | 월드의 기본 카메라를 반환. MainWindow 카메라 → MainCamera 태그 → 첫 활성 카메라 순 |
+| `Camera? GetMainWindowCamera(World?)` | `CameraOutputTarget.MainWindow`인 기본 카메라 반환 |
+| `IEnumerable<Camera> EnumerateActiveCameras(World)` | 활성 상태의 모든 카메라 열거 |
+| `IEnumerable<CameraOutput> EnumerateActiveOutputs(World)` | 활성 상태의 모든 `CameraOutput` 열거 |
+
+### 존재 이유
+
+- 멀티 카메라 환경에서 "기본 카메라"를 결정하는 일관된 규칙을 제공하기 위해
+- `CameraOutput` 기반 우선순위(Primary, Order, MainCamera 태그)와 fallback을 통합 관리하기 위해
+
+---
+
+## 23. `CameraTextureAsset`
+
+`CameraTextureAsset`은 카메라 출력용 텍스처 에셋 참조입니다. `Verity.Core.TextureAsset`을 상속합니다.
+
+### 메서드
+
+| 시그니처 | 설명 |
+| :--- | :--- |
+| `CameraTextureAssetData LoadSettings(string? assetRoot)` | 에셋 파일에서 설정 로드 |
+| `void SaveSettings(CameraTextureAssetData, string? assetRoot)` | 설정을 에셋 파일로 저장 |
+| `void Resize(int width, int height, string? assetRoot)` | 텍스처 크기 변경 후 저장 |
+
+### `CameraTextureAssetData`
+
+| 프로퍼티 | 형식 | 기본값 | 설명 |
+| :--- | :--- | :--- | :--- |
+| `Width` | `int` | 512 | 텍스처 너비 |
+| `Height` | `int` | 512 | 텍스처 높이 |
+| `Filter` | `RenderTextureFilter` | Linear | 필터 모드 |
+
+설정은 JSON 파일로 저장/로드됩니다.
+
+---
+
+## 24. `RenderPipeline` 카메라 출력 API
+
+`RenderPipeline`에 멀티 카메라 출력을 위한 새 메서드가 추가되었습니다.
+
+### 메서드
+
+| 시그니처 | 설명 |
+| :--- | :--- |
+| `void RenderCameraOutputs(World world, bool includeWindowOutputs = false)` | 활성 `CameraOutput` 중 `RenderTexture` 대상을 순서대로 렌더. `includeWindowOutputs`가 true면 `Window` 대상도 포함 |
+| `bool TryGetCameraOutputTexture(string outputName, out RenderTexture texture)` | 출력 이름으로 렌더된 텍스처를 조회 |
+| `bool TryGetTextureAsset(TextureAsset asset, out RenderTexture texture)` | `TextureAsset` 참조에서 텍스처 조회. `.rendertexture` 확장자면 카메라 출력에서, 아니면 파일에서 로드 |
+| `void BlitTexture(RenderTexture source, RenderTarget? targetFbo, int w, int h)` | 텍스처를 타겟 FBO에 전체 화면 블릿 |
+
+### 내부 동작
+
+- `CameraOutputTargetHandle`이 출력 이름별로 `RenderTexture`와 `RenderTarget`을 캐시합니다.
+- 설정(Width, Height, Filter)이 변경되면 기존 핸들을 폐기하고 새로 생성합니다.
+- `Dispose()` 시 모든 카메라 출력 핸들을 함께 정리합니다.
+
+---
+
+## 25. 멀티 윈도우 렌더링
+
+데스크톱 런타임에서 `CameraOutputTarget.Window`를 사용하면 각 카메라 출력이 별도 네이티브 윈도우에 표시됩니다. 이 기능은 `NativeMultiWindowRenderer`가 담당합니다.
+
+### 동작 방식
+
+1. `CameraSelection.EnumerateActiveOutputs`에서 `Window` 대상을 수집
+2. `RenderPipeline`에서 카메라 렌더 결과를 `RenderTexture`에 저장
+3. 각 출력에 대해 SDL2 보조 윈도우를 생성하거나 풀에서 획득
+4. OpenGL 컨텍스트를 보조 윈도우로 전환하여 블릿
+5. 메인 윈도우 컨텍스트를 복원
+
+### `VeritySdl2Window` 보조 윈도우 API
+
+| 메서드 | 설명 |
+| :--- | :--- |
+| `CreateAuxiliaryWindow(title, width, height, x, y, resizable, visible, bordered)` | 보조 윈도우 생성 |
+| `Show()` / `Hide()` | 윈도우 표시/숨김 |
+| `SetTitle(string)` | 제목 설정 |
+| `SetSize(int, int)` | 크기 설정 |
+| `SetPosition(int, int)` | 위치 설정 |
+| `SetResizable(bool)` | 크기 조절 가능 여부 |
+| `SetBordered(bool)` | 테두리 표시 여부 |
+| `PlaceAfter(VeritySdl2Window?)` | 다른 윈도우 뒤에 배치 (그룹 정렬용) |
+| `GetWidth()` / `GetHeight()` | 크기 조회 |
+| `GetPosition()` | 위치 조회 |
+| `GlMakeCurrent(IntPtr)` | OpenGL 컨텍스트 바인딩 |
+| `SwapBuffers()` | 버퍼 교체 |
+
+### 윈도우 풀링
+
+- `MultiWindowPrewarmMode.Startup`: 엔진 시작 시 지정 수만큼 윈도우를 미리 생성
+- `MultiWindowPrewarmMode.LazyBackground`: 백그라운드에서 점진적으로 풀을 채움
+- `MultiWindowPrewarmMode.None`: 필요할 때마다 생성
+- 사용자가 윈도우를 닫으면 해당 키는 `_closedByUser`에 기록되어 재사용하지 않음
+
+### 그룹 정렬
+
+- 같은 `WindowGroup`을 가진 윈도우는 포커스 시 `Order` 순서로 함께 정렬됩니다.
+- `PlaceAfter` 메서드를 사용해 윈도우 Z-순서를 그룹 단위로 유지합니다.
+
+---
+
+## 26. 현재 제약 사항
+
+- 멀티 윈도우 렌더링은 데스크톱(네이티브) 런타임에서만 동작합니다. 브라우저 백엔드에서는 별도 윈도우 출력이 불가능합니다.
+- `CameraOutputTarget.RenderTexture`는 모든 플랫폼에서 사용할 수 있습니다.
+- 보조 윈도우는 메인 윈도우의 OpenGL 컨텍스트를 공유합니다.
+- 윈도우 풀 최대 크기는 64개로 제한됩니다.
+- 사용자가 닫은 윈도우는 세션 내에서 다시 열리지 않습니다.

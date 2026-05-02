@@ -197,12 +197,12 @@ internal sealed class WorldSnapshot
         // Reuse logic from SceneSerializer or similar
         string[] engineNamespaces = { "Verity.Core", "Verity.Graphics", "Verity.Input" };
         bool looksLikeUserScript = !engineNamespaces.Any(ns => name.StartsWith(ns));
+        string shortName = name.Contains('.') ? name[(name.LastIndexOf('.') + 1)..] : name;
 
         if (looksLikeUserScript && userAsm != null)
         {
             var t = userAsm.GetType(name);
             if (t != null) return t;
-            string shortName = name.Contains('.') ? name.Substring(name.LastIndexOf('.') + 1) : name;
             foreach (var type in userAsm.GetTypes())
             {
                 if (type.Name == shortName || type.FullName == name) return type;

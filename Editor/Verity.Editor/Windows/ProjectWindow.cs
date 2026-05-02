@@ -100,6 +100,7 @@ public unsafe class ProjectWindow : EditorWindow
         Style,
         UiScreen,
         UiStyle,
+        RenderTexture,
         Tile,
         AnimatedTile,
         RuleTile
@@ -1442,6 +1443,8 @@ public unsafe class ProjectWindow : EditorWindow
             OpenCreatePopup(target, CreationType.UiScreen);
         if (ImGui.MenuItem(L10n.Tr("CreationType_UiStyle")))
             OpenCreatePopup(target, CreationType.UiStyle);
+        if (ImGui.MenuItem(L10n.Tr("CreationType_RenderTexture")))
+            OpenCreatePopup(target, CreationType.RenderTexture);
         ImGui.Separator();
         if (ImGui.MenuItem(L10n.Tr("CreationType_Tile")))
             OpenCreatePopup(target, CreationType.Tile);
@@ -1848,6 +1851,7 @@ public unsafe class ProjectWindow : EditorWindow
             CreationType.Style => L10n.Tr("creation_default_style"),
             CreationType.UiScreen => L10n.Tr("creation_default_ui_screen"),
             CreationType.UiStyle => L10n.Tr("creation_default_ui_style"),
+            CreationType.RenderTexture => L10n.Tr("creation_default_render_texture"),
             CreationType.Tile => L10n.Tr("creation_default_tile"),
             CreationType.AnimatedTile => L10n.Tr("creation_default_animated_tile"),
             CreationType.RuleTile => L10n.Tr("creation_default_rule_tile"),
@@ -1936,7 +1940,9 @@ public unsafe class ProjectWindow : EditorWindow
                 case CreationType.World:
                     var world = new World(_inputBuffer);
                     var cameraEntity = world.CreateEntity(L10n.Tr("creation_default_main_camera"));
+                    cameraEntity.Tag = CameraSelection.MainCameraTag;
                     cameraEntity.AddComponent<Camera>();
+                    cameraEntity.AddComponent<CameraOutput>();
                     string worldPath = fullPath + ".verity";
                     File.WriteAllText(worldPath, SceneSerializer.Serialize(world));
                     LoadWorldByPath(worldPath);
@@ -1971,6 +1977,9 @@ public unsafe class ProjectWindow : EditorWindow
                     break;
                 case CreationType.UiStyle:
                     UiSerializer.SaveStyle(fullPath + ".uistyle", new UiStyleAsset { Name = _inputBuffer });
+                    break;
+                case CreationType.RenderTexture:
+                    new CameraTextureAssetData().Save(fullPath + ".rendertexture", _app.ProjectPath);
                     break;
                 case CreationType.Tile:
                     File.WriteAllText(fullPath + ".tile", JsonSerializer.Serialize<TileBase>(new Tile { Name = _inputBuffer }, _options));
@@ -2165,6 +2174,13 @@ public unsafe class ProjectWindow : EditorWindow
         if (!File.Exists(normalized))
             return;
 
+        if (!_app.CanDeserializeScriptedAssets())
+        {
+            _app.ShowOverlayMessage(L10n.Tr("msg_cannot_load_script_asset_compilation_errors"), 3.0f);
+            Verity.Core.Debug.LogError("[Project] Cannot load world while user script compilation errors exist and no valid compiled assembly is available.");
+            return;
+        }
+
         if (_app.IsPlaying)
             _app.ExitPlayMode();
 
@@ -2226,7 +2242,17 @@ public unsafe class ProjectWindow : EditorWindow
         if (_app.IsBuilding || _app.ProjectPath == null)
             return;
 
+        if (_app.HasScriptCompilationErrors)
+        {
+            _app.BuildStatus = L10n.Tr("msg_cannot_build_compilation_errors");
+            Verity.Core.Debug.LogError("[Publish] Cannot build while user script compilation errors exist.");
+            return;
+        }
+
         if (!_app.SaveActiveAssetForBuild())
+            return;
+
+        if (!_app.EnsureStartupWorldForBuild())
             return;
 
         Task.Run(() =>
@@ -2236,12 +2262,9 @@ public unsafe class ProjectWindow : EditorWindow
             {
                 _app.BuildStatus = L10n.Tr("msg_publish_preparing_dir");
                 string publishDir = Path.Combine(_app.ProjectPath, "Build", mode.ToString());
-                if (Directory.Exists(publishDir))
-                {
-                    try { Directory.Delete(publishDir, true); } catch { }
-                }
+                if (!TryRecreateDirectory(publishDir))
+                    return;
 
-                Directory.CreateDirectory(publishDir);
                 string? projectRoot = ResolveProjectRoot();
                 if (projectRoot == null)
                 {
@@ -2252,9 +2275,10 @@ public unsafe class ProjectWindow : EditorWindow
                 string gameProjDir = Path.Combine(projectRoot, "Verity.Game");
                 string runtimeContentDir = Path.Combine(gameProjDir, RuntimeContentDirectoryName);
                 _app.BuildStatus = L10n.Tr("msg_publish_syncing_assets");
+                if (Directory.Exists(runtimeContentDir))
+                    Directory.Delete(runtimeContentDir, true);
+
                 string gameAssets = Path.Combine(runtimeContentDir, "Assets");
-                if (Directory.Exists(gameAssets))
-                    Directory.Delete(gameAssets, true);
                 CopyDirectory(_app.AssetsPath!, gameAssets);
 
                 _app.BuildStatus = L10n.Tr("msg_publish_syncing_build_settings");
@@ -2268,7 +2292,8 @@ public unsafe class ProjectWindow : EditorWindow
                 _app.BuildStatus = L10n.Tr("msg_publish_compiling_scripts");
                 Directory.CreateDirectory(runtimeContentDir);
                 string gameDll = Path.Combine(runtimeContentDir, "UserScripts.dll");
-                _app.ScriptCompiler?.CompileToFile(gameDll);
+                if (_app.ScriptCompiler != null && !_app.ScriptCompiler.CompileToFile(gameDll))
+                    throw new InvalidOperationException("User script compilation failed. Fix the errors and try building again.");
 
                 _app.BuildStatus = L10n.Tr("msg_publish_running_dotnet");
                 string publishArgs = mode == PublishBuildMode.Debug
@@ -2311,6 +2336,22 @@ public unsafe class ProjectWindow : EditorWindow
                 _app.IsBuilding = false;
             }
         });
+    }
+
+    private static bool TryRecreateDirectory(string path)
+    {
+        try
+        {
+            if (Directory.Exists(path))
+                Directory.Delete(path, true);
+            Directory.CreateDirectory(path);
+            return true;
+        }
+        catch (Exception e)
+        {
+            Verity.Core.Debug.LogError($"[Publish] Failed to clean build output '{path}': {e.Message}");
+            return false;
+        }
     }
 
     private string? ResolveProjectRoot()

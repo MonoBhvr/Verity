@@ -42,9 +42,5 @@
     <EmbeddedResource Include="RuntimeContent\scene.json" Condition="Exists('RuntimeContent\scene.json')" />
     <EmbeddedResource Include="RuntimeContent\UserScripts.dll" Condition="Exists('RuntimeContent\UserScripts.dll')" />
     <EmbeddedResource Include="RuntimeContent\Assets\**\*" Exclude="RuntimeContent\Assets\bin\**;RuntimeContent\Assets\obj\**" Condition="Exists('RuntimeContent\Assets')" />
-    <EmbeddedResource Include="scene.json" Condition="Exists('scene.json')" />
-    <EmbeddedResource Include="BuildSettings.json" Condition="Exists('BuildSettings.json')" />
-    <EmbeddedResource Include="UserScripts.dll" Condition="Exists('UserScripts.dll')" />
-    <EmbeddedResource Include="Assets\**\*" Exclude="Assets\bin\**;Assets\obj\**" Condition="Exists('Assets')" />
   </ItemGroup>
 </Project>

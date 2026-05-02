@@ -19,7 +19,7 @@
 현재 `VerityCore` 자체는 거대한 bootstrap class라기보다, 엔진 전역 상태에 접근하는 매우 얇은 진입 표면입니다.
 
 - `VerityCore.Version`: 런타임/에디터가 공통으로 표시하는 엔진 버전 문자열입니다.
-- `VerityCore.ResetRuntime()`: `WorldManager.Reset()`과 `Time.Reset()`을 함께 호출해 월드 상태와 시간 상태를 초기화합니다.
+- `VerityCore.ResetRuntime()`: `WorldManager.Reset()`, `Time.Reset()`과 함께 이벤트, UI, 파티클, 물리, debug draw 같은 전역 서브시스템 상태를 함께 비워 런타임 재진입 시 잔여 상태가 남지 않게 합니다.
 
 즉, 실제 엔진 기동 순서는 `VerityCore` 한 곳에 몰려 있지 않고, 호스트가 `VerityCore`와 각 서브시스템을 조합하는 방식입니다. 현재 런타임 기준 초기화 흐름은 `Verity.Game.Program.Main(...)`에서 다음 순서로 진행됩니다.
 
@@ -34,6 +34,8 @@
 9. 데스크톱 오디오 백엔드는 `miniaudio`를 사용하며, .NET 쪽에서는 `Miniaudio-CS`를 통해 연결됩니다.
 
 에디터 플레이 모드도 큰 구조는 같습니다. `EditorApp.EnterPlayMode()`는 현재 월드 snapshot을 저장하고 `Time.Reset()` 후 `GameLoop`를 새로 만든 다음 `IsPlaying = true`로 전환합니다. 즉, Verity의 “엔진 진입”은 단일 `Main` 함수 하나보다, 호스트가 월드/시간/루프를 재초기화해 실행 상태로 바꾸는 절차로 이해하는 편이 맞습니다.
+
+프로젝트를 닫거나 다른 프로젝트로 전환할 때도 같은 철학을 유지합니다. 현재 에디터는 `EditorApp.ResetProjectScopedState()`에서 preview server, pending action 큐, asset watcher, script compiler, Lua hot-reload, undo/selection/inspector cache, 입력, filter registry를 한 번에 정리한 뒤 `VerityCore.ResetRuntime()`을 호출합니다. 이 경로 덕분에 프로젝트 전환 뒤에도 이전 월드/스크립트/에디터 UI 상태가 다음 세션으로 새지 않도록 관리합니다.
 
 ### 1.2 `GameLoop`의 3개 흐름 진입 방식
 
@@ -113,8 +115,9 @@ Render Flow는 현재 `GameLoop`에 완전히 흡수되어 있지 않습니다.
 런타임 종료는 메인 루프 `while (!device.ShouldClose)`가 끝난 뒤 정리 단계로 이어집니다.
 
 1. `AudioSystem.Shutdown()`으로 오디오 시스템을 먼저 종료합니다.
-2. `renderPipeline.Dispose()`, `shader.Dispose()`, `textureManager.Dispose()`로 그래픽 리소스를 해제합니다.
-3. 마지막으로 `device.Dispose()`와 log writer 정리를 수행합니다.
+2. 멀티 윈도우가 켜져 있었다면 보조 윈도우 렌더러와 관련 SDL 리소스를 먼저 정리합니다.
+3. `renderPipeline.Dispose()`, `shader.Dispose()`, `textureManager.Dispose()`로 그래픽 리소스를 해제합니다.
+4. 마지막으로 `device.Dispose()`와 log writer 정리를 수행합니다.
 
 에디터 플레이 모드 종료는 별도 경로입니다. `EditorApp.ExitPlayMode()`는 저장해 둔 snapshot을 `Restore(...)`해 월드 상태를 되돌리고, 에셋을 다시 바인딩한 뒤 `_gameLoop = null`, `IsPlaying = false`, `Verity.Input.Input.Enabled = true` 순서로 플레이 상태를 해제합니다.
 
@@ -322,3 +325,63 @@ UI는 렌더링 파이프라인과 완전히 분리된 독립 앱이 아니라, 
 
 - [Graphics 문서](./Docs/Graphics.md): 렌더링 기능과 브라우저 렌더 백엔드 보강
 - [Build 문서](./Docs/Build.md): 웹 빌드, 퍼블리시, 브라우저 런타임, 셰이더 변환, 트리밍 보강
+
+---
+
+## 10. 멀티 카메라와 멀티 윈도우
+
+현재 아키텍처는 단일 카메라 렌더링뿐 아니라, 다중 카메라 출력과 별도 네이티브 윈도우 표시까지 지원합니다.
+
+### 10.1 카메라 출력 계층
+
+멀티 카메라 출력은 다음 계층으로 구성됩니다.
+
+| 계층 | 타입 | 역할 |
+| :--- | :--- | :--- |
+| 출력 설정 | `CameraOutput` | 카메라의 렌더 대상(MainWindow / RenderTexture / Window)을 제어 |
+| 카메라 선택 | `CameraSelection` | 월드에서 기본 카메라와 활성 출력을 탐색 |
+| 렌더 실행 | `RenderPipeline.RenderCameraOutputs` | 활성 출력별 카메라 렌더를 수행하고 텍스처에 저장 |
+| 텍스처 에셋 | `CameraTextureAsset` | 렌더 텍스처의 크기/필터 설정을 에셋 파일로 관리 |
+| 윈도우 렌더 | `NativeMultiWindowRenderer` | 별도 SDL2 윈도우에 렌더 텍스처를 블릿 |
+
+### 10.2 카메라 선택 우선순위
+
+`CameraSelection.GetDefaultCamera`는 다음 우선순위로 기본 카메라를 결정합니다.
+
+1. `CameraOutputTarget.MainWindow`이고 `Primary = true`인 카메라
+2. `CameraOutputTarget.MainWindow`인 첫 카메라
+3. `MainCamera` 태그를 가진 활성 카메라
+4. `CameraOutput`이 없거나 `MainWindow`인 첫 활성 카메라
+5. 비 MainWindow 출력 카메라 (최후 fallback)
+
+이 구조 덕분에 대부분의 프로젝트는 아무 설정 없이 첫 카메라가 기본이 되지만, 명시적으로 제어할 수도 있습니다.
+
+### 10.3 멀티 윈도우 렌더링 흐름
+
+데스크톱 런타임에서 `CameraOutputTarget.Window`를 사용하면:
+
+1. `NativeMultiWindowRenderer.Render`가 매 프레임 호출됩니다.
+2. `CameraSelection`에서 Window 대상 출력을 수집합니다.
+3. `RenderPipeline`에서 이미 렌더된 텍스처를 조회합니다.
+4. 각 출력에 대해 SDL2 보조 윈도우를 생성하거나 풀에서 획득합니다.
+5. OpenGL 컨텍스트를 보조 윈도우로 전환하고 텍스처를 블릿합니다.
+6. 메인 윈도우 컨텍스트를 복원합니다.
+7. 더 이상 사용하지 않는 윈도우는 풀로 반환됩니다.
+
+### 10.4 윈도우 풀링과 예열
+
+윈도우 생성 비용을 줄이기 위해 `MultiWindowPrewarmMode` 설정을 제공합니다.
+
+| 모드 | 동작 |
+| :--- | :--- |
+| `None` | 필요할 때마다 생성 |
+| `Startup` | 엔진 시작 시 `MultiWindowPrewarmCount`만큼 미리 생성 |
+| `LazyBackground` | 매 프레임마다 하나씩 점진적으로 풀을 채움 |
+
+풀에서 반환된 윈도우는 숨김 상태로 유지되며, 새 출력이 필요할 때 즉시 재사용됩니다.
+
+### 10.5 플랫폼 제약
+
+- `CameraOutputTarget.RenderTexture`는 모든 플랫폼에서 사용할 수 있습니다.
+- `CameraOutputTarget.Window`는 데스크톱 네이티브 런타임에서만 동작합니다. 브라우저 백엔드는 별도 윈도우 생성이 불가능합니다.
+- `CameraOutputTarget.MainWindow`는 기존 단일 카메라 동작과 동일합니다.

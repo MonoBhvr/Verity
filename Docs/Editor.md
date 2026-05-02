@@ -35,6 +35,7 @@ Verity 에디터는 크게 두 단계로 동작합니다.
 - `AnimationWindow`
 - `TilePaletteWindow`
 - `UIEditorWindow`
+- `CameraOutputsWindow`
 
 즉, Verity의 에디터는 “하나의 큰 창”이라기보다, 편집 대상별 전용 도구를 묶은 작업 공간에 가깝습니다.
 
@@ -75,6 +76,24 @@ Verity는 프로젝트마다 `.lock` 파일을 열어 **배타적 파일 잠금*
 7. 마지막으로 열었던 월드 또는 가장 최근 월드 복원
 
 런처는 단순 목록 UI가 아니라, 에디터 진입에 필요한 상태 복원과 안전장치의 시작점입니다.
+
+스크립트가 다시 컴파일되면 인스펙터 reflection cache와 선택/미리보기 캐시도 함께 비워, 이전 타입 정보나 에셋 미리보기가 새 컴파일 결과와 섞이지 않게 합니다.
+
+### 2.4 프로젝트 닫기와 전환 시 정리 순서
+
+프로젝트를 닫거나 다른 프로젝트로 전환할 때는 `EditorApp.ResetProjectScopedState()`가 프로젝트 범위 상태를 한 곳에서 정리합니다.
+
+정리 순서는 다음과 같습니다.
+
+1. 실행 중이었다면 먼저 플레이 모드를 종료해 월드 snapshot과 입력 상태를 되돌림
+2. build preview server, pending main-thread action, asset refresh tracking, world asset cache 정리
+3. undo 시스템, `EditorSelection`, 인스펙터 캐시와 reflection cache 초기화
+4. asset watcher 이벤트 해제 및 dispose
+5. `ScriptCompiler` 이벤트 해제 및 dispose
+6. Lua hot-reload 이벤트 해제와 `LuaScriptManager.Dispose()` 수행
+7. `VerityCore.ResetRuntime()`, `Input.Reset()`, `FilterRegistry.Clear()`로 엔진 전역 상태 초기화
+
+이 흐름은 프로젝트를 다시 열거나 다른 프로젝트로 넘어갈 때, 이전 프로젝트의 선택 상태나 스크립트 바인딩, 감시기, 월드/물리/파티클 캐시가 다음 세션에 남지 않게 하기 위해 존재합니다.
 
 ---
 
@@ -719,7 +738,49 @@ Release는 단일 파일, Debug는 디버깅 친화 설정으로 배포됩니다
 
 ---
 
-## 21. 정리
+## 21. 카메라 출력(Camera Outputs)
+
+`CameraOutputsWindow`는 멀티 윈도우 카메라 출력을 확인하는 전용 창입니다. `ProjectSettings.MultiWindowEnabled`가 활성화되어 있어야 사용할 수 있습니다.
+
+### 21.1 표시 내용
+
+- 활성 월드에서 `CameraOutputTarget.Window`를 사용하는 `CameraOutput` 목록
+- 각 출력의 렌더 텍스처 미리보기
+- 출력 이름과 해상도 정보
+
+### 21.2 동작 방식
+
+1. `CameraSelection.EnumerateActiveOutputs`로 Window 대상 출력을 수집
+2. `RenderPipeline.RenderCameraOutputs(world, includeWindowOutputs: true)`로 렌더 수행
+3. `TryGetCameraOutputTexture`로 각 출력의 텍스처를 ImGui 이미지로 표시
+
+### 21.3 제약
+
+- 멀티 윈도우가 비활성화되어 있으면 비활성 메시지가 표시됩니다.
+- 활성 월드가 없으면 비활성 메시지가 표시됩니다.
+- Window 대상 CameraOutput이 없으면 빈 상태 메시지가 표시됩니다.
+
+### 21.4 멀티 윈도우 프로젝트 설정
+
+`ProjectSettings`에 멀티 윈도우 관련 설정이 추가되었습니다.
+
+| 프로퍼티 | 형식 | 기본값 | 설명 |
+| :--- | :--- | :--- | :--- |
+| `MultiWindowEnabled` | `bool` | false | 멀티 윈도우 기능 활성화 여부 |
+| `MultiWindowPrewarmMode` | `MultiWindowPrewarmMode` | None | 윈도우 풀 예열 모드 |
+| `MultiWindowPrewarmCount` | `int` | 0 | 예열할 윈도우 수 |
+
+`MultiWindowPrewarmMode` 값:
+
+| 값 | 의미 |
+| :--- | :--- |
+| `None` | 필요할 때마다 윈도우 생성 |
+| `Startup` | 엔진 시작 시 지정 수만큼 미리 생성 |
+| `LazyBackground` | 백그라운드에서 점진적으로 풀을 채움 |
+
+---
+
+## 22. 정리
 
 Verity 에디터는 다음 특징으로 요약할 수 있습니다.
 

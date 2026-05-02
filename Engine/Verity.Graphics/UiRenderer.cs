@@ -62,6 +62,19 @@ public static class UiRenderer
 
     private static RenderTexture? ResolveTexture(RenderPipeline pipeline, UiNode node)
     {
+        if (node is Image imageWithTexture &&
+            pipeline.TryGetTextureAsset(imageWithTexture.TextureAsset, out var textureAsset))
+        {
+            return textureAsset;
+        }
+
+        if (node is Image imageWithOutput &&
+            !string.IsNullOrWhiteSpace(imageWithOutput.CameraOutputName) &&
+            pipeline.TryGetCameraOutputTexture(imageWithOutput.CameraOutputName, out var outputTexture))
+        {
+            return outputTexture;
+        }
+
         if (node is Image image && !string.IsNullOrWhiteSpace(image.Sprite.Path))
             return pipeline.LoadTexture(image.Sprite) ?? DefaultSprites.Square;
 

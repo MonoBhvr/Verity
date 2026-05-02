@@ -27,6 +27,12 @@ public class SpriteRenderer : Component, IHasSize
     [SerializeField]
     public StyleAsset Style { get; set; }
 
+    [SerializeField]
+    public string CameraOutputName { get; set; } = string.Empty;
+
+    [SerializeField]
+    public TextureAsset TextureAsset { get; set; } = new();
+
     [HideInInspector]
     public RenderTexture? Texture { get; set; }
 

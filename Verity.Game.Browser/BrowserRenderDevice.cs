@@ -75,6 +75,46 @@ public sealed class BrowserRenderDevice : IRenderDevice
         BrowserGraphicsInterop.SetScissor(_contextHandle, x, y, (int)width, (int)height);
     }
 
+    public void BeginWindowOutputs()
+    {
+        BrowserGraphicsInterop.PresentWindowOutputsBegin(_contextHandle);
+    }
+
+    public void PresentWindowOutput(
+        string key,
+        string title,
+        int x,
+        int y,
+        int width,
+        int height,
+        int order,
+        string group,
+        bool decorated,
+        bool lockPosition,
+        bool lockSize,
+        RenderTexture texture)
+    {
+        BrowserGraphicsInterop.PresentWindowOutput(
+            _contextHandle,
+            key,
+            title,
+            x,
+            y,
+            width,
+            height,
+            order,
+            group,
+            decorated,
+            lockPosition,
+            lockSize,
+            ((BrowserRenderTexture)texture).TextureHandle);
+    }
+
+    public void EndWindowOutputs()
+    {
+        BrowserGraphicsInterop.PresentWindowOutputsEnd(_contextHandle);
+    }
+
     public void Dispose()
     {
     }

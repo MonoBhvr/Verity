@@ -627,7 +627,16 @@ public static class UiLayoutEngine
     {
         float rootWidth = Math.Max(1f, screen.ReferenceResolution.X);
         float rootHeight = Math.Max(1f, screen.ReferenceResolution.Y);
-        LayoutNode(screen.Root, new UiRect(0, 0, rootWidth, rootHeight));
+        LayoutRoot(screen.Root, new UiRect(0, 0, rootWidth, rootHeight));
+    }
+
+    private static void LayoutRoot(UiNode root, UiRect rootRect)
+    {
+        root.LayoutRect = rootRect;
+        if (root is UiContainer container && container.Layout.Mode != UiLayoutMode.Free)
+            ApplyContainerLayout(container);
+        foreach (var child in root.Children)
+            LayoutNode(child, root.LayoutRect);
     }
 
     private static void LayoutNode(UiNode node, UiRect parentRect)

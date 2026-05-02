@@ -2,6 +2,7 @@ using System.IO;
 using System.Numerics;
 using System.Text.Json.Nodes;
 using Hexa.NET.ImGui;
+using Verity.Core;
 using Verity.Core.Audio;
 using Verity.Core.ECS;
 using Verity.Core.Physics;
@@ -176,9 +177,18 @@ public unsafe class HierarchyWindow : EditorWindow
                     ImGui.EndMenu();
                 }
 
-                if (!WorldHasComponent<Camera>(world) && ImGui.MenuItem(L10n.Tr("CreationType_Camera")))
+                if (ImGui.MenuItem(L10n.Tr("CreationType_Camera")))
                 {
-                    CreateEntityPreset(world, L10n.Tr("CreationType_Camera"), entity => entity.AddComponent<Camera>());
+                    CreateEntityPreset(world, L10n.Tr("CreationType_Camera"), entity =>
+                    {
+                        entity.AddComponent<Camera>();
+                        entity.AddComponent<CameraOutput>();
+                    });
+                }
+
+                if (ImGui.MenuItem(L10n.Tr("CreationType_Particle")))
+                {
+                    CreateEntityPreset(world, L10n.Tr("CreationType_Particle"), entity => entity.AddComponent<ParticleEmitter>());
                 }
 
                 ImGui.EndMenu();
@@ -677,12 +687,6 @@ public unsafe class HierarchyWindow : EditorWindow
 
     private static void DeleteEntity(Entity entity, World world)
     {
-        if (entity.GetComponent<Camera>() != null)
-        {
-            Verity.Core.Debug.LogWarning($"[Hierarchy] Cannot delete entity '{entity.Name}' because it has a Camera component.");
-            return;
-        }
-
         if (EditorSelection.SelectedEntity == entity)
             EditorSelection.SelectedEntity = null;
 

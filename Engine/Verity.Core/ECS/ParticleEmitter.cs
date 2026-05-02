@@ -44,4 +44,16 @@ public class ParticleEmitter : Component
 
     [SerializeField]
     public int RandomSeed { get; set; } = Environment.TickCount;
+
+    [SerializeField, SortingLayerSelector]
+    public string SortingLayerName { get; set; } = "Default";
+
+    [SerializeField]
+    public int OrderInLayer { get; set; }
+
+    public override void OnDestroy()
+    {
+        ParticleSystem.RemoveEmitter(this);
+        base.OnDestroy();
+    }
 }

@@ -138,6 +138,77 @@ public sealed class ParticleTests : IDisposable
         Assert.Equal(2, ParticleSystem.GetActiveCount(emitter));
     }
 
+    [Fact]
+    public void Update_RateSpawnedParticlesDoNotAgeOnSpawnTick()
+    {
+        var emitter = CreateEmitter();
+        emitter.Rate = 4f;
+        emitter.ParticleLifetime = 1f;
+        emitter.InitialVelocity = new SystemNumericsVector2(3f, 0f);
+
+        ParticleSystem.Update(emitter, 0.5f);
+
+        var particles = ParticleSystem.GetParticles(emitter);
+        Assert.Equal(2, particles.Count);
+        Assert.All(particles, particle =>
+        {
+            Assert.Equal(0f, particle.Age, 3);
+            Assert.Equal(1f, particle.Size, 3);
+            Assert.Equal(1f, particle.Color.A, 3);
+            Assert.Equal(SystemNumericsVector2.Zero, particle.Position);
+        });
+    }
+
+    [Fact]
+    public void UpdateAll_TicksAllEnabledEmittersInWorld()
+    {
+        var world = new Verity.Core.World.World("Test");
+
+        var entity1 = world.CreateEntity("E1");
+        var emitter1 = entity1.AddComponent<ParticleEmitter>();
+        emitter1.Rate = 10f;
+        emitter1.RandomSeed = 42;
+
+        var entity2 = world.CreateEntity("E2");
+        var emitter2 = entity2.AddComponent<ParticleEmitter>();
+        emitter2.Rate = 5f;
+        emitter2.RandomSeed = 99;
+
+        ParticleSystem.UpdateAll(world, 1f);
+
+        Assert.Equal(10, ParticleSystem.GetActiveCount(emitter1));
+        Assert.Equal(5, ParticleSystem.GetActiveCount(emitter2));
+    }
+
+    [Fact]
+    public void UpdateAll_SkipsInactiveEntitiesAndDisabledEmitters()
+    {
+        var world = new Verity.Core.World.World("Test");
+
+        var entity1 = world.CreateEntity("Active");
+        var emitter1 = entity1.AddComponent<ParticleEmitter>();
+        emitter1.Rate = 10f;
+        emitter1.RandomSeed = 1;
+
+        var entity2 = world.CreateEntity("Inactive");
+        entity2.Active = false;
+        var emitter2 = entity2.AddComponent<ParticleEmitter>();
+        emitter2.Rate = 10f;
+        emitter2.RandomSeed = 2;
+
+        var entity3 = world.CreateEntity("Disabled");
+        var emitter3 = entity3.AddComponent<ParticleEmitter>();
+        emitter3.Rate = 10f;
+        emitter3.RandomSeed = 3;
+        emitter3.Enabled = false;
+
+        ParticleSystem.UpdateAll(world, 1f);
+
+        Assert.Equal(10, ParticleSystem.GetActiveCount(emitter1));
+        Assert.Equal(0, ParticleSystem.GetActiveCount(emitter2));
+        Assert.Equal(0, ParticleSystem.GetActiveCount(emitter3));
+    }
+
     private static ParticleEmitter CreateEmitter(SystemNumericsVector2? position = null)
     {
         var entity = new Entity("Emitter");

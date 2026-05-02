@@ -124,6 +124,10 @@ public class GameLoop
         OnUpdate?.Invoke();
         RuntimeProfiler.RecordPhase("Update", Stopwatch.GetElapsedTime(phaseStart).TotalMilliseconds);
 
+        phaseStart = Stopwatch.GetTimestamp();
+        Verity.Core.ParticleSystem.UpdateAll(world, fixedDelta);
+        RuntimeProfiler.RecordPhase("Particles", Stopwatch.GetElapsedTime(phaseStart).TotalMilliseconds);
+
         // Coroutine Update Phase
         phaseStart = Stopwatch.GetTimestamp();
         foreach (var script in scripts)

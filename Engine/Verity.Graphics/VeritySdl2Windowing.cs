@@ -8,6 +8,13 @@ namespace Verity.Graphics;
 
 public class VeritySdl2Windowing : IWindowing<VeritySdl2Window>
 {
+    private readonly bool _visible;
+
+    public VeritySdl2Windowing(bool visible = true)
+    {
+        _visible = visible;
+    }
+
     public IrodoriReturn<VeritySdl2Window> CreateWindow(Window.InitConfig config, IBackend backend)
     {
         if (SDL.SDL_Init(SDL.SDL_INIT_VIDEO | SDL.SDL_INIT_EVERYTHING) < 0)
@@ -23,7 +30,8 @@ public class VeritySdl2Windowing : IWindowing<VeritySdl2Window>
         SDL.SDL_GL_SetAttribute(SDL.SDL_GLattr.SDL_GL_DOUBLEBUFFER, 1);
         SDL.SDL_GL_SetAttribute(SDL.SDL_GLattr.SDL_GL_DEPTH_SIZE, 0); // 2D engine — no depth buffer
 
-        var flags = SDL.SDL_WindowFlags.SDL_WINDOW_OPENGL | SDL.SDL_WindowFlags.SDL_WINDOW_SHOWN;
+        var flags = SDL.SDL_WindowFlags.SDL_WINDOW_OPENGL |
+                    (_visible ? SDL.SDL_WindowFlags.SDL_WINDOW_SHOWN : SDL.SDL_WindowFlags.SDL_WINDOW_HIDDEN);
         if (config.Resizable) flags |= SDL.SDL_WindowFlags.SDL_WINDOW_RESIZABLE;
         if (config.Fullscreen) flags |= SDL.SDL_WindowFlags.SDL_WINDOW_FULLSCREEN;
 

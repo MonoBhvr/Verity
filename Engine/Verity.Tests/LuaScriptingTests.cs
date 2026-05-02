@@ -3,6 +3,7 @@ using Verity.Core.ECS;
 using Verity.Core.Engine;
 using Verity.Core.Scripting;
 using Verity.Core.World;
+using Verity.Input;
 
 namespace Verity.Tests;
 
@@ -17,6 +18,8 @@ public sealed class LuaScriptingTests : IDisposable
         _projectRoot = Path.Combine(Path.GetTempPath(), "VerityLuaTests", Guid.NewGuid().ToString("N"));
         _assetsPath = Path.Combine(_projectRoot, "Assets");
         Directory.CreateDirectory(_assetsPath);
+        Verity.Input.Input.Reset();
+        Verity.Input.Input.Enabled = true;
         WorldManager.Reset();
         LuaScriptManager.Dispose();
         LuaScriptManager.SuspendHotReloadEvents = false;
@@ -130,11 +133,147 @@ end
         Assert.Equal(Path.GetFullPath(scriptPath), changed![0]);
     }
 
+    [Fact]
+    public void LuaHotReload_RefreshesActiveComponentStateImmediately()
+    {
+        string scriptPath = WriteLuaScript("live_reload.lua", """
+function Start()
+    local custom = self.Owner:GetComponent("LuaTestUserComponent")
+    custom.Counter = 1
+end
+""");
+
+        LuaScriptManager.Initialize(_projectRoot, typeof(LuaTestUserComponent).Assembly);
+        World world = WorldManager.CreateWorld("HotReload");
+        WorldManager.SetActiveWorld(world);
+        Entity entity = world.CreateEntity("Player");
+        LuaTestUserComponent custom = entity.AddComponent<LuaTestUserComponent>();
+        LuaScriptComponent lua = entity.AddComponent<LuaScriptComponent>();
+        lua.ScriptPath = AssetPath(scriptPath);
+
+        lua._startDelegate?.Invoke();
+        lua.UpdateCoroutines(0f);
+        Assert.Equal(1, custom.Counter);
+
+        WriteLuaScript("live_reload.lua", """
+function Start()
+    local custom = self.Owner:GetComponent("LuaTestUserComponent")
+    custom.Counter = 5
+end
+""");
+
+        LuaScriptManager.NotifyScriptChangedForTesting(scriptPath);
+
+        lua._startDelegate?.Invoke();
+        lua.UpdateCoroutines(0f);
+        Assert.Equal(5, custom.Counter);
+    }
+
+    [Fact]
+    public void LuaBindings_ReadKeyboardInputState()
+    {
+        string scriptPath = WriteLuaScript("input.lua", """
+function Start()
+    local custom = self.Owner:GetComponent("LuaTestUserComponent")
+    custom.SpacePressed = Input.IsKeyPressed(Keys.Space)
+    custom.SpaceDown = Input.IsKeyDown(Keys.Space)
+end
+""");
+
+        LuaScriptManager.Initialize(_projectRoot, typeof(LuaTestUserComponent).Assembly);
+        World world = WorldManager.CreateWorld("Input");
+        WorldManager.SetActiveWorld(world);
+        Entity entity = world.CreateEntity("Player");
+        LuaTestUserComponent custom = entity.AddComponent<LuaTestUserComponent>();
+        LuaScriptComponent lua = entity.AddComponent<LuaScriptComponent>();
+        lua.ScriptPath = AssetPath(scriptPath);
+
+        Verity.Input.Input.Reset();
+        Verity.Input.Input.Enabled = true;
+        Verity.Input.Input.ProcessEvent(InputEvent.KeyDown(KeyCode.Space));
+        Verity.Input.Input.NewLogicTick();
+
+        lua._startDelegate?.Invoke();
+        lua.UpdateCoroutines(0f);
+
+        Assert.True(custom.SpacePressed);
+        Assert.True(custom.SpaceDown);
+    }
+
+    [Fact]
+    public void LuaBindings_ReadKeyboardInputState_WithMethodSyntax()
+    {
+        string scriptPath = WriteLuaScript("input_method.lua", """
+function Start()
+    local custom = self.Owner:GetComponent("LuaTestUserComponent")
+    custom.SpacePressed = Input:IsKeyPressed(Keys.Space)
+    custom.SpaceDown = Input:IsKeyDown(Keys.Space)
+end
+""");
+
+        LuaScriptManager.Initialize(_projectRoot, typeof(LuaTestUserComponent).Assembly);
+        World world = WorldManager.CreateWorld("InputMethod");
+        WorldManager.SetActiveWorld(world);
+        Entity entity = world.CreateEntity("Player");
+        LuaTestUserComponent custom = entity.AddComponent<LuaTestUserComponent>();
+        LuaScriptComponent lua = entity.AddComponent<LuaScriptComponent>();
+        lua.ScriptPath = AssetPath(scriptPath);
+
+        Verity.Input.Input.Reset();
+        Verity.Input.Input.Enabled = true;
+        Verity.Input.Input.ProcessEvent(InputEvent.KeyDown(KeyCode.Space));
+        Verity.Input.Input.NewLogicTick();
+
+        lua._startDelegate?.Invoke();
+        lua.UpdateCoroutines(0f);
+
+        Assert.True(custom.SpacePressed);
+        Assert.True(custom.SpaceDown);
+    }
+
+    [Fact]
+    public void LuaBindings_ExposeColorConstructorAndComponentColorFields()
+    {
+        string scriptPath = WriteLuaScript("color.lua", """
+function Start()
+    local custom = self.Owner:GetComponent("LuaTestUserComponent")
+    custom.Tint = Color(0.25, 0.5, 0.75, 1.0)
+    local tint = custom.Tint
+    custom.LastColorR = tint.R
+    custom.LastColorG = tint.G
+    custom.LastColorB = tint.B
+    custom.LastColorA = tint.A
+end
+""");
+
+        LuaScriptManager.Initialize(_projectRoot, typeof(LuaTestUserComponent).Assembly);
+        World world = WorldManager.CreateWorld("Color");
+        WorldManager.SetActiveWorld(world);
+        Entity entity = world.CreateEntity("Player");
+        LuaTestUserComponent custom = entity.AddComponent<LuaTestUserComponent>();
+        LuaScriptComponent lua = entity.AddComponent<LuaScriptComponent>();
+        lua.ScriptPath = AssetPath(scriptPath);
+
+        lua._startDelegate?.Invoke();
+        lua.UpdateCoroutines(0f);
+
+        Assert.Equal(0.25f, custom.Tint.R);
+        Assert.Equal(0.5f, custom.Tint.G);
+        Assert.Equal(0.75f, custom.Tint.B);
+        Assert.Equal(1f, custom.Tint.A);
+        Assert.Equal(0.25f, custom.LastColorR);
+        Assert.Equal(0.5f, custom.LastColorG);
+        Assert.Equal(0.75f, custom.LastColorB);
+        Assert.Equal(1f, custom.LastColorA);
+    }
+
     public void Dispose()
     {
         Debug.OnLog -= OnLog;
         LuaScriptManager.Dispose();
         LuaScriptManager.SuspendHotReloadEvents = false;
+        Verity.Input.Input.Enabled = true;
+        Verity.Input.Input.Reset();
         WorldManager.Reset();
 
         if (Directory.Exists(_projectRoot))
@@ -163,6 +302,12 @@ public sealed class LuaTestUserComponent : Component
     public float LastVectorZ { get; set; }
     public float LastDelta { get; set; }
     public bool SpaceDown { get; set; }
+    public bool SpacePressed { get; set; }
+    public Color Tint { get; set; }
+    public float LastColorR { get; set; }
+    public float LastColorG { get; set; }
+    public float LastColorB { get; set; }
+    public float LastColorA { get; set; }
 
     public void Increment(int value)
     {

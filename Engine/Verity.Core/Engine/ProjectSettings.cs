@@ -8,6 +8,9 @@ public class ProjectSettings
     public int TargetTPS { get; set; } = 60;
     public int TargetPTPS { get; set; } = 50;
     public float EditorFontSize { get; set; } = 18f;
+    public bool MultiWindowEnabled { get; set; }
+    public MultiWindowPrewarmMode MultiWindowPrewarmMode { get; set; } = MultiWindowPrewarmMode.None;
+    public int MultiWindowPrewarmCount { get; set; }
 
     [System.Text.Json.Serialization.JsonConverter(typeof(Verity.Core.Serialization.ColorConverter))]
     public Verity.Core.Color EditorWorldBackgroundColor { get; set; } = new(0.15f, 0.15f, 0.15f, 1.0f);
@@ -40,6 +43,13 @@ public class ProjectSettings
     public EditorDockLayoutSettings EditorDockLayout { get; set; } = new();
 
     public static ProjectSettings Default => new();
+}
+
+public enum MultiWindowPrewarmMode
+{
+    None = 0,
+    Startup = 1,
+    LazyBackground = 2
 }
 
 public sealed class UiAssetReference

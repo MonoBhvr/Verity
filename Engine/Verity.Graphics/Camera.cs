@@ -13,16 +13,13 @@ public enum CameraRenderDetail
     PostProcess = 3
 }
 
-[NonDisableable]
 public class Camera : Component
 {
     public Camera()
     {
     }
 
-    public static Camera? Main => WorldManager.ActiveWorld?.GetAllEntities()
-        .Select(e => e.GetComponent<Camera>())
-        .FirstOrDefault(c => c != null && c.Enabled);
+    public static Camera? Main => CameraSelection.GetDefaultCamera(WorldManager.ActiveWorld);
 
     [SerializeField] 
     public float OrthographicSize { get; set; } = 5.0f;
@@ -57,7 +54,30 @@ public class Camera : Component
     public float AspectHeight { get; set; } = 9f;
 
     [SerializeField]
+    public int RenderWidth { get; set; }
+
+    [SerializeField]
+    public int RenderHeight { get; set; }
+
+    [SerializeField]
+    public bool IntegerScaling { get; set; } = false;
+
+    public bool HasExplicitResolution => RenderWidth > 0 && RenderHeight > 0;
+
+    [SerializeField]
     public PostProcessSettings PostProcess { get; set; } = new();
+
+    [SerializeField]
+    public float NormalizedViewportX { get; set; } = 0.0f;
+
+    [SerializeField]
+    public float NormalizedViewportY { get; set; } = 0.0f;
+
+    [SerializeField]
+    public float NormalizedViewportWidth { get; set; } = 1.0f;
+
+    [SerializeField]
+    public float NormalizedViewportHeight { get; set; } = 1.0f;
 
     [HideInInspector]
     public CameraRenderDetail RenderDetail { get; set; } = CameraRenderDetail.PostProcess;

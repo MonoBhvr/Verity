@@ -71,6 +71,35 @@ public unsafe class InspectorWindow : EditorWindow
 
     public InspectorWindow(EditorApp app) : base(L10n.Tr("window_inspector")) { _app = app; }
 
+    internal static void ClearReflectionCaches()
+    {
+        GenericInspectorMembersCache.Clear();
+        MultiInspectorMembersCache.Clear();
+        NestedInspectorMembersCache.Clear();
+        MemberAttributeCache.Clear();
+        ButtonMetadataCache.Clear();
+        AssetReferenceAttributeCache.Clear();
+    }
+
+    internal void ClearCachedState()
+    {
+        _scaleLocks.Clear();
+        _selectedSliceIds.Clear();
+        _cachedUiScreenPath = null;
+        _cachedUiScreenWriteTimeUtc = default;
+        _cachedUiScreen = null;
+        _cachedUiPrefabPath = null;
+        _cachedUiPrefabWriteTimeUtc = default;
+        _cachedUiPrefab = null;
+        _cachedTextFiles.Clear();
+        _cachedStyleData.Clear();
+        _cachedBlueprintPath = null;
+        _cachedBlueprintWriteTimeUtc = default;
+        _cachedBlueprintPreview = null;
+        _assetPickerCache.Clear();
+        _assetPickerCacheRoot = null;
+    }
+
     private sealed class BlueprintPreviewData
     {
         public List<BlueprintEntityPreview> Entities { get; init; } = [];
@@ -614,6 +643,7 @@ public unsafe class InspectorWindow : EditorWindow
         else if (extension is ".wav" or ".ogg" or ".mp3" or ".flac" or ".mod") DrawAudioFileInspector(path);
         else if (extension == ".verity") DrawWorldSettingsInspector(path);
         else if (extension == ".style") DrawStyleAssetInspector(path);
+        else if (extension == ".rendertexture") DrawRenderTextureAssetInspector(path);
         else if (extension == ".ui") DrawUiAssetInspector(path);
         else if (extension == ".uiprefab") DrawUiPrefabInspector(path);
         else if (extension is ".tile" or ".animtile" or ".ruletile") DrawTileAssetInspector(path);
@@ -823,6 +853,12 @@ public unsafe class InspectorWindow : EditorWindow
             float fontSize = settings.EditorFontSize; ImGui.Text(L10n.Tr("field_EditorFontSize")); ImGui.SameLine(120); if (ImGui.DragFloat("##v_editor_font_size", ref fontSize, 0.5f, 8f, 72f)) { settings.EditorFontSize = fontSize; changed = true; }
             int targetTps = settings.TargetTPS; ImGui.Text(L10n.Tr("field_TargetTPS")); ImGui.SameLine(120); if (ImGui.DragInt("##v_target_tps", ref targetTps, 1, 1, 1000)) { settings.TargetTPS = targetTps; changed = true; }
             int targetPtps = settings.TargetPTPS; ImGui.Text(L10n.Tr("field_TargetPTPS")); ImGui.SameLine(120); if (ImGui.DragInt("##v_target_ptps", ref targetPtps, 1, 1, 1000)) { settings.TargetPTPS = targetPtps; changed = true; }
+            bool multiWindowEnabled = settings.MultiWindowEnabled; ImGui.Text(L10n.Tr("field_MultiWindowEnabled")); ImGui.SameLine(120); if (ImGui.Checkbox("##v_multi_window_enabled", ref multiWindowEnabled)) { settings.MultiWindowEnabled = multiWindowEnabled; if (multiWindowEnabled) _app.NormalizeCameraOutputsForProjectSettings(WorldManager.ActiveWorld); changed = true; }
+            if (settings.MultiWindowEnabled)
+            {
+                int prewarmMode = (int)settings.MultiWindowPrewarmMode; ImGui.Text("Window Pool Mode"); ImGui.SameLine(120); if (ImGui.Combo("##v_multi_window_prewarm_mode", ref prewarmMode, "None\0Startup\0Lazy Background\0")) { settings.MultiWindowPrewarmMode = (MultiWindowPrewarmMode)Math.Clamp(prewarmMode, 0, 2); changed = true; }
+                int prewarmCount = settings.MultiWindowPrewarmCount; ImGui.Text("Window Pool Count"); ImGui.SameLine(120); if (ImGui.DragInt("##v_multi_window_prewarm_count", ref prewarmCount, 1, 0, 64)) { settings.MultiWindowPrewarmCount = Math.Clamp(prewarmCount, 0, 64); changed = true; }
+            }
             var bgColor = (Vector4)settings.EditorWorldBackgroundColor; ImGui.Text(L10n.Tr("field_EditorWorldBackgroundColor")); ImGui.SameLine(120); if (ImGui.ColorEdit4("##v_editor_world_background_color", ref bgColor)) { settings.EditorWorldBackgroundColor = (Color)bgColor; changed = true; }
             DrawAssetReferenceField(L10n.Tr("ui_field_default_ui_font"), settings.DefaultUiFontPath, ".fontasset;.sdfont", value =>
             {
@@ -1337,6 +1373,32 @@ public unsafe class InspectorWindow : EditorWindow
         return normalized;
     }
     private void SaveStyle(string path, StyleData data) { try { string json = data.ToJson(); File.WriteAllText(path, json); _cachedTextFiles[path] = (File.GetLastWriteTimeUtc(path), json); _cachedStyleData[path] = (File.GetLastWriteTimeUtc(path), data); if (_app.ProjectPath != null) { string relPath = Path.GetRelativePath(_app.ProjectPath, path).Replace("\\", "/"); _app.RenderPipeline.ClearStyleCache(relPath); } } catch { } }
+
+    private void DrawRenderTextureAssetInspector(string path)
+    {
+        var data = CameraTextureAssetData.Load(path, null, _app.ProjectPath);
+        bool changed = false;
+
+        ImGui.Text(L10n.Tr("CreationType_RenderTexture"));
+        ImGui.Separator();
+
+        int width = Math.Max(1, data.Width);
+        int height = Math.Max(1, data.Height);
+        if (ImGui.InputInt("Width", ref width))
+        {
+            data.Width = Math.Max(1, width);
+            changed = true;
+        }
+
+        if (ImGui.InputInt("Height", ref height))
+        {
+            data.Height = Math.Max(1, height);
+            changed = true;
+        }
+
+        if (changed)
+            data.Save(path, _app.ProjectPath);
+    }
 
     private void DrawWorldSettingsInspector(string path) {
         var world = WorldManager.ActiveWorld;
@@ -1877,6 +1939,9 @@ public unsafe class InspectorWindow : EditorWindow
         if (target is Light2D light)
             return ShouldShowLightMember(m.Name, light);
 
+        if (target is CameraOutput cameraOutput)
+            return ShouldShowCameraOutputMember(m.Name, cameraOutput);
+
         if (IsShadowCasterSettingsTarget(target))
             return ShouldShowShadowCasterMember(m.Name, target);
 
@@ -1891,10 +1956,27 @@ public unsafe class InspectorWindow : EditorWindow
         if (targets.All(target => target is Light2D))
             return targets.Cast<Light2D>().All(light => ShouldShowLightMember(m.Name, light));
 
+        if (targets.All(target => target is CameraOutput))
+            return targets.Cast<CameraOutput>().All(output => ShouldShowCameraOutputMember(m.Name, output));
+
         if (targets.All(IsShadowCasterSettingsTarget))
             return targets.All(target => ShouldShowShadowCasterMember(m.Name, target));
 
         return true;
+    }
+
+    private static bool ShouldShowCameraOutputMember(string memberName, CameraOutput output)
+    {
+        if (output.Target != CameraOutputTarget.Window && memberName == nameof(CameraOutput.WindowCloseQuitsApplication))
+            return false;
+
+        if (output.Target != CameraOutputTarget.MainWindow)
+            return true;
+
+        return memberName is not nameof(CameraOutput.WindowVisible)
+            and not nameof(CameraOutput.WindowGroup)
+            and not nameof(CameraOutput.WindowPosition)
+            and not nameof(CameraOutput.WindowSize);
     }
 
     private static MemberInfo[] GetGenericInspectorMembers(Type type)
@@ -1994,6 +2076,12 @@ public unsafe class InspectorWindow : EditorWindow
             }
         }
 
+        if (target is CameraOutput cameraOutput && member.Name == nameof(CameraOutput.Target) && type == typeof(CameraOutputTarget))
+        {
+            DrawCameraOutputTargetField(name, cameraOutput, onUpdate);
+            return;
+        }
+
         if (type == typeof(string)) {
             if (HasAttribute(member, "PhysicsGroupSelectorAttribute")) { DrawPhysicsGroupDropdown(name, (string?)value ?? "", onUpdate); return; }
             if (HasAttribute(member, "SortingLayerSelectorAttribute")) { DrawSortingLayerDropdown(name, (string?)value ?? "", onUpdate); return; }
@@ -2020,6 +2108,34 @@ public unsafe class InspectorWindow : EditorWindow
             return;
         }
         DrawValueEditor(name, type, value, wrappedUpdate, target);
+    }
+
+    private void DrawCameraOutputTargetField(string name, CameraOutput output, Action<object?> onUpdate)
+    {
+        ImGui.PushID(name);
+        ImGui.Text(name);
+        ImGui.SameLine(120);
+
+        CameraOutputTarget[] options = [CameraOutputTarget.MainWindow, CameraOutputTarget.Window, CameraOutputTarget.RenderTexture];
+
+        string preview = GetEnumDisplayName(typeof(CameraOutputTarget), output.Target.ToString());
+        if (ImGui.BeginCombo("##v", preview))
+        {
+            foreach (var option in options)
+            {
+                bool selected = output.Target == option;
+                string label = GetEnumDisplayName(typeof(CameraOutputTarget), option.ToString());
+                if (ImGui.Selectable(label, selected))
+                    onUpdate(option);
+
+                if (selected)
+                    ImGui.SetItemDefaultFocus();
+            }
+
+            ImGui.EndCombo();
+        }
+
+        ImGui.PopID();
     }
 
     private bool HasAttribute(MemberInfo member, string attributeName)
@@ -2647,6 +2763,8 @@ public unsafe class InspectorWindow : EditorWindow
         if (type == typeof(PostProcessSettings)) { DrawPostProcessSettings(name, value as PostProcessSettings, onUpdate); return; }
         if (type == typeof(AudioClip)) { DrawAudioClipField(name, value as AudioClip, onUpdate, target); return; }
         if (type == typeof(Sprite)) { DrawSpriteField(name, (Sprite?)value ?? default, onUpdate); return; }
+        if (type == typeof(TextureAsset)) { DrawTextureAssetField(name, value as TextureAsset ?? new TextureAsset(), onUpdate); return; }
+        if (type == typeof(CameraTextureAsset)) { DrawCameraTextureAssetField(name, value as CameraTextureAsset ?? new CameraTextureAsset(), onUpdate); return; }
         if (type == typeof(StyleAsset)) { DrawStyleField(name, (StyleAsset?)value ?? default, onUpdate); return; }
         if (type == typeof(ShaderAsset)) { DrawShaderField(name, (ShaderAsset?)value ?? default, onUpdate); return; }
         if (type == typeof(FilterType)) { DrawFilterField(name, value as FilterType, onUpdate); return; }
@@ -3129,6 +3247,10 @@ public unsafe class InspectorWindow : EditorWindow
             return 0UL;
         if (type == typeof(Sprite))
             return default(Sprite);
+        if (type == typeof(TextureAsset))
+            return new TextureAsset();
+        if (type == typeof(CameraTextureAsset))
+            return new CameraTextureAsset();
         if (type == typeof(StyleAsset))
             return default(StyleAsset);
         if (type == typeof(ShaderAsset))
@@ -3501,6 +3623,51 @@ public unsafe class InspectorWindow : EditorWindow
         }
         ImGui.PopID();
     }
+
+    private void DrawCameraTextureAssetField(string name, CameraTextureAsset current, Action<object?> onUpdate)
+        => DrawTextureAssetField(name, current, asset => onUpdate(asset is TextureAsset texture ? new CameraTextureAsset(texture.Path, texture.Guid) : new CameraTextureAsset()), cameraOnly: true);
+
+    private void DrawTextureAssetField(string name, TextureAsset current, Action<object?> onUpdate, bool cameraOnly = false)
+    {
+        ImGui.PushID(name);
+        string btnLabel = string.IsNullOrEmpty(current.Path) ? L10n.Tr("msg_none") : Path.GetFileName(current.Path);
+        if (DrawReferenceSlot(name, btnLabel, current.Path) && !string.IsNullOrWhiteSpace(current.Path))
+            RevealAssetReference(current.Path);
+        if (ImGui.BeginDragDropTarget()) { var p = ImGui.AcceptDragDropPayload("ASSET_PATH"); if (p.Handle != null && EditorSelection.DraggedAssetPath != null && IsTextureAssetPath(EditorSelection.DraggedAssetPath, cameraOnly)) onUpdate(CreateTextureAssetReference(EditorSelection.DraggedAssetPath, cameraOnly)); ImGui.EndDragDropTarget(); }
+        if (DrawReferencePickerButton()) ImGui.OpenPopup("Picker");
+        if (BeginReferencePickerPopup()) {
+            ImGui.InputText(L10n.Tr("label_search"), ref _searchFilter, 64);
+            ImGui.Separator();
+
+            if (BeginReferencePickerList())
+            {
+                if (ImGui.MenuItem(L10n.Tr("msg_none"))) onUpdate(cameraOnly ? new CameraTextureAsset() : new TextureAsset());
+                string cacheKey = cameraOnly ? "texture:camera" : "texture:any";
+                foreach (var entry in GetAssetPickerEntries(cacheKey, path => IsTextureAssetPath(path, cameraOnly))) {
+                    if ((string.IsNullOrEmpty(_searchFilter) || entry.RelativePath.Contains(_searchFilter, StringComparison.OrdinalIgnoreCase)) && ImGui.MenuItem(entry.RelativePath)) onUpdate(CreateTextureAssetReference(entry.FullPath, cameraOnly));
+                }
+                ImGui.EndChild();
+            }
+            ImGui.EndPopup();
+        }
+        ImGui.PopID();
+    }
+
+    private static bool IsTextureAssetPath(string path, bool cameraOnly)
+    {
+        string ext = Path.GetExtension(path);
+        if (ext.Equals(".rendertexture", StringComparison.OrdinalIgnoreCase))
+            return true;
+        return !cameraOnly &&
+               (ext.Equals(".png", StringComparison.OrdinalIgnoreCase) ||
+                ext.Equals(".jpg", StringComparison.OrdinalIgnoreCase) ||
+                ext.Equals(".jpeg", StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static TextureAsset CreateTextureAssetReference(string path, bool cameraOnly)
+        => cameraOnly || Path.GetExtension(path).Equals(".rendertexture", StringComparison.OrdinalIgnoreCase)
+            ? new CameraTextureAsset(path)
+            : new TextureAsset(path);
 
     private void DrawAssetReferenceField(string name, string current, string exts, Action<object?> onUpdate) 
     {

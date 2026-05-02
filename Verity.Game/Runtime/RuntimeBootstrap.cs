@@ -8,6 +8,8 @@ namespace Verity.Game.Runtime;
 public static class RuntimeBootstrap
 {
     private static bool _browserDiagnosticsRegistered;
+    private static Action<string, Verity.Core.LogLevel>? _registeredLogHandler;
+    private static UnhandledExceptionEventHandler? _registeredUnhandledExceptionHandler;
 
     public static void RunNative(
         IRuntimeHost runtimeHost,
@@ -54,6 +56,13 @@ public static class RuntimeBootstrap
         DynamicallyAccessedMemberTypes.PublicProperties |
         DynamicallyAccessedMemberTypes.NonPublicProperties,
         typeof(Verity.Graphics.Camera))]
+    [DynamicDependency(
+        DynamicallyAccessedMemberTypes.PublicParameterlessConstructor |
+        DynamicallyAccessedMemberTypes.PublicFields |
+        DynamicallyAccessedMemberTypes.NonPublicFields |
+        DynamicallyAccessedMemberTypes.PublicProperties |
+        DynamicallyAccessedMemberTypes.NonPublicProperties,
+        typeof(Verity.Graphics.CameraOutput))]
     [DynamicDependency(
         DynamicallyAccessedMemberTypes.PublicParameterlessConstructor |
         DynamicallyAccessedMemberTypes.PublicFields |
@@ -242,6 +251,11 @@ public static class RuntimeBootstrap
         DynamicallyAccessedMemberTypes.PublicConstructors |
         DynamicallyAccessedMemberTypes.PublicProperties |
         DynamicallyAccessedMemberTypes.PublicMethods,
+        typeof(Verity.Core.Scripting.LuaColorValue))]
+    [DynamicDependency(
+        DynamicallyAccessedMemberTypes.PublicConstructors |
+        DynamicallyAccessedMemberTypes.PublicProperties |
+        DynamicallyAccessedMemberTypes.PublicMethods,
         typeof(Verity.Core.Scripting.LuaTransformHandle))]
     [DynamicDependency(
         DynamicallyAccessedMemberTypes.PublicConstructors |
@@ -374,7 +388,13 @@ public static class RuntimeBootstrap
 
     private static void RegisterDiagnostics(Action<string, string> writeRuntimeLog)
     {
-        Verity.Core.Debug.OnLog += (message, level) =>
+        if (_registeredLogHandler != null)
+            Verity.Core.Debug.OnLog -= _registeredLogHandler;
+
+        if (_registeredUnhandledExceptionHandler != null)
+            AppDomain.CurrentDomain.UnhandledException -= _registeredUnhandledExceptionHandler;
+
+        _registeredLogHandler = (message, level) =>
         {
             string prefix = level switch
             {
@@ -385,11 +405,13 @@ public static class RuntimeBootstrap
 
             writeRuntimeLog(prefix, message);
         };
+        Verity.Core.Debug.OnLog += _registeredLogHandler;
 
-        AppDomain.CurrentDomain.UnhandledException += (_, eventArgs) =>
+        _registeredUnhandledExceptionHandler = (_, eventArgs) =>
         {
             writeRuntimeLog("Fatal", eventArgs.ExceptionObject?.ToString() ?? "Unhandled exception");
         };
+        AppDomain.CurrentDomain.UnhandledException += _registeredUnhandledExceptionHandler;
     }
 
     private static string TryGetPreferredLogPath(string executableBaseDir, string contentBaseDir)

@@ -89,6 +89,13 @@ public static partial class BrowserEntry
     }
 
     [JSExport]
+    public static bool GetIntegerScaling()
+    {
+        var camera = Verity.Graphics.Camera.Main;
+        return camera?.IntegerScaling ?? false;
+    }
+
+    [JSExport]
     public static void ResetInputState()
     {
         InputState.Reset();

@@ -36,6 +36,8 @@ public sealed class BuildManagerWindow : EditorWindow
         IsOpen = false;
     }
 
+    internal static void ShutdownPreviewServer() => WebBuildPreviewServer.Stop();
+
     public override void OnGui()
     {
         if (_app.ProjectPath == null)
@@ -76,12 +78,20 @@ public sealed class BuildManagerWindow : EditorWindow
         if (!canInteract)
             ImGui.BeginDisabled();
 
+        if (_app.HasScriptCompilationErrors)
+            ImGui.BeginDisabled();
         if (ImGui.Button(L10n.Tr("btn_build"), new System.Numerics.Vector2(-1, 36)))
             StartBuild(runAfterBuild: false);
         if (ImGui.Button(L10n.Tr("btn_build_and_run"), new System.Numerics.Vector2(-1, 36)))
             StartBuild(runAfterBuild: true);
+        if (_app.HasScriptCompilationErrors)
+            ImGui.EndDisabled();
+        if (_app.HasScriptCompilationErrors)
+            ImGui.BeginDisabled();
         if (ImGui.Button(L10n.Tr("btn_run_existing_build"), new System.Numerics.Vector2(-1, 36)))
             RunBuildOutput(GetPublishDirectory());
+        if (_app.HasScriptCompilationErrors)
+            ImGui.EndDisabled();
         if (ImGui.Button(L10n.Tr("btn_open_build_folder"), new System.Numerics.Vector2(-1, 36)))
             OpenBuildFolder(GetPublishDirectory());
 
@@ -101,7 +111,17 @@ public sealed class BuildManagerWindow : EditorWindow
         if (_app.IsBuilding || _app.ProjectPath == null)
             return;
 
+        if (_app.HasScriptCompilationErrors)
+        {
+            _app.BuildStatus = L10n.Tr("msg_cannot_build_compilation_errors");
+            Verity.Core.Debug.LogError("[BuildManager] Cannot build while user script compilation errors exist.");
+            return;
+        }
+
         if (!_app.SaveActiveAssetForBuild())
+            return;
+
+        if (!_app.EnsureStartupWorldForBuild())
             return;
 
         string publishDir = GetPublishDirectory();
@@ -112,12 +132,9 @@ public sealed class BuildManagerWindow : EditorWindow
             try
             {
                 _app.BuildStatus = L10n.Tr("msg_publish_preparing_dir");
-                if (Directory.Exists(publishDir))
-                {
-                    try { Directory.Delete(publishDir, true); } catch { }
-                }
+                if (!TryRecreateDirectory(publishDir, "BuildManager"))
+                    return;
 
-                Directory.CreateDirectory(publishDir);
                 string? projectRoot = ResolveProjectRoot();
                 if (projectRoot == null)
                 {
@@ -170,6 +187,22 @@ public sealed class BuildManagerWindow : EditorWindow
         });
     }
 
+    private static bool TryRecreateDirectory(string path, string logSource)
+    {
+        try
+        {
+            if (Directory.Exists(path))
+                Directory.Delete(path, true);
+            Directory.CreateDirectory(path);
+            return true;
+        }
+        catch (Exception e)
+        {
+            Verity.Core.Debug.LogError($"[{logSource}] Failed to clean build output '{path}': {e.Message}");
+            return false;
+        }
+    }
+
     private string BuildPublishArguments(string gameProjDir, string browserProjDir, string publishDir)
     {
         return _target switch
@@ -186,9 +219,10 @@ public sealed class BuildManagerWindow : EditorWindow
     {
         string runtimeContentDir = Path.Combine(gameProjDir, RuntimeContentDirectoryName);
         _app.BuildStatus = L10n.Tr("msg_publish_syncing_assets");
+        if (Directory.Exists(runtimeContentDir))
+            Directory.Delete(runtimeContentDir, true);
+
         string gameAssets = Path.Combine(runtimeContentDir, "Assets");
-        if (Directory.Exists(gameAssets))
-            Directory.Delete(gameAssets, true);
         CopyDirectory(_app.AssetsPath!, gameAssets);
 
         _app.BuildStatus = L10n.Tr("msg_publish_syncing_build_settings");
@@ -202,7 +236,8 @@ public sealed class BuildManagerWindow : EditorWindow
         _app.BuildStatus = L10n.Tr("msg_publish_compiling_scripts");
         Directory.CreateDirectory(runtimeContentDir);
         string gameDll = Path.Combine(runtimeContentDir, "UserScripts.dll");
-        _app.ScriptCompiler?.CompileToFile(gameDll);
+        if (_app.ScriptCompiler != null && !_app.ScriptCompiler.CompileToFile(gameDll))
+            throw new InvalidOperationException("User script compilation failed. Fix the errors and try building again.");
     }
 
     private void PostProcessWebBuild(string publishDir)
@@ -499,7 +534,7 @@ public sealed class BuildManagerWindow : EditorWindow
             }
 
             if (installSucceeded)
-                StartBuild(rerunBuildAfterInstall);
+                _app.EnqueueMainThreadAction(() => StartBuild(rerunBuildAfterInstall));
         });
     }
 
@@ -636,7 +671,7 @@ public sealed class BuildManagerWindow : EditorWindow
             _ => "application/octet-stream"
         };
 
-        private static void Stop()
+        internal static void Stop()
         {
             try { _cts?.Cancel(); } catch { }
             try { _listener?.Stop(); } catch { }

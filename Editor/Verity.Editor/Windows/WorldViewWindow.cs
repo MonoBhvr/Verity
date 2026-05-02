@@ -72,6 +72,7 @@ public unsafe class WorldViewWindow : EditorWindow
     private static readonly Verity.Core.Color HandleColor = Verity.Core.Color.White;
     private static readonly Verity.Core.Color HandleFillColor = new(51, 204, 255, 204);
     private static readonly Verity.Core.Color RotateHandleColor = new(102, 255, 102, 255);
+    private static readonly Verity.Core.Color CameraFrameColor = new(255, 196, 64, 255);
 
     private Entity? _previewEntity;
     private string? _previewPath;
@@ -139,6 +140,7 @@ public unsafe class WorldViewWindow : EditorWindow
             UpdatePreviewEntity(world, isHovered, imgMin);
 
             long renderStart = Stopwatch.GetTimestamp();
+            _app.RenderPipeline.RenderCameraOutputs(world);
             _app.RenderPipeline.RenderWorld(world, _app.WorldCamera, _app.RenderPipeline.WorldFbo);
             _app.Profiler.RecordRenderStage("World View Render", Stopwatch.GetElapsedTime(renderStart).TotalMilliseconds);
             if (_showGrid)
@@ -444,6 +446,10 @@ public unsafe class WorldViewWindow : EditorWindow
                 _app.RenderPipeline.RenderGizmoRect(center, size + new Vector2(pixel * 6f), rotation, pixel * 2.5f, SelectionColor, _app.WorldCamera, _app.RenderPipeline.WorldFbo);
                 _app.RenderPipeline.RenderGizmoRect(center, size, rotation, pixel * 1.0f, Verity.Core.Color.White, _app.WorldCamera, _app.RenderPipeline.WorldFbo);
             }
+
+            var selectedCamera = selected.GetComponent<Camera>();
+            if (selectedCamera != null)
+                RenderCameraSelectionFrame(selectedCamera, pixel);
             
             if (selected == EditorSelection.SelectedEntity)
             {
@@ -459,6 +465,49 @@ public unsafe class WorldViewWindow : EditorWindow
                 }
             }
         }
+    }
+
+    private void RenderCameraSelectionFrame(Camera camera, float pixel)
+    {
+        var transform = camera.Owner?.Transform;
+        if (transform == null)
+            return;
+
+        float rotation = transform.WorldRotation;
+        Vector2 center = transform.WorldPosition;
+        float halfHeight = MathF.Max(0.0001f, camera.VisibleHalfHeight);
+        float aspect = ResolveCameraFrameAspect(camera);
+        Vector2 size = new(halfHeight * aspect * 2f, halfHeight * 2f);
+        size.X = MathF.Max(size.X, 0.0001f);
+        size.Y = MathF.Max(size.Y, 0.0001f);
+
+        _app.RenderPipeline.RenderGizmoRect(
+            center,
+            size + new Vector2(pixel * 4f),
+            rotation,
+            pixel * 2.5f,
+            CameraFrameColor,
+            _app.WorldCamera,
+            _app.RenderPipeline.WorldFbo);
+
+        _app.RenderPipeline.RenderGizmoRect(
+            center,
+            size,
+            rotation,
+            pixel,
+            Verity.Core.Color.White,
+            _app.WorldCamera,
+            _app.RenderPipeline.WorldFbo);
+    }
+
+    private float ResolveCameraFrameAspect(Camera camera)
+    {
+        if (camera.FixedAspectRatio)
+            return MathF.Max(0.0001f, camera.TargetAspectRatio);
+
+        int viewportWidth = Math.Max(1, _app.WorldCamera.ViewportWidth);
+        int viewportHeight = Math.Max(1, _app.WorldCamera.ViewportHeight);
+        return viewportWidth / (float)viewportHeight;
     }
 
     private void RenderRectHandles(Vector2 center, Vector2 size, float rotation, Camera cam, RenderTarget? fbo)
@@ -1582,10 +1631,15 @@ public unsafe class WorldViewWindow : EditorWindow
             ImGui.EndPopup(); 
         } 
     }
-    private void FinalizeAction() { if (_targetPath == null || string.IsNullOrWhiteSpace(_inputBuffer)) return; if (_activeMode == ModalMode.Create) { if (_creationType == CreationType.Script) { var p = System.IO.Path.Combine(_targetPath, _inputBuffer + ".cs"); System.IO.File.WriteAllText(p, $"using Verity.Core.ECS;\n\npublic class {_inputBuffer} : Script\n{{\n    void Start()\n    {{\n    }}\n\n    void Update()\n    {{\n    }}\n}}"); } else if (_creationType == CreationType.World) { var p = System.IO.Path.Combine(_targetPath, _inputBuffer + ".verity"); var w = new World(_inputBuffer); var camEnt = w.CreateEntity(L10n.Tr("creation_default_main_camera")); camEnt.AddComponent<Camera>(); System.IO.File.WriteAllText(p, Verity.Core.Serialization.SceneSerializer.Serialize(w)); LoadWorldByPath(p); } } }
+    private void FinalizeAction() { if (_targetPath == null || string.IsNullOrWhiteSpace(_inputBuffer)) return; if (_activeMode == ModalMode.Create) { if (_creationType == CreationType.Script) { var p = System.IO.Path.Combine(_targetPath, _inputBuffer + ".cs"); System.IO.File.WriteAllText(p, $"using Verity.Core.ECS;\n\npublic class {_inputBuffer} : Script\n{{\n    void Start()\n    {{\n    }}\n\n    void Update()\n    {{\n    }}\n}}"); } else if (_creationType == CreationType.World) { var p = System.IO.Path.Combine(_targetPath, _inputBuffer + ".verity"); var w = new World(_inputBuffer); var camEnt = w.CreateEntity(L10n.Tr("creation_default_main_camera")); camEnt.Tag = CameraSelection.MainCameraTag; camEnt.AddComponent<Camera>(); camEnt.AddComponent<CameraOutput>(); System.IO.File.WriteAllText(p, Verity.Core.Serialization.SceneSerializer.Serialize(w)); LoadWorldByPath(p); } } }
     public void CreateWorldInProject() => OpenCreatePopup(_app.AssetsPath!, CreationType.World);
     public void LoadWorldByPath(string path) { 
         if (!System.IO.File.Exists(path)) return; 
+        if (!_app.CanDeserializeScriptedAssets()) {
+            _app.ShowOverlayMessage(L10n.Tr("msg_cannot_load_script_asset_compilation_errors"), 3.0f);
+            Verity.Core.Debug.LogError("[WorldView] Cannot load world while user script compilation errors exist and no valid compiled assembly is available.");
+            return;
+        }
         if (_app.IsPlaying) _app.ExitPlayMode(); 
         
         // Reset editor state for the new world
