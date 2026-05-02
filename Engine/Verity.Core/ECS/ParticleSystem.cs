@@ -1,4 +1,5 @@
 using System.Numerics;
+using Verity.Core.ECS;
 
 namespace Verity.Core;
 
@@ -17,6 +18,8 @@ public static class ParticleSystem
 
         EmitterState state = GetOrCreateState(emitter);
 
+        UpdateParticles(emitter, state, deltaTime);
+
         if (emitter.Enabled && emitter.Rate > 0f)
         {
             state.EmissionRemainder += emitter.Rate * deltaTime;
@@ -24,8 +27,6 @@ public static class ParticleSystem
             state.EmissionRemainder -= emitCount;
             EmitInternal(emitter, state, emitCount);
         }
-
-        UpdateParticles(emitter, state, deltaTime);
     }
 
     public static void Emit(ParticleEmitter emitter, int count)
@@ -79,6 +80,23 @@ public static class ParticleSystem
             return;
 
         States.Remove(emitter);
+    }
+
+    public static void UpdateAll(Verity.Core.World.World world, float deltaTime)
+    {
+        ArgumentNullException.ThrowIfNull(world);
+        ArgumentOutOfRangeException.ThrowIfNegative(deltaTime);
+
+        var entities = world.GetAllEntities();
+        for (int i = 0; i < entities.Count; i++)
+        {
+            Entity entity = entities[i];
+            if (!entity.Active)
+                continue;
+
+            if (entity.GetComponent<ParticleEmitter>() is ParticleEmitter emitter && emitter.Enabled)
+                Update(emitter, deltaTime);
+        }
     }
 
     private static EmitterState GetOrCreateState(ParticleEmitter emitter)

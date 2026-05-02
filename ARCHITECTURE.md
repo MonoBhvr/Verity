@@ -19,7 +19,7 @@
 현재 `VerityCore` 자체는 거대한 bootstrap class라기보다, 엔진 전역 상태에 접근하는 매우 얇은 진입 표면입니다.
 
 - `VerityCore.Version`: 런타임/에디터가 공통으로 표시하는 엔진 버전 문자열입니다.
-- `VerityCore.ResetRuntime()`: `WorldManager.Reset()`과 `Time.Reset()`을 함께 호출해 월드 상태와 시간 상태를 초기화합니다.
+- `VerityCore.ResetRuntime()`: `WorldManager.Reset()`, `Time.Reset()`과 함께 이벤트, UI, 파티클, 물리, debug draw 같은 전역 서브시스템 상태를 함께 비워 런타임 재진입 시 잔여 상태가 남지 않게 합니다.
 
 즉, 실제 엔진 기동 순서는 `VerityCore` 한 곳에 몰려 있지 않고, 호스트가 `VerityCore`와 각 서브시스템을 조합하는 방식입니다. 현재 런타임 기준 초기화 흐름은 `Verity.Game.Program.Main(...)`에서 다음 순서로 진행됩니다.
 
@@ -34,6 +34,8 @@
 9. 데스크톱 오디오 백엔드는 `miniaudio`를 사용하며, .NET 쪽에서는 `Miniaudio-CS`를 통해 연결됩니다.
 
 에디터 플레이 모드도 큰 구조는 같습니다. `EditorApp.EnterPlayMode()`는 현재 월드 snapshot을 저장하고 `Time.Reset()` 후 `GameLoop`를 새로 만든 다음 `IsPlaying = true`로 전환합니다. 즉, Verity의 “엔진 진입”은 단일 `Main` 함수 하나보다, 호스트가 월드/시간/루프를 재초기화해 실행 상태로 바꾸는 절차로 이해하는 편이 맞습니다.
+
+프로젝트를 닫거나 다른 프로젝트로 전환할 때도 같은 철학을 유지합니다. 현재 에디터는 `EditorApp.ResetProjectScopedState()`에서 preview server, pending action 큐, asset watcher, script compiler, Lua hot-reload, undo/selection/inspector cache, 입력, filter registry를 한 번에 정리한 뒤 `VerityCore.ResetRuntime()`을 호출합니다. 이 경로 덕분에 프로젝트 전환 뒤에도 이전 월드/스크립트/에디터 UI 상태가 다음 세션으로 새지 않도록 관리합니다.
 
 ### 1.2 `GameLoop`의 3개 흐름 진입 방식
 
@@ -113,8 +115,9 @@ Render Flow는 현재 `GameLoop`에 완전히 흡수되어 있지 않습니다.
 런타임 종료는 메인 루프 `while (!device.ShouldClose)`가 끝난 뒤 정리 단계로 이어집니다.
 
 1. `AudioSystem.Shutdown()`으로 오디오 시스템을 먼저 종료합니다.
-2. `renderPipeline.Dispose()`, `shader.Dispose()`, `textureManager.Dispose()`로 그래픽 리소스를 해제합니다.
-3. 마지막으로 `device.Dispose()`와 log writer 정리를 수행합니다.
+2. 멀티 윈도우가 켜져 있었다면 보조 윈도우 렌더러와 관련 SDL 리소스를 먼저 정리합니다.
+3. `renderPipeline.Dispose()`, `shader.Dispose()`, `textureManager.Dispose()`로 그래픽 리소스를 해제합니다.
+4. 마지막으로 `device.Dispose()`와 log writer 정리를 수행합니다.
 
 에디터 플레이 모드 종료는 별도 경로입니다. `EditorApp.ExitPlayMode()`는 저장해 둔 snapshot을 `Restore(...)`해 월드 상태를 되돌리고, 에셋을 다시 바인딩한 뒤 `_gameLoop = null`, `IsPlaying = false`, `Verity.Input.Input.Enabled = true` 순서로 플레이 상태를 해제합니다.
 

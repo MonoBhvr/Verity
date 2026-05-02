@@ -77,6 +77,24 @@ Verity는 프로젝트마다 `.lock` 파일을 열어 **배타적 파일 잠금*
 
 런처는 단순 목록 UI가 아니라, 에디터 진입에 필요한 상태 복원과 안전장치의 시작점입니다.
 
+스크립트가 다시 컴파일되면 인스펙터 reflection cache와 선택/미리보기 캐시도 함께 비워, 이전 타입 정보나 에셋 미리보기가 새 컴파일 결과와 섞이지 않게 합니다.
+
+### 2.4 프로젝트 닫기와 전환 시 정리 순서
+
+프로젝트를 닫거나 다른 프로젝트로 전환할 때는 `EditorApp.ResetProjectScopedState()`가 프로젝트 범위 상태를 한 곳에서 정리합니다.
+
+정리 순서는 다음과 같습니다.
+
+1. 실행 중이었다면 먼저 플레이 모드를 종료해 월드 snapshot과 입력 상태를 되돌림
+2. build preview server, pending main-thread action, asset refresh tracking, world asset cache 정리
+3. undo 시스템, `EditorSelection`, 인스펙터 캐시와 reflection cache 초기화
+4. asset watcher 이벤트 해제 및 dispose
+5. `ScriptCompiler` 이벤트 해제 및 dispose
+6. Lua hot-reload 이벤트 해제와 `LuaScriptManager.Dispose()` 수행
+7. `VerityCore.ResetRuntime()`, `Input.Reset()`, `FilterRegistry.Clear()`로 엔진 전역 상태 초기화
+
+이 흐름은 프로젝트를 다시 열거나 다른 프로젝트로 넘어갈 때, 이전 프로젝트의 선택 상태나 스크립트 바인딩, 감시기, 월드/물리/파티클 캐시가 다음 세션에 남지 않게 하기 위해 존재합니다.
+
 ---
 
 ## 3. 메인 에디터 인터페이스

@@ -168,6 +168,70 @@ public class EditorApp : IDisposable
         return searchPaths.FirstOrDefault(File.Exists) ?? Path.Combine(AppContext.BaseDirectory, "EditorLogo.png");
     }
 
+    private static string GetDefaultProjectsRoot()
+    {
+        return @"C:\Users\dlgus\OneDrive\문서\VerityProjects";
+    }
+
+    private static bool IsFilesystemRootPath(string path)
+    {
+        if (string.IsNullOrWhiteSpace(path))
+            return false;
+
+        string trimmedInput = path.Trim();
+        if (trimmedInput.Length == 2 && char.IsLetter(trimmedInput[0]) && trimmedInput[1] == ':')
+            return true;
+
+        string fullPath = Path.GetFullPath(trimmedInput)
+            .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        string? rootPath = Path.GetPathRoot(fullPath)?.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        return !string.IsNullOrWhiteSpace(rootPath)
+            && string.Equals(fullPath, rootPath, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool IsLauncherProjectDirectory(string projectDirectory)
+    {
+        string assetsDir = Path.Combine(projectDirectory, "Assets");
+        if (!Directory.Exists(assetsDir))
+            return false;
+
+        return File.Exists(Path.Combine(assetsDir, "ProjectSettings.json"))
+            || File.Exists(Path.Combine(assetsDir, "BuildSettings.json"));
+    }
+
+    private static DateTime GetLauncherProjectLastModifiedUtc(DirectoryInfo projectInfo)
+    {
+        DateTime lastModified = projectInfo.LastWriteTimeUtc;
+        string assetsDir = Path.Combine(projectInfo.FullName, "Assets");
+        string[] markerPaths =
+        [
+            Path.Combine(assetsDir, "ProjectSettings.json"),
+            Path.Combine(assetsDir, "BuildSettings.json")
+        ];
+
+        foreach (string markerPath in markerPaths)
+        {
+            if (!File.Exists(markerPath))
+                continue;
+
+            DateTime markerWriteTime = File.GetLastWriteTimeUtc(markerPath);
+            if (markerWriteTime > lastModified)
+                lastModified = markerWriteTime;
+        }
+
+        return lastModified;
+    }
+
+    private static string NormalizeProjectsRoot(string? configuredPath)
+    {
+        string defaultRoot = GetDefaultProjectsRoot();
+        if (string.IsNullOrWhiteSpace(configuredPath))
+            return defaultRoot;
+
+        string fullPath = Path.GetFullPath(configuredPath);
+        return IsFilesystemRootPath(fullPath) ? defaultRoot : fullPath;
+    }
+
     private void InvalidateLauncherProjectCache()
     {
         _launcherProjectCacheDirty = true;
@@ -204,30 +268,27 @@ public class EditorApp : IDisposable
             return _launcherProjectCache;
 
         _launcherProjectCache.Clear();
-        if (!Directory.Exists(ProjectsRoot))
+        if (IsFilesystemRootPath(ProjectsRoot) || !Directory.Exists(ProjectsRoot))
         {
             _launcherProjectCacheDirty = false;
             _launcherProjectCacheNextRefreshMs = nowMs + LauncherProjectRefreshIntervalMs;
             return _launcherProjectCache;
         }
 
-        foreach (string projectDirectory in Directory.GetDirectories(ProjectsRoot))
+        try
         {
-            var projectInfo = new DirectoryInfo(projectDirectory);
-            string assetsDir = Path.Combine(projectDirectory, "Assets");
-            DateTime lastModified = projectInfo.LastWriteTimeUtc;
-
-            if (Directory.Exists(assetsDir))
+            foreach (string projectDirectory in Directory.GetDirectories(ProjectsRoot))
             {
-                foreach (string assetPath in Directory.EnumerateFiles(assetsDir, "*", SearchOption.AllDirectories))
-                {
-                    DateTime assetWriteTime = File.GetLastWriteTimeUtc(assetPath);
-                    if (assetWriteTime > lastModified)
-                        lastModified = assetWriteTime;
-                }
-            }
+                var projectInfo = new DirectoryInfo(projectDirectory);
+                if (!projectInfo.Exists || !IsLauncherProjectDirectory(projectInfo.FullName))
+                    continue;
 
-            _launcherProjectCache.Add(new LauncherProjectInfo(projectInfo.Name, projectInfo.FullName, lastModified.ToLocalTime()));
+                _launcherProjectCache.Add(new LauncherProjectInfo(projectInfo.Name, projectInfo.FullName, GetLauncherProjectLastModifiedUtc(projectInfo).ToLocalTime()));
+            }
+        }
+        catch (Exception e)
+        {
+            CoreDebug.LogError($"[Launcher] Failed to enumerate projects in '{ProjectsRoot}': {e.Message}");
         }
 
         _launcherProjectCache.Sort(static (a, b) => b.LastModified.CompareTo(a.LastModified));
@@ -542,8 +603,7 @@ public class EditorApp : IDisposable
         CoreDebug.OnLog += OnCoreLog;
         
         // Initialize default ProjectsRoot
-        string docsPath = Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments);
-        ProjectsRoot = Path.Combine(docsPath, "VerityProjects");
+        ProjectsRoot = GetDefaultProjectsRoot();
         
         LoadGlobalSettings();
         Directory.CreateDirectory(ProjectsRoot);
@@ -601,14 +661,22 @@ public class EditorApp : IDisposable
             { 
                 var json = File.ReadAllText(GlobalSettingsPath);
                 var settings = System.Text.Json.JsonSerializer.Deserialize<EditorGlobalSettings>(json);
+                bool shouldSave = false;
                 if (settings != null)
                 {
                     if (!string.IsNullOrWhiteSpace(settings.ProjectsRoot))
                     {
-                        ProjectsRoot = settings.ProjectsRoot;
+                        string normalizedProjectsRoot = NormalizeProjectsRoot(settings.ProjectsRoot);
+                        shouldSave = !string.Equals(normalizedProjectsRoot, settings.ProjectsRoot, StringComparison.OrdinalIgnoreCase);
+                        ProjectsRoot = normalizedProjectsRoot;
+                        if (shouldSave)
+                            CoreDebug.Log($"[Launcher] Ignoring unsupported projects root '{settings.ProjectsRoot}' and restoring '{normalizedProjectsRoot}'.");
                         InvalidateLauncherProjectCache();
                     }
                     L10n.LoadLanguage(settings.Language);
+
+                    if (shouldSave)
+                        SaveGlobalSettings();
                 }
             } 
             else 
@@ -1967,8 +2035,8 @@ public class EditorApp : IDisposable
                 ImGui.SameLine();
                 if (ImGui.Button(L10n.Tr("btn_change_root_path"), new Vector2(btnWidth, 30))) { 
                     var newPath = SelectFolderNative(ProjectsRoot);
-                    if (newPath != null && Directory.Exists(newPath)) {
-                        ProjectsRoot = newPath;
+                    if (newPath != null && Directory.Exists(newPath) && !IsFilesystemRootPath(newPath)) {
+                        ProjectsRoot = NormalizeProjectsRoot(newPath);
                         InvalidateLauncherProjectCache();
                         SaveGlobalSettings();
                     }

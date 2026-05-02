@@ -54,6 +54,17 @@ public class Camera : Component
     public float AspectHeight { get; set; } = 9f;
 
     [SerializeField]
+    public int RenderWidth { get; set; }
+
+    [SerializeField]
+    public int RenderHeight { get; set; }
+
+    [SerializeField]
+    public bool IntegerScaling { get; set; } = false;
+
+    public bool HasExplicitResolution => RenderWidth > 0 && RenderHeight > 0;
+
+    [SerializeField]
     public PostProcessSettings PostProcess { get; set; } = new();
 
     [SerializeField]

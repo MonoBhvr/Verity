@@ -1,7 +1,15 @@
 const canvas = document.getElementById('verity-canvas');
 const status = document.getElementById('verity-status');
 let lastOverlayUpdate = 0;
+let useIntegerScaling = false;
+let browserEntry = null;
 canvas.focus();
+
+function refreshIntegerScaling() {
+  if (browserEntry && typeof browserEntry.GetIntegerScaling === 'function') {
+    useIntegerScaling = !!browserEntry.GetIntegerScaling();
+  }
+}
 
 function toCanvasSpace(clientX, clientY) {
   const rect = canvas.getBoundingClientRect();
@@ -16,6 +24,8 @@ function toCanvasSpace(clientX, clientY) {
 }
 
 function syncCanvasPresentation() {
+  refreshIntegerScaling();
+
   if (document.body.classList.contains('multi-window-mode')) {
     canvas.style.width = '100vw';
     canvas.style.height = '100vh';
@@ -24,7 +34,11 @@ function syncCanvasPresentation() {
 
   const renderWidth = Math.max(1, canvas.width || 1);
   const renderHeight = Math.max(1, canvas.height || 1);
-  const scale = Math.min(window.innerWidth / renderWidth, window.innerHeight / renderHeight);
+  let scale = Math.min(window.innerWidth / renderWidth, window.innerHeight / renderHeight);
+  if (useIntegerScaling && scale >= 1) {
+    scale = Math.max(1, Math.floor(scale));
+  }
+
   canvas.style.width = `${Math.max(1, Math.floor(renderWidth * scale))}px`;
   canvas.style.height = `${Math.max(1, Math.floor(renderHeight * scale))}px`;
 }
@@ -82,7 +96,7 @@ async function bootstrap() {
   const config = getConfig();
   const exports = await getAssemblyExports(config.mainAssemblyName);
   setStatus('exports loaded');
-  const browserEntry = exports.Verity.Game.Browser.BrowserEntry;
+  browserEntry = exports.Verity.Game.Browser.BrowserEntry;
 
   try {
     browserEntry.InitializeRuntime();
@@ -150,6 +164,11 @@ async function bootstrap() {
     try {
       if (!browserEntry.ShouldClose()) {
         browserEntry.TickFrame();
+        const previousIntegerScaling = useIntegerScaling;
+        refreshIntegerScaling();
+        if (previousIntegerScaling !== useIntegerScaling) {
+          syncCanvasPresentation();
+        }
         const now = performance.now();
         if (now - lastOverlayUpdate >= 250) {
           setStatus(browserEntry.GetDebugState());

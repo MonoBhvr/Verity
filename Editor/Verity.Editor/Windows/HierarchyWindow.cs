@@ -2,6 +2,7 @@ using System.IO;
 using System.Numerics;
 using System.Text.Json.Nodes;
 using Hexa.NET.ImGui;
+using Verity.Core;
 using Verity.Core.Audio;
 using Verity.Core.ECS;
 using Verity.Core.Physics;
@@ -183,6 +184,11 @@ public unsafe class HierarchyWindow : EditorWindow
                         entity.AddComponent<Camera>();
                         entity.AddComponent<CameraOutput>();
                     });
+                }
+
+                if (ImGui.MenuItem(L10n.Tr("CreationType_Particle")))
+                {
+                    CreateEntityPreset(world, L10n.Tr("CreationType_Particle"), entity => entity.AddComponent<ParticleEmitter>());
                 }
 
                 ImGui.EndMenu();
