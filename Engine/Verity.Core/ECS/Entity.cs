@@ -151,6 +151,18 @@ public class Entity
     {
         var world = Verity.Core.World.WorldManager.ActiveWorld;
         if (world == null) return null;
+
+        if (!string.IsNullOrWhiteSpace(original.BlueprintAssetPath) && !original.BlueprintSourceEntityId.HasValue)
+        {
+            var blueprintClone = Verity.Core.Serialization.SceneSerializer.InstantiateBlueprintInstance(
+                world,
+                new Verity.Core.AssetReferenceData(original.BlueprintAssetPath, original.BlueprintAssetGuid));
+            if (blueprintClone != null)
+            {
+                blueprintClone.Name = original.Name + " (Clone)";
+                return blueprintClone;
+            }
+        }
         
         string json = Verity.Core.Serialization.SceneSerializer.SerializeEntity(original);
         var clone = Verity.Core.Serialization.SceneSerializer.DeserializeEntity(world, json);

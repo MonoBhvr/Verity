@@ -80,7 +80,7 @@ public class EditorApp : IDisposable
     private readonly Stopwatch _stopwatch = new();
     private readonly EditorProfiler _profiler = new();
     private GameLoop? _gameLoop;
-    private WorldSnapshot? _snapshot;
+    private string? _playModeScenePath;
     private ScriptCompiler? _scriptCompiler;
     private readonly UndoSystem _undoSystem = new();
     private FileSystemWatcher? _assetWatcher;
@@ -1659,11 +1659,14 @@ public class EditorApp : IDisposable
             CoreDebug.LogError("[Editor] Cannot enter Play Mode while user script compilation errors exist.");
             return;
         }
-        
+         
+        if (!SaveActiveWorldBeforePlay(out string scenePath))
+            return;
+
         // Pause compiler during play mode
         if (_scriptCompiler != null) _scriptCompiler.IsPaused = true;
 
-        _snapshot = WorldSnapshot.Capture(WorldManager.ActiveWorld); 
+        _playModeScenePath = scenePath;
         Time.Reset(); 
         LuaScriptManager.Dispose();
         LuaScriptManager.Initialize(ProjectPath, _scriptCompiler?.CompiledAssembly);
@@ -1676,15 +1679,17 @@ public class EditorApp : IDisposable
     { 
         if (!IsPlaying || WorldManager.ActiveWorld == null) return; 
         EditorSelection.SelectedEntity = null; 
-        
+         
         LuaScriptManager.Dispose();
-        _snapshot?.Restore(WorldManager.ActiveWorld, _scriptCompiler?.CompiledAssembly); 
-        BindWorldAssets(WorldManager.ActiveWorld);
-        _snapshot = null; 
+        _gameLoop = null;
+        IsPlaying = false;
+
+        if (!string.IsNullOrWhiteSpace(_playModeScenePath))
+            ReloadPlayModeSceneFromDisk(_playModeScenePath);
+        _playModeScenePath = null;
+
         LuaScriptManager.SuspendHotReloadEvents = false;
         LuaScriptManager.Initialize(ProjectPath, _scriptCompiler?.CompiledAssembly);
-        _gameLoop = null; 
-        IsPlaying = false; 
         Verity.Input.Input.Enabled = true; 
 
         // Resume compiler after play mode
@@ -1697,6 +1702,98 @@ public class EditorApp : IDisposable
                 foreach (string path in _pendingLuaHotReloadPaths.ToArray())
                     _pendingLuaHotReloadDeadlines[path] = Environment.TickCount64;
             }
+        }
+    }
+
+    private bool SaveActiveWorldBeforePlay(out string scenePath)
+    {
+        scenePath = string.Empty;
+        World? world = WorldManager.ActiveWorld;
+        if (world == null || AssetsPath == null)
+            return false;
+
+        if (ActiveAssetKind != EditorAssetKind.World)
+        {
+            ShowOverlayMessage(L10n.Tr("msg_cannot_play_compilation_errors"), 3.0f);
+            CoreDebug.LogError("[Editor] Cannot enter Play Mode from a non-world asset.");
+            return false;
+        }
+
+        string path = ActiveAssetPath != null && ActiveAssetPath.EndsWith(".verity", StringComparison.OrdinalIgnoreCase)
+            ? ActiveAssetPath
+            : Path.Combine(AssetsPath, $"{world.Name}.verity");
+
+        try
+        {
+            File.WriteAllText(path, SceneSerializer.Serialize(world));
+            AssetPathUtility.EnsureMetaAndGetGuid(path);
+            SetActiveAssetContext(path, EditorAssetKind.World);
+            ResetDirty();
+        }
+        catch (Exception e)
+        {
+            CoreDebug.LogError($"[Editor] Cannot enter Play Mode because the active world could not be saved: {e}");
+            return false;
+        }
+
+        if (!File.Exists(path))
+        {
+            CoreDebug.LogError("[Editor] Cannot enter Play Mode because the active world could not be saved.");
+            return false;
+        }
+
+        scenePath = Path.GetFullPath(path);
+        return true;
+    }
+
+    private bool ReloadPlayModeSceneFromDisk(string scenePath)
+    {
+        if (!File.Exists(scenePath))
+        {
+            CoreDebug.LogError($"[Editor] Cannot restore scene after Play Mode because the saved scene is missing: {scenePath}");
+            return false;
+        }
+
+        if (!CanDeserializeScriptedAssets())
+        {
+            ShowOverlayMessage(L10n.Tr("msg_cannot_load_script_asset_compilation_errors"), 3.0f);
+            CoreDebug.LogError("[Editor] Cannot restore scene after Play Mode while user script compilation errors exist and no valid compiled assembly is available.");
+            return false;
+        }
+
+        try
+        {
+            string normalized = Path.GetFullPath(scenePath);
+            var world = WorldManager.CreateOrReplaceWorld(Path.GetFileNameWithoutExtension(normalized));
+            SceneSerializer.Deserialize(world, File.ReadAllText(normalized), _scriptCompiler?.CompiledAssembly);
+            BindWorldAssets(world);
+            WorldManager.SetActiveWorld(world);
+            SetActiveAssetContext(normalized, EditorAssetKind.World);
+            ResetDirty();
+            return true;
+        }
+        catch (Exception e)
+        {
+            CoreDebug.LogError($"[Editor] Failed to restore scene after Play Mode: {e}");
+            return false;
+        }
+    }
+
+    private int TickPlayLogicSafely(float deltaTime)
+    {
+        if (!IsPlaying || _gameLoop == null)
+            return 0;
+
+        try
+        {
+            return _gameLoop.TickLogic(deltaTime);
+        }
+        catch (Exception ex)
+        {
+            CoreDebug.LogError($"[Editor] Play Mode aborted due to runtime error: {ex}");
+            ShowOverlayMessage(L10n.Tr("msg_play_mode_runtime_error"), 3.0f);
+            ExitPlayMode();
+            return 0;
         }
     }
 
@@ -1737,9 +1834,7 @@ public class EditorApp : IDisposable
             }
 
             stageStart = Stopwatch.GetTimestamp();
-            LastPlayLogicTicksThisFrame = IsPlaying && _gameLoop != null
-                ? _gameLoop.TickLogic(deltaTime)
-                : 0;
+            LastPlayLogicTicksThisFrame = TickPlayLogicSafely(deltaTime);
             _profiler.RecordFrameStage("Play Logic", Stopwatch.GetElapsedTime(stageStart).TotalMilliseconds);
 
             HandleGlobalShortcuts();

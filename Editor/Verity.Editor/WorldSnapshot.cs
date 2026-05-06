@@ -71,7 +71,7 @@ internal sealed class WorldSnapshot
             {
                 if (field.GetCustomAttribute<HideInInspectorAttribute>() == null)
                 {
-                    data[field.Name] = field.GetValue(component);
+                    data[field.Name] = CaptureValue(field.GetValue(component));
                 }
             }
         }
@@ -84,13 +84,29 @@ internal sealed class WorldSnapshot
             {
                 if (prop.GetCustomAttribute<HideInInspectorAttribute>() == null)
                 {
-                    data[prop.Name] = prop.GetValue(component);
+                    data[prop.Name] = CaptureValue(prop.GetValue(component));
                 }
             }
         }
 
         // Store FullName to resolve it later against potentially new assembly
         return new ComponentSnapshot(type.FullName ?? type.Name, component.Enabled, data);
+    }
+
+    private static object? CaptureValue(object? value)
+    {
+        if (value is Entity entity)
+        {
+            if (!string.IsNullOrWhiteSpace(entity.BlueprintAssetPath) && !entity.BlueprintSourceEntityId.HasValue)
+                return new BlueprintEntityReferenceSnapshot(entity.Name, entity.BlueprintAssetPath, entity.BlueprintAssetGuid);
+
+            return new EntityReferenceSnapshot(entity.Id);
+        }
+
+        if (value is Component component)
+            return new ComponentReferenceSnapshot(component.Owner.Id, component.GetType().FullName ?? component.GetType().Name);
+
+        return value;
     }
 
     public void Restore(World world, Assembly? userAssembly = null)
@@ -111,6 +127,8 @@ internal sealed class WorldSnapshot
             entity.BlueprintInstanceRootId = snapshot.BlueprintInstanceRootId;
             created.Add(entity);
         }
+
+        var createdById = created.ToDictionary(entity => entity.Id, entity => entity);
 
         // 2. Restore hierarchy FIRST before setting transforms
         for (int i = 0; i < _entities.Count; i++)
@@ -133,6 +151,7 @@ internal sealed class WorldSnapshot
         }
 
         // 4. Restore components
+        var pendingComponentData = new List<(Component Component, ComponentSnapshot Snapshot)>();
         for (int i = 0; i < _entities.Count; i++)
         {
             var snapshot = _entities[i];
@@ -161,20 +180,40 @@ internal sealed class WorldSnapshot
                 }
 
                 component.Enabled = componentSnapshot.Enabled;
+                pendingComponentData.Add((component, componentSnapshot));
+            }
+        }
 
-                foreach (var kvp in componentSnapshot.Data)
+        foreach (var (component, componentSnapshot) in pendingComponentData)
+        {
+            Type type = component.GetType();
+            foreach (var kvp in componentSnapshot.Data)
+            {
+                var field = type.GetField(kvp.Key, BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
+                if (field != null)
                 {
-                    var field = type.GetField(kvp.Key, BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
-                    if (field != null)
+                    try
                     {
-                        try { field.SetValue(component, kvp.Value); } catch { }
-                        continue;
+                        field.SetValue(component, RestoreValue(field.FieldType, kvp.Value, createdById, userAssembly));
+                    }
+                    catch (Exception ex)
+                    {
+                        Verity.Core.Debug.LogWarning($"[WorldSnapshot] Failed to restore field '{kvp.Key}' on '{type.FullName ?? type.Name}': {ex.Message}");
                     }
 
-                    var prop = type.GetProperty(kvp.Key, BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
-                    if (prop != null && prop.CanWrite)
+                    continue;
+                }
+
+                var prop = type.GetProperty(kvp.Key, BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
+                if (prop != null && prop.CanWrite)
+                {
+                    try
                     {
-                        try { prop.SetValue(component, kvp.Value); } catch { }
+                        prop.SetValue(component, RestoreValue(prop.PropertyType, kvp.Value, createdById, userAssembly));
+                    }
+                    catch (Exception ex)
+                    {
+                        Verity.Core.Debug.LogWarning($"[WorldSnapshot] Failed to restore property '{kvp.Key}' on '{type.FullName ?? type.Name}': {ex.Message}");
                     }
                 }
             }
@@ -190,6 +229,34 @@ internal sealed class WorldSnapshot
                     script.InitializeAfterDeserialization();
             }
         }
+    }
+
+    private static object? RestoreValue(Type targetType, object? value, IReadOnlyDictionary<Guid, Entity> entitiesById, Assembly? userAssembly)
+    {
+        if (targetType == typeof(Entity) && value is EntityReferenceSnapshot reference)
+            return entitiesById.TryGetValue(reference.Id, out Entity? entity) ? entity : null;
+
+        if (targetType == typeof(Entity) && value is BlueprintEntityReferenceSnapshot blueprintReference)
+        {
+            return new Entity(string.IsNullOrWhiteSpace(blueprintReference.Name)
+                ? System.IO.Path.GetFileNameWithoutExtension(blueprintReference.Path)
+                : blueprintReference.Name)
+            {
+                BlueprintAssetPath = blueprintReference.Path,
+                BlueprintAssetGuid = blueprintReference.Guid
+            };
+        }
+
+        if (typeof(Component).IsAssignableFrom(targetType) && value is ComponentReferenceSnapshot componentReference)
+        {
+            if (!entitiesById.TryGetValue(componentReference.EntityId, out Entity? entity))
+                return null;
+
+            Type componentType = ResolveType(componentReference.TypeName, userAssembly) ?? targetType;
+            return entity.GetComponent(componentType);
+        }
+
+        return value;
     }
 
     private static Type? ResolveType(string name, Assembly? userAsm)
@@ -214,7 +281,7 @@ internal sealed class WorldSnapshot
             try {
                 var t = asm.GetType(name);
                 if (t != null) return t;
-            } catch { }
+            } catch { continue; }
         }
 
         return null;
@@ -268,4 +335,8 @@ internal sealed class WorldSnapshot
             Data = data;
         }
     }
+
+    private sealed record EntityReferenceSnapshot(Guid Id);
+    private sealed record BlueprintEntityReferenceSnapshot(string Name, string Path, string Guid);
+    private sealed record ComponentReferenceSnapshot(Guid EntityId, string TypeName);
 }

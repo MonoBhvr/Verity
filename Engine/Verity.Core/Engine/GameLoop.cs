@@ -135,12 +135,12 @@ public class GameLoop
             if (RuntimeProfiler.CaptureScriptDetails)
             {
                 long coroutineStart = Stopwatch.GetTimestamp();
-                script.UpdateCoroutines(fixedDelta);
+                InvokeScriptCoroutines(script, fixedDelta);
                 RuntimeProfiler.RecordScriptEvent("Coroutines", script, Stopwatch.GetElapsedTime(coroutineStart).TotalMilliseconds);
             }
             else
             {
-                script.UpdateCoroutines(fixedDelta);
+                InvokeScriptCoroutines(script, fixedDelta);
             }
         }
         RuntimeProfiler.RecordPhase("Coroutines", Stopwatch.GetElapsedTime(phaseStart).TotalMilliseconds);
@@ -175,12 +175,42 @@ public class GameLoop
 
         if (!RuntimeProfiler.CaptureScriptDetails)
         {
-            callback.Invoke();
+            InvokeScriptCallback(phase, script, callback);
             return;
         }
 
         long start = Stopwatch.GetTimestamp();
-        callback.Invoke();
-        RuntimeProfiler.RecordScriptEvent(phase, script, Stopwatch.GetElapsedTime(start).TotalMilliseconds);
+        try
+        {
+            InvokeScriptCallback(phase, script, callback);
+        }
+        finally
+        {
+            RuntimeProfiler.RecordScriptEvent(phase, script, Stopwatch.GetElapsedTime(start).TotalMilliseconds);
+        }
+    }
+
+    private static void InvokeScriptCallback(string phase, Script script, Action callback)
+    {
+        try
+        {
+            callback.Invoke();
+        }
+        catch (Exception exception) when (ScriptRuntimeExceptionPolicy.ShouldContinue(exception))
+        {
+            ScriptRuntimeExceptionPolicy.LogContinuedException(phase, script, exception);
+        }
+    }
+
+    private static void InvokeScriptCoroutines(Script script, float fixedDelta)
+    {
+        try
+        {
+            script.UpdateCoroutines(fixedDelta);
+        }
+        catch (Exception exception) when (ScriptRuntimeExceptionPolicy.ShouldContinue(exception))
+        {
+            ScriptRuntimeExceptionPolicy.LogContinuedException("Coroutines", script, exception);
+        }
     }
 }

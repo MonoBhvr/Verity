@@ -2768,6 +2768,7 @@ public unsafe class InspectorWindow : EditorWindow
         if (type == typeof(StyleAsset)) { DrawStyleField(name, (StyleAsset?)value ?? default, onUpdate); return; }
         if (type == typeof(ShaderAsset)) { DrawShaderField(name, (ShaderAsset?)value ?? default, onUpdate); return; }
         if (type == typeof(FilterType)) { DrawFilterField(name, value as FilterType, onUpdate); return; }
+        if (type == typeof(Entity)) { DrawEntityReferenceField(name, value as Entity, onUpdate); return; }
         if (typeof(Component).IsAssignableFrom(type)) { DrawComponentReferenceField(name, value as Component, type, onUpdate); return; }
         if (TryGetDictionaryTypes(type, out var keyType, out var valueType)) { DrawDictionary(name, value, type, keyType, valueType, onUpdate); return; }
         if (TryGetCollectionElementType(type, out var elementType)) { DrawCollection(name, value, type, elementType, onUpdate); return; }
@@ -2886,6 +2887,8 @@ public unsafe class InspectorWindow : EditorWindow
         if (type == typeof(Vector2) || type == typeof(Vector3) || type == typeof(Vector4) || type == typeof(Color))
             return false;
         if (type == typeof(Sprite) || type == typeof(StyleAsset) || type == typeof(ShaderAsset) || type == typeof(AudioClip) || type == typeof(FilterType))
+            return false;
+        if (type == typeof(Entity))
             return false;
         if (typeof(Component).IsAssignableFrom(type))
             return false;
@@ -3715,12 +3718,129 @@ public unsafe class InspectorWindow : EditorWindow
                 if (ImGui.MenuItem(L10n.Tr("msg_none"))) onUpdate(null);
                 if (WorldManager.ActiveWorld != null) foreach (var e in WorldManager.ActiveWorld.GetAllEntities()) {
                     var c = e.GetComponent(targetType);
-                    if (c != null && (string.IsNullOrEmpty(_searchFilter) || e.Name.Contains(_searchFilter, StringComparison.OrdinalIgnoreCase))) if (ImGui.MenuItem(e.Name)) onUpdate(c);
+                    if (c != null && (string.IsNullOrEmpty(_searchFilter) || e.Name.Contains(_searchFilter, StringComparison.OrdinalIgnoreCase))) if (ImGui.MenuItem($"{e.Name}##entity_{e.Id}")) onUpdate(c);
                 }
                 ImGui.EndChild();
             }
             ImGui.EndPopup();
         }
         ImGui.PopID();
+    }
+
+    private void DrawEntityReferenceField(string name, Entity? current, Action<object?> onUpdate)
+    {
+        ImGui.PushID(name);
+        bool isBlueprintAssetReference = IsBlueprintAssetReference(current);
+        string btnLabel = current == null
+            ? L10n.Tr("msg_none")
+            : isBlueprintAssetReference
+                ? Path.GetFileNameWithoutExtension(current.BlueprintAssetPath)
+                : current.Name;
+        string? tooltip = isBlueprintAssetReference ? current?.BlueprintAssetPath : current?.Id.ToString();
+        if (DrawReferenceSlot(name, btnLabel, tooltip) && current != null)
+        {
+            if (isBlueprintAssetReference)
+                RevealBlueprintAssetReference(current);
+            else
+            {
+                EditorSelection.SelectedEntity = current;
+                EditorSelection.ClearAssetSelection();
+            }
+        }
+
+        if (ImGui.BeginDragDropTarget())
+        {
+            var payload = ImGui.AcceptDragDropPayload("ASSET_PATH");
+            if (payload.Handle != null &&
+                EditorSelection.DraggedAssetPath != null &&
+                EditorSelection.DraggedAssetPath.EndsWith(".blueprint", StringComparison.OrdinalIgnoreCase))
+            {
+                onUpdate(CreateBlueprintAssetReference(EditorSelection.DraggedAssetPath));
+            }
+
+            ImGui.EndDragDropTarget();
+        }
+
+        if (DrawReferencePickerButton())
+            ImGui.OpenPopup("Picker");
+
+        if (BeginReferencePickerPopup())
+        {
+            ImGui.InputText(L10n.Tr("label_search"), ref _searchFilter, 64);
+            ImGui.Separator();
+
+            if (BeginReferencePickerList())
+            {
+                if (ImGui.MenuItem(L10n.Tr("msg_none")))
+                    onUpdate(null);
+
+                if (WorldManager.ActiveWorld != null)
+                {
+                    ImGui.Separator();
+                    ImGui.TextDisabled("World Entities");
+                    foreach (var entity in WorldManager.ActiveWorld.GetAllEntities())
+                    {
+                        if (!string.IsNullOrEmpty(_searchFilter) &&
+                            !entity.Name.Contains(_searchFilter, StringComparison.OrdinalIgnoreCase))
+                            continue;
+
+                        if (ImGui.MenuItem($"{entity.Name}##entity_{entity.Id}"))
+                            onUpdate(entity);
+                    }
+                }
+
+                ImGui.Separator();
+                ImGui.TextDisabled("Blueprint Assets");
+                foreach (var entry in GetAssetPickerEntries("ext:.blueprint", path => Path.GetExtension(path).Equals(".blueprint", StringComparison.OrdinalIgnoreCase)))
+                {
+                    if (!string.IsNullOrEmpty(_searchFilter) &&
+                        !entry.RelativePath.Contains(_searchFilter, StringComparison.OrdinalIgnoreCase))
+                        continue;
+
+                    if (ImGui.MenuItem(entry.RelativePath))
+                        onUpdate(CreateBlueprintAssetReference(entry.FullPath));
+                }
+
+                ImGui.EndChild();
+            }
+
+            ImGui.EndPopup();
+        }
+
+        ImGui.PopID();
+    }
+
+    private static bool IsBlueprintAssetReference(Entity? entity)
+    {
+        return entity != null &&
+               !string.IsNullOrWhiteSpace(entity.BlueprintAssetPath) &&
+               !entity.BlueprintSourceEntityId.HasValue;
+    }
+
+    private static Entity CreateBlueprintAssetReference(string path)
+    {
+        AssetReferenceData reference = AssetPathUtility.CreateReference(path);
+        return new Entity(Path.GetFileNameWithoutExtension(path))
+        {
+            BlueprintAssetPath = reference.Path,
+            BlueprintAssetGuid = reference.Guid
+        };
+    }
+
+    private void RevealBlueprintAssetReference(Entity entity)
+    {
+        string resolvedPath = AssetPathUtility.ResolvePath(_app.ProjectPath ?? _app.AssetsPath, entity.BlueprintAssetPath, entity.BlueprintAssetGuid);
+        if (string.IsNullOrWhiteSpace(resolvedPath))
+            return;
+
+        var projectWindow = _app.GetWindow<ProjectWindow>();
+        if (projectWindow != null)
+        {
+            _app.OpenWindow(projectWindow);
+            projectWindow.RevealAsset(resolvedPath);
+        }
+
+        EditorSelection.SelectedEntity = null;
+        EditorSelection.SelectAsset(resolvedPath);
     }
 }

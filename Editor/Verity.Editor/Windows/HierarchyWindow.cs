@@ -15,6 +15,9 @@ public unsafe class HierarchyWindow : EditorWindow
 {
     private readonly EditorApp _app;
     private readonly Dictionary<Guid, HashSet<Guid>> _blueprintOverrideCache = new();
+    private Entity? _pendingClickSelectionEntity;
+    private bool _pendingClickSelectionCtrl;
+    private bool _pendingClickSelectionShift;
 
     public HierarchyWindow(EditorApp app) : base(L10n.Tr("window_hierarchy"))
     {
@@ -87,6 +90,9 @@ public unsafe class HierarchyWindow : EditorWindow
             DrawInsertionSlot(null, roots.Length, "root-slot-end");
 
         DrawRootDropZone(world);
+
+        if (ImGui.IsMouseReleased(ImGuiMouseButton.Left))
+            ClearPendingClickSelection();
 
         if (ImGui.IsMouseClicked(ImGuiMouseButton.Left) && ImGui.IsWindowHovered() && !ImGui.IsAnyItemHovered())
             EditorSelection.ClearSelection();
@@ -541,33 +547,18 @@ public unsafe class HierarchyWindow : EditorWindow
         if (hierarchyColor.HasValue)
             ImGui.PopStyleColor();
 
-        if (ImGui.IsItemClicked())
+        if (ImGui.IsItemHovered() && ImGui.IsMouseClicked(ImGuiMouseButton.Left))
         {
             var io = ImGui.GetIO();
-            if (io.KeyCtrl)
-            {
-                if (EditorSelection.IsSelected(entity)) EditorSelection.Deselect(entity);
-                else EditorSelection.Select(entity, true);
-            }
-            else if (io.KeyShift && EditorSelection.SelectedEntity != null)
-            {
-                var world = WorldManager.ActiveWorld;
-                if (world != null)
-                {
-                    var all = world.GetAllEntities().ToList();
-                    int start = all.IndexOf(EditorSelection.SelectedEntity);
-                    int end = all.IndexOf(entity);
-                    if (start != -1 && end != -1)
-                    {
-                        for (int i = Math.Min(start, end); i <= Math.Max(start, end); i++)
-                            EditorSelection.Select(all[i], true);
-                    }
-                }
-            }
-            else
-            {
-                EditorSelection.SelectedEntity = entity;
-            }
+            _pendingClickSelectionEntity = entity;
+            _pendingClickSelectionCtrl = io.KeyCtrl;
+            _pendingClickSelectionShift = io.KeyShift;
+        }
+
+        if (_pendingClickSelectionEntity == entity && ImGui.IsItemHovered() && ImGui.IsMouseReleased(ImGuiMouseButton.Left))
+        {
+            ApplyClickSelection(entity, _pendingClickSelectionCtrl, _pendingClickSelectionShift);
+            ClearPendingClickSelection();
         }
 
         if (ImGui.IsItemHovered() && ImGui.IsMouseDoubleClicked(ImGuiMouseButton.Left))
@@ -635,6 +626,41 @@ public unsafe class HierarchyWindow : EditorWindow
         }
 
         ImGui.PopID();
+    }
+
+    private void ApplyClickSelection(Entity entity, bool ctrl, bool shift)
+    {
+        if (ctrl)
+        {
+            if (EditorSelection.IsSelected(entity)) EditorSelection.Deselect(entity);
+            else EditorSelection.Select(entity, true);
+        }
+        else if (shift && EditorSelection.SelectedEntity != null)
+        {
+            var world = WorldManager.ActiveWorld;
+            if (world != null)
+            {
+                var all = world.GetAllEntities().ToList();
+                int start = all.IndexOf(EditorSelection.SelectedEntity);
+                int end = all.IndexOf(entity);
+                if (start != -1 && end != -1)
+                {
+                    for (int i = Math.Min(start, end); i <= Math.Max(start, end); i++)
+                        EditorSelection.Select(all[i], true);
+                }
+            }
+        }
+        else
+        {
+            EditorSelection.SelectedEntity = entity;
+        }
+    }
+
+    private void ClearPendingClickSelection()
+    {
+        _pendingClickSelectionEntity = null;
+        _pendingClickSelectionCtrl = false;
+        _pendingClickSelectionShift = false;
     }
 
     private Vector4? GetBlueprintHierarchyColor(Entity entity)
