@@ -497,7 +497,18 @@ public static class SceneSerializer
         return overrides;
     }
 
+    public static Entity? InstantiateBlueprintInstance(World.World world, AssetReferenceData assetReference, Assembly? userAssembly = null)
+    {
+        string blueprintPath = AssetPathUtility.ResolvePath(AssetRoot, assetReference.Path, assetReference.Guid);
+        return InstantiateBlueprintInstance(world, blueprintPath, assetReference, userAssembly);
+    }
+
     public static Entity? InstantiateBlueprintInstance(World.World world, string blueprintPath, Assembly? userAssembly = null)
+    {
+        return InstantiateBlueprintInstance(world, blueprintPath, AssetPathUtility.CreateReference(blueprintPath), userAssembly);
+    }
+
+    private static Entity? InstantiateBlueprintInstance(World.World world, string blueprintPath, AssetReferenceData assetReference, Assembly? userAssembly)
     {
         if (string.IsNullOrWhiteSpace(blueprintPath) || !File.Exists(blueprintPath))
             return null;
@@ -516,7 +527,7 @@ public static class SceneSerializer
 
         return sourceRoot == null
             ? null
-            : CloneBlueprintIntoWorld(sourceRoot, world, AssetPathUtility.CreateReference(blueprintPath), userAssembly);
+            : CloneBlueprintIntoWorld(sourceRoot, world, assetReference, userAssembly);
     }
 
     public static Entity? RefreshBlueprintInstance(Entity instanceRoot, JsonArray overrides, Assembly? userAssembly = null)
@@ -616,6 +627,22 @@ public static class SceneSerializer
 
         if (value is IPathAsset asset)
             return AssetPathUtility.ToJsonNode(asset.Path, asset.Guid);
+
+        if (value is Entity entity)
+        {
+            if (!string.IsNullOrWhiteSpace(entity.BlueprintAssetPath) && !entity.BlueprintSourceEntityId.HasValue)
+            {
+                return new JsonObject
+                {
+                    ["BlueprintAsset"] = AssetPathUtility.ToJsonNode(entity.BlueprintAssetPath, entity.BlueprintAssetGuid)
+                };
+            }
+
+            return new JsonObject
+            {
+                ["EntityId"] = entity.Id.ToString()
+            };
+        }
 
         if (value is Component component)
         {
@@ -936,8 +963,9 @@ public static class SceneSerializer
     {
         Guid instanceRootId = Guid.Empty;
         Entity? clonedRoot = null;
+        var entityIdMap = new Dictionary<Guid, Entity>();
 
-        void CloneRecursive(Entity sourceEntity, Entity? parent)
+        void CreateEntitiesRecursive(Entity sourceEntity, Entity? parent)
         {
             Entity clone = targetWorld.CreateEntity(sourceEntity.Name);
             if (clonedRoot == null)
@@ -954,9 +982,20 @@ public static class SceneSerializer
             clone.BlueprintAssetGuid = assetReference.Guid;
             clone.BlueprintSourceEntityId = sourceEntity.Id;
             clone.BlueprintInstanceRootId = instanceRootId;
+            entityIdMap[sourceEntity.Id] = clone;
+            entityIdMap[clone.Id] = clone;
 
             if (parent != null)
                 clone.Transform.SetParent(parent.Transform, false);
+
+            foreach (Transform child in sourceEntity.Transform.Children)
+                CreateEntitiesRecursive(child.Owner, clone);
+        }
+
+        void CreateComponentsRecursive(Entity sourceEntity)
+        {
+            if (!entityIdMap.TryGetValue(sourceEntity.Id, out Entity? clone))
+                return;
 
             foreach (JsonNode? componentNode in CaptureComponents(sourceEntity))
             {
@@ -976,17 +1015,18 @@ public static class SceneSerializer
                 if (componentNode?["Fields"] is JsonObject fields)
                 {
                     foreach (var field in fields)
-                        ApplyJsonToMember(component, field.Key, field.Value, targetWorld, userAssembly);
+                        ApplyJsonToMember(component, field.Key, field.Value, targetWorld, userAssembly, entityIdMap);
                 }
 
                 component.Enabled = (bool?)componentNode?["Enabled"] ?? true;
             }
 
             foreach (Transform child in sourceEntity.Transform.Children)
-                CloneRecursive(child.Owner, clone);
+                CreateComponentsRecursive(child.Owner);
         }
 
-        CloneRecursive(sourceRoot, null);
+        CreateEntitiesRecursive(sourceRoot, null);
+        CreateComponentsRecursive(sourceRoot);
         return clonedRoot;
     }
 
@@ -1222,6 +1262,28 @@ public static class SceneSerializer
             else if (t == typeof(Dictionary<(int x, int y), TileBase>))
             {
                 val = JsonSerializer.Deserialize<Dictionary<(int x, int y), TileBase>>(node.ToJsonString(), _options);
+            }
+            else if (t == typeof(Entity))
+            {
+                if (node["BlueprintAsset"] != null)
+                {
+                    AssetReferenceData reference = AssetPathUtility.FromJsonNode(node["BlueprintAsset"]);
+                    if (!string.IsNullOrWhiteSpace(reference.Path))
+                    {
+                        val = new Entity(Path.GetFileNameWithoutExtension(reference.Path))
+                        {
+                            BlueprintAssetPath = reference.Path,
+                            BlueprintAssetGuid = reference.Guid
+                        };
+                    }
+                }
+                else if (Guid.TryParse((string?)node["EntityId"], out var entityId))
+                {
+                    Entity? entity = null;
+                    if (entityIdMap != null)
+                        entityIdMap.TryGetValue(entityId, out entity);
+                    val = entity ?? world.GetAllEntities().FirstOrDefault(e => e.Id == entityId);
+                }
             }
             else if (typeof(Component).IsAssignableFrom(t))
             {

@@ -160,6 +160,11 @@ internal sealed class NativeMultiWindowRenderer : IDisposable
             if (currentPosition.X != x || currentPosition.Y != y)
                 entry.Window.SetPosition(x, y);
         }
+        else
+        {
+            var currentPosition = entry.Window.GetPosition();
+            output.WindowPosition = new Verity.Core.Vector2(currentPosition.X - screen.X, currentPosition.Y - screen.Y);
+        }
 
         if (!entry.LockSize && !entry.Visible)
             entry.Window.SetSize(width, height);

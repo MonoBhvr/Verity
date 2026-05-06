@@ -581,16 +581,16 @@ public static class PhysicsManager
             if (isSensor)
             {
                 if (isFirst)
-                    script._onDetectedDelegate?.Invoke(otherEntity);
+                    InvokeScriptPhysicsCallback("OnDetected", script, () => script._onDetectedDelegate?.Invoke(otherEntity));
                 else
-                    script._onDetectingDelegate?.Invoke(otherEntity);
+                    InvokeScriptPhysicsCallback("OnDetecting", script, () => script._onDetectingDelegate?.Invoke(otherEntity));
             }
             else
             {
                 if (isFirst)
-                    script._onTouchedDelegate?.Invoke(otherPhysical);
+                    InvokeScriptPhysicsCallback("OnTouched", script, () => script._onTouchedDelegate?.Invoke(otherPhysical));
                 else
-                    script._onTouchingDelegate?.Invoke(otherPhysical);
+                    InvokeScriptPhysicsCallback("OnTouching", script, () => script._onTouchingDelegate?.Invoke(otherPhysical));
             }
         }
     }
@@ -605,9 +605,21 @@ public static class PhysicsManager
                 continue;
 
             if (isSensor)
-                script._onDetectEndDelegate?.Invoke(otherEntity);
+                InvokeScriptPhysicsCallback("OnDetectEnd", script, () => script._onDetectEndDelegate?.Invoke(otherEntity));
             else
-                script._onTouchEndDelegate?.Invoke(otherEntity);
+                InvokeScriptPhysicsCallback("OnTouchEnd", script, () => script._onTouchEndDelegate?.Invoke(otherEntity));
+        }
+    }
+
+    private static void InvokeScriptPhysicsCallback(string phase, Script script, Action callback)
+    {
+        try
+        {
+            callback.Invoke();
+        }
+        catch (Exception exception) when (ScriptRuntimeExceptionPolicy.ShouldContinue(exception))
+        {
+            ScriptRuntimeExceptionPolicy.LogContinuedException(phase, script, exception);
         }
     }
 
